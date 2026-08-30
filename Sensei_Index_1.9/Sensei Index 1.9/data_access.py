@@ -18,6 +18,7 @@ export_to_pdf.py / export_valve_to_pdf.py modules (imported below). This file
 never re-implements that logic - it just calls it with a specific sheet name
 and row number instead of running the whole command-line script.
 """
+import contextlib
 import datetime
 import json
 import os
@@ -63,18 +64,34 @@ def _workbook_mtime():
         return None
 
 
-def _write_json(path, data):
+def write_json_atomic(path, data):
     """Every JSON file this app writes (series_registry.json,
-    app_settings.json, equipment_status.json) goes through this, so a
-    permissions problem always gives the same clear explanation instead of
-    a raw traceback. In practice this only ever fires one way: the app's
-    own folder needs administrator rights to write to - almost always
-    because it's sitting inside Program Files or another protected
-    location, which normal saves inside the app hit constantly."""
+    app_settings.json, equipment_status.json, and every new sidecar added
+    since) goes through this. Two things it guarantees:
+
+    1. Atomicity: the new content is written to a temp file in the SAME
+       directory (so it's on the same filesystem - os.replace() is only
+       atomic within one filesystem) and only swapped into place with
+       os.replace() once the write fully succeeds. A crash, power loss, or
+       killed process mid-save leaves either the old file untouched or the
+       complete new one - never a truncated/half-written file that bricks
+       the next startup.
+    2. A permissions problem always gives the same clear explanation
+       instead of a raw traceback. In practice this only ever fires one
+       way: the app's own folder needs administrator rights to write to -
+       almost always because it's sitting inside Program Files or another
+       protected location, which normal saves inside the app hit
+       constantly.
+    """
+    path = Path(path)
+    tmp_path = path.with_name(f".{path.name}.tmp{os.getpid()}")
     try:
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
+        os.replace(tmp_path, path)
     except PermissionError:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
         raise PermissionError(
             f"Can't write to '{path.name}'. This app's folder needs administrator "
             "rights to write to - almost always because it's inside Program Files "
@@ -82,6 +99,52 @@ def _write_json(path, data):
             "somewhere any account can write to without admin, like "
             "C:\\Users\\Public\\InstINDEX, your Desktop, or Documents."
         ) from None
+    except Exception:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
+
+
+# Populated by read_json_with_recovery() whenever it has to reset a
+# corrupted sidecar to defaults. gui_app checks this once at startup and
+# shows each entry as a toast - so "the file got reset" is never silent,
+# but it also never blocks the app from opening the way a crash would.
+STARTUP_WARNINGS = []
+
+
+def read_json_with_recovery(path, default):
+    """Loads JSON from path, tolerating both a missing file (returns
+    default, no warning - normal for a sidecar that hasn't been created
+    yet) and a corrupted one (renames the bad file to
+    '<name>.corrupt.<timestamp>' - preserved for hand recovery, never
+    silently deleted - queues a STARTUP_WARNINGS entry, and returns
+    default). default may be a plain value or a zero-arg callable (use a
+    callable when the default is a mutable container, so every caller
+    doesn't share one dict/list instance)."""
+    path = Path(path)
+
+    def _default():
+        return default() if callable(default) else default
+
+    if not path.exists():
+        return _default()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        corrupt_path = path.with_name(f"{path.name}.corrupt.{stamp}")
+        try:
+            path.rename(corrupt_path)
+            STARTUP_WARNINGS.append(
+                f"'{path.name}' was corrupted and has been reset to defaults. "
+                f"The unreadable file was saved as '{corrupt_path.name}' next to it."
+            )
+        except OSError:
+            STARTUP_WARNINGS.append(
+                f"'{path.name}' was corrupted and could not be read - using defaults."
+            )
+        return _default()
 
 
 def _get_cached_workbook(data_only=False):
@@ -187,12 +250,11 @@ STATUS_PATH = HERE / "equipment_status.json"
 # series_registry.json
 # ---------------------------------------------------------------------------
 def load_config():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+    return read_json_with_recovery(CONFIG_PATH, lambda: {"series": []})
 
 
 def save_config(cfg):
-    _write_json(CONFIG_PATH, cfg)
+    write_json_atomic(CONFIG_PATH, cfg)
 
 
 def list_series():
@@ -724,17 +786,11 @@ DRAFTS_PATH = HERE / "wizard_draft.json"
 
 
 def load_wizard_draft():
-    if not DRAFTS_PATH.exists():
-        return None
-    try:
-        with open(DRAFTS_PATH, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return None
+    return read_json_with_recovery(DRAFTS_PATH, None)
 
 
 def save_wizard_draft(data):
-    _write_json(DRAFTS_PATH, data)
+    write_json_atomic(DRAFTS_PATH, data)
 
 
 def clear_wizard_draft():
@@ -754,24 +810,23 @@ DEFAULT_SETTINGS = {
     "active_signature": "yanda_qa_signature_transparent.png",
     "default_flatten": False,
     "default_include_signature": True,
+    # Sensei Index 2.1 additions:
+    "default_qa_rep_name": "",           # pre-fills the QA rep name on create-from-master (Coverage)
+    "master_list_path": "",              # remembered path for Master List re-import (Coverage)
+    "backup_interval_minutes": 30,       # automatic workbook backup cadence
+    "backup_keep": 20,                   # how many workbook snapshots to retain
 }
 
 
 def load_settings():
-    if not SETTINGS_PATH.exists():
-        return dict(DEFAULT_SETTINGS)
-    try:
-        with open(SETTINGS_PATH, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return dict(DEFAULT_SETTINGS)
+    data = read_json_with_recovery(SETTINGS_PATH, dict)
     merged = dict(DEFAULT_SETTINGS)
     merged.update(data)
     return merged
 
 
 def save_settings(settings):
-    _write_json(SETTINGS_PATH, settings)
+    write_json_atomic(SETTINGS_PATH, settings)
 
 
 def get_setting(key):
@@ -895,17 +950,11 @@ DEFAULT_STATUS = {"installed": False, "submitted": False, "accepted": False, "ex
 
 
 def _load_status_store():
-    if not STATUS_PATH.exists():
-        return {}
-    try:
-        with open(STATUS_PATH, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return read_json_with_recovery(STATUS_PATH, dict)
 
 
 def _save_status_store(store):
-    _write_json(STATUS_PATH, store)
+    write_json_atomic(STATUS_PATH, store)
 
 
 def _status_key(series_number, equip_key, key_value):
@@ -965,6 +1014,101 @@ def rename_status_key(series_number, equip_key, old_key, new_key):
     if old_full in store:
         store[new_full] = store.pop(old_full)
         _save_status_store(store)
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 - Unified progress model.
+#
+# One definition of "how done is this instrument," used identically by
+# IndexPage, DashboardPage, and Coverage - so the app has a single number
+# instead of four disconnected checkboxes (Installed / Submitted / Accepted
+# / "did anyone fill out the inspection"). Pure function, no workbook or
+# sidecar I/O: callers pass in a read_full_row()-shaped values dict and a
+# get_status()-shaped status dict, both of which they already have.
+#
+# Milestones are equal-weighted by default. PROGRESS_WEIGHTS is a plain
+# dict (not baked into the function) specifically so a future "Accepted
+# should count for more than Serial captured" ask from the client is a
+# one-dict change, not a rewrite (see spec assumption 12.4).
+# ---------------------------------------------------------------------------
+PROGRESS_MILESTONES = [
+    ("created", "Created"),
+    ("serial_captured", "Serial captured"),
+    ("installed", "Installed"),
+    ("inspection_complete", "Inspection complete"),
+    ("submitted", "Submitted"),
+    ("accepted", "Accepted"),
+]
+
+PROGRESS_WEIGHTS = {
+    "transmitter": {mid: 1 for mid, _label in PROGRESS_MILESTONES},
+    "valve": {mid: 1 for mid, _label in PROGRESS_MILESTONES},
+}
+
+# Every valve "component" the check record has a Model/Serial pair for.
+# "valve" itself is always required (it's what the row IS); the rest only
+# count toward "serial captured" if that component's model was actually
+# specified - a row with no positioner shouldn't be penalized for a blank
+# positioner serial.
+_VALVE_COMPONENTS = ["valve", "actuator", "positioner", "solenoid", "position_limit"]
+_TRANSMITTER_VI_FIELDS = [f"vi_{i}" for i in range(1, 13)]         # PART 3, transmitter_schema.py
+_TRANSMITTER_PROC_FIELDS = [f"proc_{i}" for i in range(2, 15)]     # PART 4 items 2-14 (excludes proc_1_vdc)
+_VALVE_FV_FIELDS = [f"fv_{i}" for i in range(1, 9)]                # Functional Verification, valve_schema.py
+
+
+def _progress_blank(value):
+    return not str(value or "").strip()
+
+
+def _serial_captured(equip_key, values):
+    if equip_key != "valve":
+        return not _progress_blank(values.get("serial_number"))
+    for component in _VALVE_COMPONENTS:
+        model_blank = component != "valve" and _progress_blank(values.get(f"{component}_model"))
+        if model_blank:
+            continue  # this component isn't present on this valve at all
+        if _progress_blank(values.get(f"{component}_serial")):
+            return False
+    return True
+
+
+def _inspection_complete(equip_key, values):
+    fields = _VALVE_FV_FIELDS if equip_key == "valve" else (_TRANSMITTER_VI_FIELDS + _TRANSMITTER_PROC_FIELDS)
+    return all(not _progress_blank(values.get(f)) for f in fields)
+
+
+def compute_progress(equip_key, values, status):
+    """values: {field_id: str}, shaped like read_full_row()'s return.
+    status: {'installed': bool, 'submitted': bool, 'accepted': bool, ...},
+    shaped like get_status()'s return (missing keys are treated as False,
+    so a plain {} also works).
+
+    Returns {'percent': int 0-100,
+             'milestones': [{'id', 'label', 'done'}, ...] in fixed order,
+             'next': id of the first not-done milestone, or None if every
+                     milestone is done}."""
+    values = values or {}
+    status = status or {}
+
+    done_by_id = {
+        "created": True,  # this function is only ever called for a row that exists
+        "serial_captured": _serial_captured(equip_key, values),
+        "installed": bool(status.get("installed")),
+        "inspection_complete": _inspection_complete(equip_key, values),
+        "submitted": bool(status.get("submitted")),
+        "accepted": bool(status.get("accepted")),
+    }
+
+    weights = PROGRESS_WEIGHTS.get(equip_key, PROGRESS_WEIGHTS["transmitter"])
+    total_weight = sum(weights.values()) or 1
+    earned_weight = sum(weights[mid] for mid, _label in PROGRESS_MILESTONES if done_by_id[mid])
+    percent = round(100 * earned_weight / total_weight)
+
+    milestones = [{"id": mid, "label": label, "done": done_by_id[mid]}
+                  for mid, label in PROGRESS_MILESTONES]
+    next_id = next((mid for mid, _label in PROGRESS_MILESTONES if not done_by_id[mid]), None)
+
+    return {"percent": percent, "milestones": milestones, "next": next_id}
 
 
 # ---------------------------------------------------------------------------
