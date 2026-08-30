@@ -1467,14 +1467,17 @@ def read_index_rows_filtered(series_number, equip_key, filters=None):
     return rows
 
 
-def read_index_rows_with_progress(series_number, equip_key):
+def read_index_rows_with_progress(series_number, equip_key, filters=None):
     """read_index_rows_with_status()'s rows, each with a 'progress' key
     added ({'percent', 'milestones', 'next'} from compute_progress()).
     Reads every schema field ONCE per row, reusing a single header-derived
     field_to_col map for the whole sheet, rather than calling
     read_full_row() per row (which would re-scan the header every time) -
     the Index page's Progress column (12.2) needs this for every visible
-    row, so the batch path matters."""
+    row, so the batch path matters. filters: same {field_id: value} exact-
+    match convention as read_index_rows_filtered() - applied AFTER
+    progress is computed, so a filtered view's percentages are identical
+    to the unfiltered one for the same rows."""
     etype = EQUIPMENT_TYPES[equip_key]
     export_mod = etype["export_module"]
     schema = etype["schema"]
@@ -1493,6 +1496,10 @@ def read_index_rows_with_progress(series_number, equip_key):
             values[field["id"]] = export_mod.cell_to_str(ws.cell(row=row_num, column=col).value) \
                 if col else ""
         entry["progress"] = compute_progress(equip_key, values, entry)
+
+    if filters:
+        for fid, val in filters.items():
+            rows = [r for r in rows if str(r.get(fid) or "") == str(val)]
     return rows
 
 

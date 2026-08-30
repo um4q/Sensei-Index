@@ -106,19 +106,12 @@ def test_edit_dialog_hard_block_still_wins_over_warn_dont_block(qtbot, isolated_
     assert "already used" in warned[0][2]
 
 
-def test_index_page_grid_flags_malformed_tag_cell(qtbot, isolated_app_dir):
+def test_index_page_grid_flags_malformed_tag_cell(qtbot, isolated_app_dir, fake_main_window):
     tmp_path, da = isolated_app_dir
     row_num = da.find_first_blank_row(29103, "transmitter")
     da.save_row(29103, "transmitter", row_num, {"tag": "bad tag shape"})
 
-    class FakeMainWindow:
-        def statusBar(self):
-            class SB:
-                def showMessage(self, *a, **k):
-                    pass
-            return SB()
-
-    page = gui_app.IndexPage(FakeMainWindow(), 29103, "transmitter")
+    page = gui_app.IndexPage(fake_main_window, 29103, "transmitter")
     qtbot.addWidget(page)
 
     tag_col = page.columns.index("tag")
@@ -128,19 +121,12 @@ def test_index_page_grid_flags_malformed_tag_cell(qtbot, isolated_app_dir):
     assert "AREA-TYPE-NUMBER" in item.toolTip()
 
 
-def test_index_page_grid_does_not_flag_well_formed_tag(qtbot, isolated_app_dir):
+def test_index_page_grid_does_not_flag_well_formed_tag(qtbot, isolated_app_dir, fake_main_window):
     tmp_path, da = isolated_app_dir
     row_num = da.find_first_blank_row(29103, "transmitter")
     da.save_row(29103, "transmitter", row_num, {"tag": "29103-PIT-2171"})
 
-    class FakeMainWindow:
-        def statusBar(self):
-            class SB:
-                def showMessage(self, *a, **k):
-                    pass
-            return SB()
-
-    page = gui_app.IndexPage(FakeMainWindow(), 29103, "transmitter")
+    page = gui_app.IndexPage(fake_main_window, 29103, "transmitter")
     qtbot.addWidget(page)
 
     tag_col = page.columns.index("tag")

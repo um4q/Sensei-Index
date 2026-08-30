@@ -1627,6 +1627,57 @@ class ExcelLikeTableWidget(QTableWidget):
         super().keyPressEvent(event)
 
 
+# Phase 13.1 - filter chips. 'Has pending edits' from the spec is omitted:
+# it depends on the v2.0 Phase 9 pending-edit/draft-commit layer, which
+# doesn't exist in this codebase (verified by direct inspection) - every
+# save in this app is already immediate, so there's no such state to filter on.
+INDEX_CHIP_OPTIONS = [
+    ("all", "All"),
+    ("not_started", "Not started"),
+    ("missing_serial", "Missing serial"),
+    ("installed", "Installed"),
+    ("ready_submit", "Ready to submit"),
+    ("submitted", "Submitted"),
+    ("accepted", "Accepted"),
+]
+
+# The milestones that must ALL be done for "Ready to submit" (spec
+# assumption 13.5): everything up through Inspection complete, but not
+# Submitted yet.
+_READY_TO_SUBMIT_PREREQS = ["created", "serial_captured", "installed", "inspection_complete"]
+
+
+def index_row_matches_chip(entry, chip_id):
+    """entry: one row from read_index_rows_with_progress() (has a
+    'progress' dict + installed/submitted/accepted). Pure - no I/O -
+    IndexPage.apply_filter() is the only caller, but kept as a free
+    function so it can be unit-tested without constructing any widgets."""
+    if chip_id == "all":
+        return True
+    progress = entry.get("progress") or {}
+    milestones = {m["id"]: m["done"] for m in progress.get("milestones", [])}
+    if chip_id == "not_started":
+        # compute_progress()'s 'created' milestone is always done for any
+        # row that exists, so percent==0 is never actually reachable -
+        # "not started" means nothing has happened YET, i.e. every
+        # milestone past 'created' is still undone.
+        return not any(milestones.get(mid, False) for mid in
+                        ("serial_captured", "installed", "inspection_complete",
+                         "submitted", "accepted"))
+    if chip_id == "missing_serial":
+        return not milestones.get("serial_captured", True)
+    if chip_id == "installed":
+        return bool(entry.get("installed"))
+    if chip_id == "ready_submit":
+        return (all(milestones.get(mid, False) for mid in _READY_TO_SUBMIT_PREREQS)
+                and not entry.get("submitted"))
+    if chip_id == "submitted":
+        return bool(entry.get("submitted"))
+    if chip_id == "accepted":
+        return bool(entry.get("accepted"))
+    return True
+
+
 class IndexPage(QWidget):
     STATUS_FIELDS = ["installed", "submitted", "accepted", "export"]
     STATUS_LABELS = {"installed": "Installed", "submitted": "Submitted",
@@ -1739,6 +1790,16 @@ class IndexPage(QWidget):
         search_row.addWidget(self.count_label)
         layout.addLayout(search_row)
 
+        # Phase 13.1 - filter chips. Compose with search (above) and with
+        # self.filters (the dashboard drill-down dict this page was opened
+        # with, already baked into self.all_rows by reload()) - all three
+        # narrow down together, never replace one another.
+        chip_row = QHBoxLayout()
+        self.chips = FilterChipBar(INDEX_CHIP_OPTIONS, on_change=lambda _id: self.apply_filter())
+        chip_row.addWidget(self.chips)
+        chip_row.addStretch()
+        layout.addLayout(chip_row)
+
         self.columns = (["row"] + self.etype["summary_fields"] + list(self.etype.get("date_fields", []))
                          + list(self.STATUS_FIELDS))
         self.headers = (["Row"] + self.etype["summary_labels"] + list(self.etype.get("date_labels", []))
@@ -1774,6 +1835,12 @@ class IndexPage(QWidget):
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         layout.addWidget(self.table, stretch=1)
 
+        # Phase 13.7 - empty state: a series+type with literally zero rows
+        # (not just zero after a search/chip/filter narrows it down - see
+        # apply_filter()) shows this instead of a bare grid.
+        self.empty_state = self._build_empty_state()
+        layout.addWidget(self.empty_state, stretch=1)
+
         tip = QLabel("Tip: click a column header to sort, type to search, "
                      "Ctrl/Shift-click rows to select more than one. Tag, System, Type, "
                      "and date cells are editable right here - click one and type, or "
@@ -1788,10 +1855,36 @@ class IndexPage(QWidget):
         self.table.sortByColumn(0, Qt.AscendingOrder)
         self.search_edit.setFocus()
 
+    def _build_empty_state(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addStretch()
+        label = QLabel(
+            f"No {self.etype['label'].lower()}s in "
+            f"{da.series_display_label(self.series_number)} yet.\n\n"
+            "Add them one at a time, bulk-enter a batch with the Populating Wizard, "
+            "or pre-fill one from an engineering data sheet PDF.")
+        label.setAlignment(Qt.AlignCenter)
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        wizard_btn = make_button("Populating Wizard", "Primary")
+        wizard_btn.clicked.connect(self.main_window.open_populating_wizard)
+        btn_row.addWidget(wizard_btn)
+        datasheet_btn = make_button("Import Datasheet PDF...", "Ghost")
+        datasheet_btn.clicked.connect(self.main_window.open_datasheet_import)
+        btn_row.addWidget(datasheet_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+        layout.addStretch()
+        return page
+
     # ----------------------------------------------------------------- data
     def reload(self, reselect_row=None):
         try:
-            self.all_rows = da.read_index_rows_filtered(self.series_number, self.equip_key, self.filters)
+            self.all_rows = da.read_index_rows_with_progress(
+                self.series_number, self.equip_key, self.filters)
         except Exception as exc:
             QMessageBox.critical(self, "Couldn't read workbook", str(exc))
             self.all_rows = []
@@ -1818,8 +1911,20 @@ class IndexPage(QWidget):
                 self.table.scrollToItem(first_item)
 
     def apply_filter(self):
+        # Phase 13.7: a series+type with NO rows at all shows the empty
+        # state instead of a bare grid - independent of search/chips, which
+        # only ever narrow an already-nonempty set further (that case is
+        # "0 of N shown", handled by count_label below, not this).
+        if not self.all_rows:
+            self.table.hide()
+            self.empty_state.show()
+            self.count_label.setText("")
+            return
+        self.table.show()
+        self.empty_state.hide()
+
         query = self.search_edit.text().strip().lower()
-        rows = self.all_rows
+        rows = [r for r in self.all_rows if index_row_matches_chip(r, self.chips.active_id)]
         if query:
             rows = [r for r in rows if query in
                     " ".join(str(r.get(f) or "") for f in self.etype["summary_fields"]).lower()]

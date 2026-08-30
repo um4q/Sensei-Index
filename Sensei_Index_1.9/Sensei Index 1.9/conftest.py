@@ -86,3 +86,48 @@ def isolated_app_dir(tmp_path, monkeypatch):
     yield tmp_path, da
 
     da.invalidate_workbook_cache()
+
+
+class FakeMainWindow:
+    """A minimal stand-in for gui_app.MainWindow - lets a GUI test
+    construct a page/dialog that needs *a* main_window without building a
+    real one (which would pull in the whole sidebar tree, dashboard,
+    etc). Every method is a harmless no-op; a test asserting on what got
+    called should monkeypatch the specific method it cares about rather
+    than growing this class further."""
+
+    def __init__(self, undo_stack):
+        self.undo_stack = undo_stack
+
+    def statusBar(self):
+        class _StatusBar:
+            def showMessage(self, *a, **k):
+                pass
+        return _StatusBar()
+
+    def refresh_sidebar_and_dashboard(self):
+        pass
+
+    def refresh_current_view(self):
+        pass
+
+    def show_index(self, *a, **k):
+        pass
+
+    def show_coverage(self):
+        pass
+
+    def open_populating_wizard(self):
+        pass
+
+    def open_datasheet_import(self):
+        pass
+
+    def open_master_list_import(self):
+        pass
+
+
+@pytest.fixture
+def fake_main_window():
+    import gui_app
+    return FakeMainWindow(gui_app.UndoManager())
