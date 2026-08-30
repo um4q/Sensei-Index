@@ -152,7 +152,7 @@ class SeriesStatCard(QFrame):
     transmitters and valves for THIS series, and how far along are they"
     without having to open the series and count by hand."""
 
-    def __init__(self, series_number, summary, parent=None):
+    def __init__(self, series_number, summary, progress_summary=None, parent=None):
         super().__init__(parent)
         self.setObjectName("Card")
         layout = QVBoxLayout(self)
@@ -174,6 +174,7 @@ class SeriesStatCard(QFrame):
             grid.addWidget(lbl, 0, c)
 
         row = 1
+        progress_summary = progress_summary or {}
         for equip_key, etype in da.EQUIPMENT_TYPES.items():
             stats = summary.get(equip_key)
             name = QLabel(f"{etype['label']}s")
@@ -182,13 +183,35 @@ class SeriesStatCard(QFrame):
                 none_lbl = QLabel("\u2013")
                 none_lbl.setObjectName("FieldLabel")
                 grid.addWidget(none_lbl, row, 1, 1, 4)
-            else:
-                values = [stats["total"], stats["installed"], stats["submitted"], stats["accepted"]]
-                for c, v in enumerate(values, start=1):
-                    val_lbl = QLabel(str(v))
-                    val_lbl.setStyleSheet("font-weight: 700;")
-                    grid.addWidget(val_lbl, row, c)
+                row += 1
+                continue
+
+            values = [stats["total"], stats["installed"], stats["submitted"], stats["accepted"]]
+            for c, v in enumerate(values, start=1):
+                val_lbl = QLabel(str(v))
+                val_lbl.setStyleSheet("font-weight: 700;")
+                grid.addWidget(val_lbl, row, c)
             row += 1
+
+            # Phase 12.2 - additive: the existing Installed/Submitted/
+            # Accepted numbers above are untouched; this is one more line
+            # underneath, not a replacement.
+            prog = progress_summary.get(equip_key)
+            if prog:
+                prog_row = QWidget()
+                prog_layout = QHBoxLayout(prog_row)
+                prog_layout.setContentsMargins(0, 0, 0, 0)
+                prog_layout.setSpacing(8)
+                pct_lbl = QLabel(f"{prog['avg_percent']}% avg")
+                pct_lbl.setObjectName("FieldLabel")
+                pct_lbl.setMinimumWidth(56)
+                prog_layout.addWidget(pct_lbl)
+                prog_layout.addWidget(
+                    build_progress_segmented_bar(prog["at_0"], prog["partial"], prog["at_100"]),
+                    stretch=1)
+                grid.addWidget(prog_row, row, 0, 1, 5)
+                row += 1
+
         layout.addLayout(grid)
         layout.addStretch()
 
@@ -317,6 +340,37 @@ def row_status_color(entry):
     if entry.get("submitted"):
         return _submitted_row_color()
     return None
+
+
+def build_progress_segmented_bar(at_0, partial, at_100, height=8):
+    """Phase 12.2 - a thin three-segment bar (not started / partial /
+    100%) sized proportionally to the counts given, reusing the same
+    theme-aware not-started/in-progress/complete tones as row_status_color
+    so a glance at the Dashboard reads consistently with the Index grid's
+    Row # coloring. Falls back to one neutral full-width segment when
+    there's nothing to show (a series with zero rows)."""
+    theme = da.get_setting("theme") or "light"
+    neutral = "#3a3f55" if theme == "dark" else "#dde0e8"
+    partial_color = _submitted_row_color().name()
+    complete_color = _accepted_row_color().name()
+
+    bar = QWidget()
+    bar.setFixedHeight(height)
+    layout = QHBoxLayout(bar)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(1)
+
+    segments = [(at_0, neutral), (partial, partial_color), (at_100, complete_color)]
+    total = at_0 + partial + at_100
+    if total == 0:
+        segments = [(1, neutral)]
+    for count, color in segments:
+        if count <= 0:
+            continue
+        seg = QFrame()
+        seg.setStyleSheet(f"background: {color}; border-radius: 2px;")
+        layout.addWidget(seg, stretch=count)
+    return bar
 
 
 # =============================================================================
@@ -1094,7 +1148,8 @@ class DashboardPage(QWidget):
             by_series_row.addWidget(none_label)
         for series_number in series_numbers:
             summary = da.series_full_summary(series_number)
-            by_series_row.addWidget(SeriesStatCard(series_number, summary))
+            progress_summary = da.series_progress_summary(series_number)
+            by_series_row.addWidget(SeriesStatCard(series_number, summary, progress_summary))
         by_series_row.addStretch()
         inner_layout.addLayout(by_series_row)
 
@@ -1302,15 +1357,16 @@ class CoveragePage(QWidget):
                 [p for p in bucket["matched"] if p["flags"]]
             for pair in pairs:
                 item = pair["master"]
+                pct = pair["progress"]["percent"]
                 flag_text = ""
                 if pair["flags"]:
                     wording = ", ".join(COVERAGE_FLAG_LABELS.get(f, f) for f in pair["flags"])
                     flag_text = f"  ⚠ {wording}"
-                leaves.append((f"✓ {item['tag']} — {item['service']}{flag_text}",
+                leaves.append((f"✓ {item['tag']} — {item['service']} — {pct}%{flag_text}",
                                 ("matched", pair)))
         if active_chip in ("all", "missing"):
             for item in bucket["missing"]:
-                leaves.append((f"○ {item['tag']} — {item['service']} (not tracked)",
+                leaves.append((f"○ {item['tag']} — {item['service']} — 0% (not started)",
                                 ("missing", item)))
         if active_chip in ("all", "orphans"):
             for ref in bucket["orphans"]:

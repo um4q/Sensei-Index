@@ -944,9 +944,9 @@ def _normalize_for_compare(value):
 
 def _tracker_refs_by_tag(equip_key):
     """{canonical_tag: {'series', 'equip_key', 'row', 'key_value',
-    'installed'}} across every registered series for one equipment kind.
-    First occurrence wins on an accidental duplicate canonical tag (same
-    convention as the master-list parser)."""
+    'installed', 'submitted', 'accepted'}} across every registered series
+    for one equipment kind. First occurrence wins on an accidental
+    duplicate canonical tag (same convention as the master-list parser)."""
     etype = EQUIPMENT_TYPES[equip_key]
     key_field = etype["key_field"]
     refs = {}
@@ -962,6 +962,7 @@ def _tracker_refs_by_tag(equip_key):
             refs[tag] = {
                 "series": series_number, "equip_key": equip_key, "row": entry["row"],
                 "key_value": entry.get(key_field, ""), "installed": bool(entry.get("installed")),
+                "submitted": bool(entry.get("submitted")), "accepted": bool(entry.get("accepted")),
             }
     return refs
 
@@ -972,15 +973,18 @@ def reconcile_master_list():
     callers show Coverage's empty state in that case, never a crash).
     Otherwise:
 
-    {'matched': [{'master': item, 'tracker': ref, 'flags': [str, ...]}, ...],
+    {'matched': [{'master': item, 'tracker': ref, 'flags': [str, ...],
+                  'progress': {...compute_progress() shape...}}, ...],
      'missing': [item, ...],          # in-scope master items, no tracker row anywhere
      'orphans': [ref, ...],           # tracker rows whose tag isn't in the master list
      'out_of_scope_count': int,
      'out_of_scope_items': [item, ...]}   # shown collapsed (count only), expandable
 
     ref (a tracker-side row reference): {'series', 'equip_key', 'row',
-    'key_value', 'installed'}. flags are machine-readable ids
-    ('installed_mismatch', 'model_mismatch') - the UI supplies wording.
+    'key_value', 'installed', 'submitted', 'accepted'}. flags are
+    machine-readable ids ('installed_mismatch', 'model_mismatch') - the UI
+    supplies wording. 'missing' items have no tracker row at all, so no
+    progress dict - callers show a flat "0% - not started" for those.
 
     matched + missing always == every in-scope (transmitter/valve) master
     item; orphans are counted separately, same as 11's own acceptance
@@ -1010,14 +1014,20 @@ def reconcile_master_list():
         if bool(item.get("ml_installed")) != ref["installed"]:
             flags.append("installed_mismatch")
 
+        tracker_values = read_full_row(ref["series"], kind, ref["row"])
         model_field = "model" if kind == "transmitter" else "valve_model"
-        tracker_model = read_full_row(ref["series"], kind, ref["row"]).get(model_field, "")
+        tracker_model = tracker_values.get(model_field, "")
         master_model = item.get("model", "")
         if (master_model and tracker_model
                 and _normalize_for_compare(master_model) != _normalize_for_compare(tracker_model)):
             flags.append("model_mismatch")
 
-        matched.append({"master": item, "tracker": ref, "flags": flags})
+        # Phase 12.2: Coverage shows the same per-row % everywhere else in
+        # the app does - reuses the tracker_values already read above for
+        # the model-mismatch check, no extra workbook read.
+        progress = compute_progress(kind, tracker_values, ref)
+
+        matched.append({"master": item, "tracker": ref, "flags": flags, "progress": progress})
 
     orphans = [
         ref for equip_key, refs_by_tag in tracker_refs.items()
@@ -1455,6 +1465,60 @@ def read_index_rows_filtered(series_number, equip_key, filters=None):
         for fid, val in filters.items():
             rows = [r for r in rows if str(r.get(fid) or "") == str(val)]
     return rows
+
+
+def read_index_rows_with_progress(series_number, equip_key):
+    """read_index_rows_with_status()'s rows, each with a 'progress' key
+    added ({'percent', 'milestones', 'next'} from compute_progress()).
+    Reads every schema field ONCE per row, reusing a single header-derived
+    field_to_col map for the whole sheet, rather than calling
+    read_full_row() per row (which would re-scan the header every time) -
+    the Index page's Progress column (12.2) needs this for every visible
+    row, so the batch path matters."""
+    etype = EQUIPMENT_TYPES[equip_key]
+    export_mod = etype["export_module"]
+    schema = etype["schema"]
+    sheet_name = get_sheet_name(series_number, equip_key)
+
+    wb = _get_cached_workbook(data_only=False)
+    ws = wb[sheet_name]
+    field_to_col = export_mod.load_column_map(ws)
+
+    rows = read_index_rows_with_status(series_number, equip_key)
+    for entry in rows:
+        row_num = entry["row"]
+        values = {}
+        for field in schema.LOG_COLUMNS:
+            col = field_to_col.get(field["id"])
+            values[field["id"]] = export_mod.cell_to_str(ws.cell(row=row_num, column=col).value) \
+                if col else ""
+        entry["progress"] = compute_progress(equip_key, values, entry)
+    return rows
+
+
+def series_progress_summary(series_number):
+    """{'transmitter': {'avg_percent', 'at_0', 'partial', 'at_100'}, 'valve':
+    {...}} for ONE series - additive to series_full_summary()'s Installed/
+    Submitted/Accepted counts, same 'absent if this series has no sheet for
+    that type' convention. at_0/partial/at_100 always sum to that type's
+    total row count."""
+    result = {}
+    for equip_key in EQUIPMENT_TYPES:
+        try:
+            rows = read_index_rows_with_progress(series_number, equip_key)
+        except KeyError:
+            continue
+        if not rows:
+            result[equip_key] = {"avg_percent": 0, "at_0": 0, "partial": 0, "at_100": 0}
+            continue
+        percents = [r["progress"]["percent"] for r in rows]
+        result[equip_key] = {
+            "avg_percent": round(sum(percents) / len(percents)),
+            "at_0": sum(1 for p in percents if p == 0),
+            "partial": sum(1 for p in percents if 0 < p < 100),
+            "at_100": sum(1 for p in percents if p == 100),
+        }
+    return result
 
 
 def distinct_group_values(series_number, equip_key, group_field, filters=None):
