@@ -9,3 +9,14 @@ Sensei_Index_1.9/Sensei Index 1.9/backups/
 Sensei_Index_1.9/Sensei Index 1.9/reports/
 Sensei_Index_1.9/Sensei Index 1.9/output_pdfs/
 Sensei_Index_1.9/Sensei Index 1.9/temp_previews/*.pdf
+
+# Sensei Index 2.1 sidecars: new in this branch, populated only by runtime
+# use (or, so far, by verifying against the real checked-in workbook) -
+# unlike equipment_status.json/series_registry.json/app_settings.json
+# (which carry real accumulated client data from before this work and
+# stay tracked), these have no meaningful seed content to version yet.
+Sensei_Index_1.9/Sensei Index 1.9/master_list.json
+Sensei_Index_1.9/Sensei Index 1.9/ui_state.json
+Sensei_Index_1.9/Sensei Index 1.9/activity_log.jsonl
+Sensei_Index_1.9/Sensei Index 1.9/activity_log.*.jsonl
+Sensei_Index_1.9/Sensei Index 1.9/*.corrupt.*

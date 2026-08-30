@@ -476,15 +476,21 @@ def find_first_blank_row(series_number, equip_key):
     return r
 
 
-def save_row(series_number, equip_key, row_num, values):
+def save_row(series_number, equip_key, row_num, values, source="edit_dialog"):
     """Writes values (field_id -> string) into one row of the matching Log
     sheet and saves the workbook. Only touches columns the schema knows
     about - every other cell (styling, the yellow example-row formatting,
-    other columns) is left exactly as it was."""
+    other columns) is left exactly as it was.
+
+    Phase 15 choke point: logs ONE activity_log.jsonl event for this row
+    (only if at least one field actually changed value - a no-op save
+    logs nothing)."""
     etype = EQUIPMENT_TYPES[equip_key]
     export_mod = etype["export_module"]
     sheet_name = get_sheet_name(series_number, equip_key)
+    key_field = etype["key_field"]
 
+    changed = {}
     with _mutating_workbook() as wb:
         ws = wb[sheet_name]
         field_to_col = export_mod.load_column_map(ws)
@@ -492,21 +498,36 @@ def save_row(series_number, equip_key, row_num, values):
             col = field_to_col.get(fid)
             if col is None:
                 continue
+            old_text = export_mod.cell_to_str(ws.cell(row=row_num, column=col).value)
+            new_text = val if val != "" else ""
+            if old_text != new_text:
+                changed[fid] = {"old": old_text, "new": new_text}
             ws.cell(row=row_num, column=col).value = (val if val != "" else None)
 
+    if changed:
+        key_value = values.get(key_field) or changed.get(key_field, {}).get("new", "")
+        log_activity("edit", series=series_number, equip_key=equip_key, row=row_num,
+                      key_value=key_value, fields=changed, source=source)
 
-def save_fields_bulk(series_number, equip_key, updates):
+
+def save_fields_bulk(series_number, equip_key, updates, source="bulk"):
     """updates: an iterable of (row_num, field_id, value) triples - writes
     all of them within a SINGLE workbook load/save cycle, regardless of how
     many rows or fields are touched. This is the efficient path behind
     every "mass edit" action in the Index grid (paste across a column,
     fill-down, mass-clear, Mass Edit Dates) - the alternative, calling
     save_row() once per cell, would mean one full disk write per cell,
-    which gets slow fast once a paste spans dozens of rows."""
+    which gets slow fast once a paste spans dozens of rows.
+
+    Phase 15 choke point: logs ONE activity_log.jsonl event PER ROW
+    touched (not one for the whole batch, not one per field) - all
+    sharing one identical timestamp, per 15's documented convention."""
     etype = EQUIPMENT_TYPES[equip_key]
     export_mod = etype["export_module"]
     sheet_name = get_sheet_name(series_number, equip_key)
+    key_field = etype["key_field"]
 
+    changed_by_row = {}
     with _mutating_workbook() as wb:
         ws = wb[sheet_name]
         field_to_col = export_mod.load_column_map(ws)
@@ -514,7 +535,25 @@ def save_fields_bulk(series_number, equip_key, updates):
             col = field_to_col.get(fid)
             if col is None:
                 continue
+            old_text = export_mod.cell_to_str(ws.cell(row=row_num, column=col).value)
+            new_text = val if val != "" else ""
+            if old_text != new_text:
+                changed_by_row.setdefault(row_num, {})[fid] = {"old": old_text, "new": new_text}
             ws.cell(row=row_num, column=col).value = (val if val != "" else None)
+        # Key values for the log, read from the SAME open sheet/cache -
+        # never a second workbook round-trip just for logging.
+        key_col = field_to_col.get(key_field)
+        key_values_by_row = {
+            row_num: export_mod.cell_to_str(ws.cell(row=row_num, column=key_col).value)
+            for row_num in changed_by_row
+        } if key_col else {}
+
+    if changed_by_row:
+        shared_ts = datetime.datetime.now().isoformat(timespec="seconds")
+        for row_num, fields in changed_by_row.items():
+            key_value = key_values_by_row.get(row_num) or fields.get(key_field, {}).get("new", "")
+            log_activity("edit", series=series_number, equip_key=equip_key, row=row_num,
+                          key_value=key_value, fields=fields, source=source, ts=shared_ts)
 
 
 # ---------------------------------------------------------------------------
@@ -532,16 +571,22 @@ def save_fields_bulk(series_number, equip_key, updates):
 # will naturally hand it back out the next time something is added, so
 # nothing is wasted.
 # ---------------------------------------------------------------------------
-def delete_rows(series_number, equip_key, row_nums):
+def delete_rows(series_number, equip_key, row_nums, source="edit_dialog"):
     """Clears the given row number(s) in one series+type's Log sheet.
     Returns the list of key-field values (Tag / Equip #) that were cleared,
-    so their Installed/Submitted status entries can be dropped too."""
+    so their Installed/Submitted status entries can be dropped too.
+
+    Phase 15 choke point: logs one 'delete' event per row actually
+    cleared (had a key value) - the field-by-field diff isn't logged
+    here (deleting can blank a hundred-plus fields at once; the ACTION
+    itself, and which tag it was, is what per-row History needs)."""
     etype = EQUIPMENT_TYPES[equip_key]
     export_mod = etype["export_module"]
     sheet_name = get_sheet_name(series_number, equip_key)
     key_field = etype["key_field"]
 
     cleared_keys = []
+    cleared_rows = []  # (row_num, key_val) pairs, for logging below
     with _mutating_workbook() as wb:
         ws = wb[sheet_name]
         field_to_col = export_mod.load_column_map(ws)
@@ -552,8 +597,15 @@ def delete_rows(series_number, equip_key, row_nums):
                 key_val = ws.cell(row=row_num, column=key_col).value
                 if key_val not in (None, ""):
                     cleared_keys.append(str(key_val))
+                    cleared_rows.append((row_num, str(key_val)))
             for col in field_to_col.values():
                 ws.cell(row=row_num, column=col).value = None
+
+    if cleared_rows:
+        shared_ts = datetime.datetime.now().isoformat(timespec="seconds")
+        for row_num, key_val in cleared_rows:
+            log_activity("delete", series=series_number, equip_key=equip_key, row=row_num,
+                          key_value=key_val, source=source, ts=shared_ts)
 
     if cleared_keys:
         store = _load_status_store()
@@ -885,6 +937,8 @@ def import_master_list(path, sheet_series_map):
     save_master_list(snapshot)
     set_setting("master_list_path", str(source_path))
     invalidate_search_index()
+    log_activity("master_list_import", source="master_list",
+                  note=f"Imported {len(items)} row(s) from {source_path.name}")
     return snapshot, summaries
 
 
@@ -966,6 +1020,118 @@ def set_page_view_state(series_number, equip_key, **fields):
     page_state.update(fields)
     state[key] = page_state
     save_ui_state(state)
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 - Activity log & per-row history.
+#
+# Append-only JSONL, one JSON object per line: {"ts", "action", "series",
+# "equip_key", "row", "key_value", "fields": {field_id: {"old","new"}},
+# "source", "note"}. Hooked at the CHOKE POINTS below (save_row,
+# save_fields_bulk, set_status/bulk_set_status, delete_rows,
+# create_rows_from_master_items, import_master_list) - never per-widget -
+# so every caller (grid edit, EditDialog, Populating Wizard, datasheet
+# import, create-from-master, undo/redo) gets logged automatically without
+# gui_app.py having to remember to call anything.
+#
+# Convention (documented per 15's own acceptance criterion): a bulk action
+# touching N rows produces N events, one per row, all sharing one ts and
+# source - never one combined event for the whole batch, and never one
+# event per individual field either.
+#
+# Writing history NEVER raises - a disk-full/permissions failure here is
+# warned to console and swallowed; history must never block a save.
+# ---------------------------------------------------------------------------
+ACTIVITY_LOG_PATH = HERE / "activity_log.jsonl"
+ACTIVITY_LOG_ROTATE_BYTES = 5 * 1024 * 1024  # ~5MB
+ACTIVITY_LOG_FIELD_TRUNCATE = 200
+
+
+def _truncate_for_log(value):
+    text = "" if value is None else str(value)
+    return text if len(text) <= ACTIVITY_LOG_FIELD_TRUNCATE else text[:ACTIVITY_LOG_FIELD_TRUNCATE] + "…"
+
+
+def _rotate_activity_log_if_needed():
+    try:
+        if ACTIVITY_LOG_PATH.exists() and ACTIVITY_LOG_PATH.stat().st_size > ACTIVITY_LOG_ROTATE_BYTES:
+            rotated = ACTIVITY_LOG_PATH.with_name("activity_log.1.jsonl")
+            if rotated.exists():
+                rotated.unlink()  # keep exactly one prior generation
+            ACTIVITY_LOG_PATH.rename(rotated)
+    except OSError as exc:
+        print(f"WARNING: activity_log.jsonl rotation failed (continuing without rotating): {exc}")
+
+
+def log_activity(action, series=None, equip_key=None, row=None, key_value=None,
+                  fields=None, source="app", note=None, ts=None):
+    """Appends one event. fields: {field_id: {'old': ..., 'new': ...}} -
+    each value truncated to ACTIVITY_LOG_FIELD_TRUNCATE chars. ts lets a
+    caller share one identical timestamp across a batch of per-row events
+    (save_fields_bulk does this) - omit it to stamp 'now'."""
+    entry = {
+        "ts": ts or datetime.datetime.now().isoformat(timespec="seconds"),
+        "action": action, "series": series, "equip_key": equip_key,
+        "row": row, "key_value": key_value,
+        "fields": {
+            fid: {"old": _truncate_for_log(diff.get("old")), "new": _truncate_for_log(diff.get("new"))}
+            for fid, diff in (fields or {}).items()
+        },
+        "source": source, "note": note,
+    }
+    try:
+        _rotate_activity_log_if_needed()
+        with open(ACTIVITY_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError as exc:
+        print(f"WARNING: couldn't write to activity_log.jsonl (continuing without logging): {exc}")
+
+
+def read_activity_log(limit=None, series=None, equip_key=None, row=None):
+    """Newest-first. Tolerates a corrupt/truncated line (skips it, never
+    crashes) and a missing file (returns []) - deleting or hand-editing
+    the log must never break the app (15's own acceptance criterion)."""
+    if not ACTIVITY_LOG_PATH.exists():
+        return []
+    entries = []
+    try:
+        with open(ACTIVITY_LOG_PATH, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if series is not None and entry.get("series") != series:
+                    continue
+                if equip_key is not None and entry.get("equip_key") != equip_key:
+                    continue
+                if row is not None and entry.get("row") != row:
+                    continue
+                entries.append(entry)
+    except OSError:
+        return []
+    entries.reverse()
+    return entries[:limit] if limit is not None else entries
+
+
+def read_row_history(series_number, equip_key, row_num, key_value=None, limit=None):
+    """Every event for one row - RowDetailDialog's 'History' tab. Matches
+    by row NUMBER (stable across a Tag/Equip # rename) primarily; status
+    events don't carry a row number (set_status is keyed by key_value
+    alone, not a row), so entries matching key_value are merged in too,
+    deduplicated by identity. A renamed row's PRE-rename status events
+    (logged under the old key_value) won't appear here - the same known
+    limitation equipment_status.json itself has without
+    rename_status_key()."""
+    by_row = read_activity_log(series=series_number, equip_key=equip_key, row=row_num)
+    by_key = [e for e in read_activity_log(series=series_number, equip_key=equip_key)
+              if e.get("row") is None and e.get("key_value") == key_value] if key_value else []
+    merged = by_row + by_key
+    merged.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    return merged[:limit] if limit is not None else merged
 
 
 # ---------------------------------------------------------------------------
@@ -1166,6 +1332,13 @@ def create_rows_from_master_items(items_with_kind):
                 "series": series_number, "equip_key": equip_key, "row": row_num,
                 "tag": item.get("tag", ""), "values": values,
             })
+
+    if created:
+        shared_ts = datetime.datetime.now().isoformat(timespec="seconds")
+        for c in created:
+            fields = {fid: {"old": "", "new": val} for fid, val in c["values"].items()}
+            log_activity("edit", series=c["series"], equip_key=c["equip_key"], row=c["row"],
+                          key_value=c["tag"], fields=fields, source="master_list", ts=shared_ts)
     return created
 
 
@@ -1345,28 +1518,52 @@ def get_status(series_number, equip_key, key_value):
     return _normalized_status(store.get(_status_key(series_number, equip_key, key_value)))
 
 
-def set_status(series_number, equip_key, key_value, **fields):
+def set_status(series_number, equip_key, key_value, source="app", **fields):
+    """Phase 15 choke point: logs one 'status' event, field-diffed the
+    same way save_row does (only the fields that actually changed)."""
     store = _load_status_store()
     k = _status_key(series_number, equip_key, key_value)
-    current = _normalized_status(store.get(k))
+    before = _normalized_status(store.get(k))
+    current = dict(before)
     current.update(fields)
     store[k] = current
     _save_status_store(store)
 
+    changed = {fid: {"old": before[fid], "new": current[fid]} for fid in fields if before.get(fid) != current.get(fid)}
+    if changed:
+        log_activity("status", series=series_number, equip_key=equip_key,
+                      key_value=key_value, fields=changed, source=source)
 
-def bulk_set_status(keys, **fields):
+
+def bulk_set_status(keys, source="bulk", **fields):
     """keys: an iterable of (series_number, equip_key, key_value) tuples -
     e.g. every row currently selected or visible in a filtered Index
     window. Loads and saves the status file exactly once regardless of how
     many keys are passed, so selecting a hundred rows and toggling a status
-    on all of them is still a single read + single write."""
+    on all of them is still a single read + single write.
+
+    Phase 15 choke point: logs one 'status' event per key actually
+    changed, all sharing one timestamp (same convention as
+    save_fields_bulk)."""
     store = _load_status_store()
+    log_entries = []  # (series, equip_key, key_value, changed_fields)
     for series_number, equip_key, key_value in keys:
         k = _status_key(series_number, equip_key, key_value)
-        current = _normalized_status(store.get(k))
+        before = _normalized_status(store.get(k))
+        current = dict(before)
         current.update(fields)
         store[k] = current
+        changed = {fid: {"old": before[fid], "new": current[fid]}
+                   for fid in fields if before.get(fid) != current.get(fid)}
+        if changed:
+            log_entries.append((series_number, equip_key, key_value, changed))
     _save_status_store(store)
+
+    if log_entries:
+        shared_ts = datetime.datetime.now().isoformat(timespec="seconds")
+        for series_number, equip_key, key_value, changed in log_entries:
+            log_activity("status", series=series_number, equip_key=equip_key,
+                          key_value=key_value, fields=changed, source=source, ts=shared_ts)
 
 
 def rename_status_key(series_number, equip_key, old_key, new_key):

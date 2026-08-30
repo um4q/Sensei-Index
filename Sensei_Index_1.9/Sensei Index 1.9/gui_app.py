@@ -83,6 +83,13 @@ class UndoManager:
         action = self._undo_stack.pop()
         action.undo_fn()
         self._redo_stack.append(action)
+        # Phase 15: undo/redo log as their OWN actions - action.undo_fn()
+        # above already goes through save_row/delete_rows/set_status etc.
+        # (whatever the original action used), each logging its own
+        # field-level 'edit'/'delete'/'status' event same as any other
+        # call - this is an ADDITIONAL marker entry so History shows an
+        # undo happened, not just an indistinguishable second edit.
+        da.log_activity("undo", source="undo", note=f"Undid: {action.description}")
         return action.description
 
     def redo(self):
@@ -91,6 +98,7 @@ class UndoManager:
         action = self._redo_stack.pop()
         action.redo_fn()
         self._undo_stack.append(action)
+        da.log_activity("redo", source="redo", note=f"Redid: {action.description}")
         return action.description
 
     def clear(self):
@@ -413,6 +421,60 @@ def row_status_color(entry):
     if entry.get("submitted"):
         return _submitted_row_color()
     return None
+
+
+ACTIVITY_SOURCE_LABELS = {
+    "edit_dialog": "edit", "bulk": "bulk edit", "wizard": "wizard",
+    "master_list": "master list", "app": "", "undo": "undo", "redo": "redo",
+}
+
+
+def _humanize_activity_ts(ts):
+    try:
+        dt = datetime.datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        return ts or ""
+    text = dt.strftime("%b %d, %I:%M %p")
+    return text.replace(" 0", " ")  # "03:04 PM" -> "3:04 PM" cosmetic trim
+
+
+def format_history_entry(entry, schema=None, include_row=False):
+    """Phase 15 - one human-phrased line for an activity_log.jsonl entry,
+    e.g. 'Serial Number: blank → 8800DF080... · Aug 30, 2:14 PM · bulk
+    edit'. schema (transmitter_schema/valve_schema) resolves a field id to
+    its label when given; falls back to the bare id without it (Dashboard's
+    Recent Activity card spans both kinds at once, so it passes none).
+    include_row prefixes the row's own key value - only useful when the
+    line isn't already scoped to one row (also Recent Activity)."""
+    action = entry.get("action")
+    fields = entry.get("fields") or {}
+
+    if action == "delete":
+        summary = f"Row cleared (was {entry.get('key_value') or '—'})"
+    elif action == "master_list_import":
+        summary = entry.get("note") or "Master list imported"
+    elif fields:
+        parts = []
+        for fid, diff in fields.items():
+            field_def = schema.by_id(fid) if schema else None
+            label = field_def["label"] if field_def else fid
+            old = diff.get("old") or "blank"
+            new = diff.get("new") or "blank"
+            parts.append(f"{label}: {old} → {new}")
+        if len(parts) > 3:
+            parts = parts[:3] + [f"and {len(parts) - 3} more"]
+        summary = "; ".join(parts)
+    else:
+        summary = entry.get("note") or (action or "").replace("_", " ") or "Changed"
+
+    if include_row and entry.get("key_value"):
+        summary = f"{entry['key_value']} – {summary}"
+
+    tail = " · ".join(x for x in (
+        _humanize_activity_ts(entry.get("ts")),
+        ACTIVITY_SOURCE_LABELS.get(entry.get("source"), entry.get("source") or ""),
+    ) if x)
+    return f"{summary} · {tail}" if tail else summary
 
 
 def build_progress_segmented_bar(at_0, partial, at_100, height=8):
@@ -1205,6 +1267,7 @@ class DashboardPage(QWidget):
         inner_layout.addLayout(cards_row)
 
         inner_layout.addWidget(self._build_tips_card())
+        inner_layout.addWidget(self._build_recent_activity_card())
 
         series_label = QLabel("SERIES")
         series_label.setObjectName("SectionLabel")
@@ -1269,6 +1332,55 @@ class DashboardPage(QWidget):
         card_layout.addLayout(row)
 
         return card
+
+    def _build_recent_activity_card(self):
+        """Phase 15 - last ~10 events across every series/kind, newest
+        first, each clickable to jump straight to that row."""
+        card = QFrame()
+        card.setObjectName("Card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 16, 20, 16)
+        card_layout.setSpacing(8)
+
+        label = QLabel("RECENT ACTIVITY")
+        label.setObjectName("SectionLabel")
+        card_layout.addWidget(label)
+
+        entries = da.read_activity_log(limit=10)
+        if not entries:
+            empty = QLabel("Nothing recorded yet - edits, status changes, and imports will show up here.")
+            empty.setObjectName("StatLabel")
+            empty.setWordWrap(True)
+            card_layout.addWidget(empty)
+            return card
+
+        self._recent_activity_entries = entries
+        activity_list = QListWidget()
+        activity_list.setObjectName("RecentActivityList")
+        activity_list.setFrameShape(QFrame.NoFrame)
+        activity_list.setFixedHeight(min(220, 26 * len(entries) + 8))
+        for entry in entries:
+            schema = da.EQUIPMENT_TYPES.get(entry.get("equip_key"), {}).get("schema")
+            activity_list.addItem(QListWidgetItem(format_history_entry(entry, schema, include_row=True)))
+        activity_list.itemClicked.connect(self._on_recent_activity_clicked)
+        card_layout.addWidget(activity_list)
+        return card
+
+    def _on_recent_activity_clicked(self, item):
+        row_idx = None
+        for i in range(item.listWidget().count()):
+            if item.listWidget().item(i) is item:
+                row_idx = i
+                break
+        if row_idx is None or row_idx >= len(self._recent_activity_entries):
+            return
+        entry = self._recent_activity_entries[row_idx]
+        series_number, equip_key = entry.get("series"), entry.get("equip_key")
+        key_value = entry.get("key_value")
+        if series_number is None or equip_key is None or not key_value:
+            return  # a master_list_import summary entry has none of these - nothing to jump to
+        key_field = da.EQUIPMENT_TYPES[equip_key]["key_field"]
+        self.main_window.show_index(series_number, equip_key, {key_field: key_value})
 
     def _show_excel_sheet_menu(self):
         """Excel Sheets button -> a Transmitter Log / Valve Log submenu per
@@ -2968,6 +3080,24 @@ class RowDetailDialog(QDialog):
                 grid.addWidget(label, row, 0)
                 grid.addWidget(value, row, 1)
             inner_layout.addWidget(box)
+
+        # Phase 15 - per-row History, newest first, human-phrased.
+        key_field = self.etype["key_field"]
+        history = da.read_row_history(series_number, equip_key, row_num,
+                                        key_value=values.get(key_field), limit=20)
+        history_box = QGroupBox("History")
+        history_layout = QVBoxLayout(history_box)
+        if history:
+            for entry in history:
+                line = QLabel(format_history_entry(entry, schema))
+                line.setWordWrap(True)
+                line.setObjectName("FieldLabel")
+                history_layout.addWidget(line)
+        else:
+            empty = QLabel("No recorded history for this row yet.")
+            empty.setObjectName("FieldLabel")
+            history_layout.addWidget(empty)
+        inner_layout.addWidget(history_box)
 
         inner_layout.addStretch()
         scroll.setWidget(inner)
