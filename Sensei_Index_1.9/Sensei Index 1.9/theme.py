@@ -313,6 +313,15 @@ QPushButton#FilterChip:checked {
     border: 1px solid #3a63e0;
 }
 
+QWidget#Toast {
+    background: #1f2430;
+    border-radius: 8px;
+}
+QLabel#ToastLabel {
+    color: #ffffff;
+    font-weight: 600;
+}
+
 /* -------------------------------------------------------------- scroll */
 QScrollBar:vertical {
     background: transparent;
@@ -619,6 +628,16 @@ QPushButton#FilterChip:checked {
     background: #7aa2f7;
     color: #16161e;
     border: 1px solid #7aa2f7;
+}
+
+QWidget#Toast {
+    background: #0d0e14;
+    border-radius: 8px;
+    border: 1px solid #363b54;
+}
+QLabel#ToastLabel {
+    color: #ffffff;
+    font-weight: 600;
 }
 
 /* -------------------------------------------------------------- scroll */

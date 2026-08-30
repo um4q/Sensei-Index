@@ -15,7 +15,7 @@ import os
 import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QItemSelectionModel, QDate
+from PySide6.QtCore import Qt, QSize, QItemSelectionModel, QDate, QTimer
 from PySide6.QtGui import QFont, QColor, QKeySequence, QShortcut, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -311,6 +311,69 @@ class FilterChipBar(QWidget):
                 btn.setText(f"{base} ({counts[opt_id]})")
             else:
                 btn.setText(base)
+
+
+class Toast(QWidget):
+    """Phase 13.6 - a small, self-dismissing overlay ('Saved', '12 rows
+    updated - Ctrl+Z to undo'), anchored to the bottom-right of whatever
+    top-level window it's shown in. Replaces QMessageBox.information for
+    SUCCESS confirmations that need no acknowledgment click - errors and
+    confirmations (anything the user must consciously read before the
+    next step) stay modal QMessageBox dialogs; see show_toast()'s call
+    sites for exactly where the line was drawn."""
+
+    def __init__(self, parent_window, text, duration_ms=3000):
+        super().__init__(parent_window)
+        self.setObjectName("Toast")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setWindowFlags(Qt.SubWindow)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 10, 16, 10)
+        label = QLabel(text)
+        label.setObjectName("ToastLabel")
+        label.setWordWrap(True)
+        label.setMaximumWidth(360)
+        layout.addWidget(label)
+        self.adjustSize()
+        self._reposition()
+        self.show()
+        self.raise_()
+        QTimer.singleShot(max(duration_ms, 400), self._dismiss)
+
+    def _reposition(self):
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        margin = 24
+        x = parent.width() - self.width() - margin
+        y = parent.height() - self.height() - margin
+        self.move(max(0, x), max(0, y))
+
+    def _dismiss(self):
+        self.close()
+        self.deleteLater()
+
+
+def _toast_anchor(widget):
+    """Walks up the PARENT-widget ownership chain to the outermost
+    ancestor. Deliberately NOT QWidget.window() - a QDialog is always its
+    own top-level window (isWindow() is True on it even when it has a
+    parent), so .window() would anchor a toast to a dialog that's about to
+    close right after showing it, killing the toast along with it. Parent
+    ownership (set via the constructor's `parent` argument, same as every
+    dialog in this app already does) is what actually threads back to
+    MainWindow."""
+    while widget.parentWidget() is not None:
+        widget = widget.parentWidget()
+    return widget
+
+
+def show_toast(widget, text, duration_ms=3000):
+    """Call this instead of QMessageBox.information(widget, ..., text) for
+    a save/bulk-action SUCCESS message - anchors the toast to widget's
+    outermost parent, so it outlives a dialog that closes right after
+    showing it (Export complete, Master list imported, ...)."""
+    return Toast(_toast_anchor(widget), text, duration_ms)
 
 
 def _accepted_row_color():
@@ -788,11 +851,10 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Couldn't add series", str(exc))
             return
-        QMessageBox.information(
-            self, "Series added",
-            f"\"{da.series_display_label(number)}\" created with empty Transmitter + "
-            f"Valve logs.\n\nWorth a quick check in Excel that the new sheet's dropdown "
-            f"columns still work - automatic sheet copies can occasionally miss one.")
+        show_toast(
+            self,
+            f"\"{da.series_display_label(number)}\" added – worth a quick check in Excel "
+            "that the new sheet's dropdown columns still work.", duration_ms=5000)
         self.refresh_sidebar_and_dashboard()
 
     def open_settings(self):
@@ -3043,7 +3105,7 @@ class SettingsDialog(QDialog):
             QMessageBox.critical(self, "Couldn't create shortcut", str(exc))
             return
         da.set_setting("desktop_shortcut_created", True)
-        QMessageBox.information(self, "Done", f"Shortcut created:\n{path}")
+        show_toast(self, f"Shortcut created: {path}")
 
 
 class SignatureManagerDialog(QDialog):
@@ -3330,8 +3392,7 @@ class ExportDialog(QDialog):
             QMessageBox.information(self, "Nothing exported", "No rows matched - nothing was exported.")
             return
         folder = da.HERE / "output_pdfs" / (self.subfolder_edit.text().strip() or "")
-        QMessageBox.information(self, "Export complete",
-                                 f"Wrote {len(written)} file(s) to:\n{folder.resolve()}")
+        show_toast(self, f"Wrote {len(written)} file(s) to {folder.resolve()}", duration_ms=5000)
         self.accept()
 
 
@@ -3491,10 +3552,10 @@ class DatasheetImportDialog(QDialog):
 
         self.main_window.refresh_sidebar_and_dashboard()
         msg = (f"Added {added} of {len(checked)} record(s) into "
-               f"{da.series_display_label(series_number)}.")
+               f"{da.series_display_label(series_number)}")
         if skipped:
-            msg += f"\n{skipped} closed without saving, so nothing was added for those."
-        QMessageBox.information(self, "Import complete", msg)
+            msg += f" – {skipped} closed without saving, so nothing was added for those"
+        show_toast(self, msg, duration_ms=5000)
         self.accept()
 
     def _record_add_undo(self, series_number, equip_key, row_num, tag):
@@ -3760,10 +3821,9 @@ class MasterListImportDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Import failed", str(exc))
             return
-        QMessageBox.information(
-            self, "Master list imported",
-            f"Imported {len(snapshot['items'])} row(s) from {snapshot['source_file']}.\n\n"
-            "Open Coverage from the sidebar to see what's matched, missing, or flagged.")
+        show_toast(
+            self, f"Imported {len(snapshot['items'])} row(s) from {snapshot['source_file']} – "
+            "open Coverage to see what's matched, missing, or flagged.", duration_ms=5000)
         self.accept()
 
 
