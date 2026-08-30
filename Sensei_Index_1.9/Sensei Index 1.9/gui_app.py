@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFormLayout, QLabel, QPushButton, QLineEdit, QComboBox, QTextEdit,
     QScrollArea, QFrame, QTreeWidget, QTreeWidgetItem, QStackedWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QMessageBox,
+    QTableWidget, QTableWidgetItem, QTableView, QHeaderView, QDialog, QMessageBox,
     QInputDialog, QFileDialog, QCheckBox, QRadioButton, QButtonGroup,
     QGroupBox, QSizePolicy, QAbstractItemView, QSpacerItem, QAbstractScrollArea,
     QMenu, QStatusBar, QDateEdit, QStyledItemDelegate,
@@ -1886,6 +1886,7 @@ class IndexPage(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         layout.addWidget(self.table, stretch=1)
+        self._setup_frozen_columns()
 
         # Phase 13.7 - empty state: a series+type with literally zero rows
         # (not just zero after a search/chip/filter narrows it down - see
@@ -1931,6 +1932,60 @@ class IndexPage(QWidget):
         layout.addLayout(btn_row)
         layout.addStretch()
         return page
+
+    # ------------------------------------------------------ frozen columns
+    # Phase 13.2 - pins Row # + Tag/Equip # while scrolling horizontally,
+    # via Qt's standard "freeze columns" recipe: a second QTableView
+    # sharing this table's model AND selection model, overlaid as a fixed
+    # widget at the left edge, sized to EXACTLY match the real width of
+    # the columns it's pinning. When the main table scrolls horizontally,
+    # its own columns 0/1 scroll away underneath - the opaque frozen
+    # overlay (which never scrolls; it's a sibling widget in fixed screen
+    # coordinates) is what makes them look like they stayed put. Editing
+    # happens through the main table only (frozen_table is read-only) -
+    # every other interaction (selection, sorting - both operate on the
+    # one shared model/selection model) needs no extra sync code at all.
+    FROZEN_COLUMN_COUNT = 2  # Row # + the key field (Tag/Equip #)
+
+    def _setup_frozen_columns(self):
+        self.frozen_table = QTableView(self.table)
+        self.frozen_table.setModel(self.table.model())
+        self.frozen_table.setSelectionModel(self.table.selectionModel())
+        self.frozen_table.setFocusPolicy(Qt.NoFocus)
+        self.frozen_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.frozen_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.frozen_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.frozen_table.setAlternatingRowColors(True)
+        self.frozen_table.verticalHeader().setVisible(False)
+        self.frozen_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.frozen_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        for col in range(self.FROZEN_COLUMN_COUNT, self.table.columnCount()):
+            self.frozen_table.setColumnHidden(col, True)
+        for col in range(self.FROZEN_COLUMN_COUNT):
+            self.frozen_table.setColumnWidth(col, self.table.columnWidth(col))
+        self.frozen_table.show()
+        self.frozen_table.raise_()
+
+        self.table.verticalScrollBar().valueChanged.connect(
+            self.frozen_table.verticalScrollBar().setValue)
+        self.table.horizontalHeader().sectionResized.connect(self._on_main_column_resized)
+        self._update_frozen_geometry()
+
+    def _on_main_column_resized(self, logical_index, _old_size, new_size):
+        if logical_index < self.FROZEN_COLUMN_COUNT:
+            self.frozen_table.setColumnWidth(logical_index, new_size)
+        self._update_frozen_geometry()
+
+    def _update_frozen_geometry(self):
+        width = sum(self.table.columnWidth(c) for c in range(self.FROZEN_COLUMN_COUNT))
+        self.frozen_table.setGeometry(
+            self.table.frameWidth(), self.table.frameWidth(),
+            width, self.table.viewport().height() + self.table.horizontalHeader().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "frozen_table"):
+            self._update_frozen_geometry()
 
     # ----------------------------------------------------------------- data
     def reload(self, reselect_row=None):

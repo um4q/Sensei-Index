@@ -227,7 +227,7 @@ QGroupBox::title {
 }
 
 /* --------------------------------------------------------------- tables */
-QTableWidget, QTreeWidget {
+QTableWidget, QTableView, QTreeWidget {
     background: #ffffff;
     alternate-background-color: #f7f8fa;
     gridline-color: #e6e8ee;
@@ -543,7 +543,7 @@ QGroupBox::title {
 }
 
 /* --------------------------------------------------------------- tables */
-QTableWidget, QTreeWidget {
+QTableWidget, QTableView, QTreeWidget {
     background: #1f2335;
     alternate-background-color: #24283b;
     gridline-color: #2f3549;
