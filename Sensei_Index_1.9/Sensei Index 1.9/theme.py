@@ -322,6 +322,23 @@ QLabel#ToastLabel {
     font-weight: 600;
 }
 
+QDialog#GlobalSearchDialog {
+    background: #ffffff;
+    border: 1px solid #d6dae3;
+    border-radius: 10px;
+}
+QLineEdit#GlobalSearchInput {
+    border: none;
+    border-bottom: 1px solid #e2e5ec;
+    border-radius: 0px;
+    padding: 12px 14px;
+    font-size: 15px;
+}
+QListWidget#GlobalSearchResults {
+    border: none;
+    background: transparent;
+}
+
 /* -------------------------------------------------------------- scroll */
 QScrollBar:vertical {
     background: transparent;
@@ -638,6 +655,23 @@ QWidget#Toast {
 QLabel#ToastLabel {
     color: #ffffff;
     font-weight: 600;
+}
+
+QDialog#GlobalSearchDialog {
+    background: #1a1d2b;
+    border: 1px solid #363b54;
+    border-radius: 10px;
+}
+QLineEdit#GlobalSearchInput {
+    border: none;
+    border-bottom: 1px solid #363b54;
+    border-radius: 0px;
+    padding: 12px 14px;
+    font-size: 15px;
+}
+QListWidget#GlobalSearchResults {
+    border: none;
+    background: transparent;
 }
 
 /* -------------------------------------------------------------- scroll */

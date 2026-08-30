@@ -884,6 +884,7 @@ def import_master_list(path, sheet_series_map):
     }
     save_master_list(snapshot)
     set_setting("master_list_path", str(source_path))
+    invalidate_search_index()
     return snapshot, summaries
 
 
@@ -1912,3 +1913,117 @@ def create_desktop_shortcut(shortcut_name="InstINDEX"):
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
                     check=True, capture_output=True, text=True)
     return shortcut_path
+
+
+# ---------------------------------------------------------------------------
+# Phase 14 - Global search (Ctrl+K). One flat, cached index across every
+# registered series + both equipment kinds + the master list, so the
+# palette dialog in gui_app.py never has to know how any of that data is
+# actually stored - it just calls search_index(query).
+# ---------------------------------------------------------------------------
+SEARCH_INDEX_FIELDS = {
+    "transmitter": ["tag", "system_number", "transmitter_type", "service",
+                     "pid_number", "model", "serial_number"],
+    "valve": ["equip_number", "system", "valve_type", "valve_model", "valve_serial",
+              "actuator_serial", "positioner_serial", "solenoid_serial", "position_limit_serial"],
+}
+
+
+def _read_search_fields(series_number, equip_key):
+    """Only the columns SEARCH_INDEX_FIELDS needs for this kind, read in
+    ONE pass over the sheet (same batching reasoning as
+    read_index_rows_with_progress - not a read_full_row() call per row,
+    which would re-scan the header every time)."""
+    etype = EQUIPMENT_TYPES[equip_key]
+    export_mod = etype["export_module"]
+    sheet_name = get_sheet_name(series_number, equip_key)
+    key_field = etype["key_field"]
+
+    wb = _get_cached_workbook(data_only=False)
+    ws = wb[sheet_name]
+    field_to_col = export_mod.load_column_map(ws)
+    key_col = field_to_col.get(key_field)
+    fields = SEARCH_INDEX_FIELDS.get(equip_key, [])
+
+    rows = []
+    for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
+        key_val = ws.cell(row=r, column=key_col).value if key_col else None
+        if key_val in (None, ""):
+            continue
+        values = {fid: export_mod.cell_to_str(ws.cell(row=r, column=field_to_col.get(fid)).value)
+                  if field_to_col.get(fid) else "" for fid in fields}
+        values["row"] = r
+        rows.append(values)
+    return rows
+
+
+def build_search_index():
+    """[{'source': 'tracker'|'master', 'kind', 'series' (tracker only),
+    'row' (tracker only), 'key_value', 'item' (master only), 'searchable',
+    'label'}, ...] - a fresh, uncached build. Callers almost always want
+    get_search_index() (cached) instead; this is the one-shot builder it
+    calls, kept separate so it's independently testable."""
+    entries = []
+    for series_number in list_series():
+        for equip_key, etype in EQUIPMENT_TYPES.items():
+            try:
+                rows = _read_search_fields(series_number, equip_key)
+            except KeyError:
+                continue
+            for values in rows:
+                key_value = values.get(etype["key_field"], "")
+                searchable = " ".join(str(v) for v in values.values() if v).lower()
+                entries.append({
+                    "source": "tracker", "kind": equip_key, "series": series_number,
+                    "row": values["row"], "key_value": key_value,
+                    "searchable": searchable,
+                    "label": f"{key_value} – {etype['label']} · "
+                             f"{series_display_label(series_number)}",
+                })
+
+    for item in master_list_items():
+        if item.get("kind") not in EQUIPMENT_TYPES:
+            continue  # out_of_scope items aren't actionable from search (no create-from-master target)
+        searchable = " ".join(str(item.get(k, "")) for k in
+                               ("tag", "service", "model", "manufacturer", "type_desc")).lower()
+        entries.append({
+            "source": "master", "kind": item["kind"], "key_value": item["tag"], "item": item,
+            "searchable": searchable,
+            "label": f"{item['tag']} – {item.get('service') or item.get('type_desc') or ''} "
+                     f"· Master list (not tracked)",
+        })
+    return entries
+
+
+_SEARCH_INDEX_CACHE = {"mtime": None, "entries": None}
+
+
+def get_search_index(force_refresh=False):
+    """Cached across calls - rebuilt whenever the workbook's mtime has
+    changed since the last build (covers every _mutating_workbook exit
+    automatically, since that's exactly what changes the workbook's
+    mtime) or when force_refresh is passed (a master-list re-import
+    doesn't touch the workbook at all, so import_master_list() calls
+    invalidate_search_index() explicitly instead)."""
+    current_mtime = _workbook_mtime()
+    if force_refresh or _SEARCH_INDEX_CACHE["entries"] is None or _SEARCH_INDEX_CACHE["mtime"] != current_mtime:
+        _SEARCH_INDEX_CACHE["entries"] = build_search_index()
+        _SEARCH_INDEX_CACHE["mtime"] = current_mtime
+    return _SEARCH_INDEX_CACHE["entries"]
+
+
+def invalidate_search_index():
+    _SEARCH_INDEX_CACHE["entries"] = None
+    _SEARCH_INDEX_CACHE["mtime"] = None
+
+
+def search_index(query, limit=50):
+    """The palette dialog's one entry point. [] for a blank query (never
+    dumps the entire index) - substring match, case-insensitive, across
+    tag/serials/model/service/system already flattened into each entry's
+    'searchable' string."""
+    query = (query or "").strip().lower()
+    if not query:
+        return []
+    matches = [e for e in get_search_index() if query in e["searchable"]]
+    return matches[:limit]

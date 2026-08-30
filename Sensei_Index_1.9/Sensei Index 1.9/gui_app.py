@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTableView, QHeaderView, QDialog, QMessageBox,
     QInputDialog, QFileDialog, QCheckBox, QRadioButton, QButtonGroup,
     QGroupBox, QSizePolicy, QAbstractItemView, QSpacerItem, QAbstractScrollArea,
-    QMenu, QStatusBar, QDateEdit, QStyledItemDelegate,
+    QMenu, QStatusBar, QDateEdit, QStyledItemDelegate, QListWidget, QListWidgetItem,
 )
 
 import data_access as da
@@ -561,6 +561,7 @@ class MainWindow(QMainWindow):
             bind("Ctrl+,", self.open_settings),
             bind("Ctrl+Shift+W", self.open_populating_wizard),
             bind("Ctrl+Shift+I", self.open_datasheet_import),
+            bind("Ctrl+K", self.open_global_search),
         ]
 
     def _active_index_page(self):
@@ -659,6 +660,12 @@ class MainWindow(QMainWindow):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         layout.addWidget(self.tree, stretch=1)
+
+        search_btn = make_button("\U0001F50D  Search...", "SidebarFooterButton")
+        search_btn.setToolTip("Search every series, both equipment kinds, and the "
+                               "master list at once (Ctrl+K)")
+        search_btn.clicked.connect(self.open_global_search)
+        layout.addWidget(search_btn)
 
         add_series_btn = make_button("+ Add New Series", "SidebarFooterButton")
         add_series_btn.clicked.connect(self.add_series)
@@ -829,9 +836,11 @@ class MainWindow(QMainWindow):
         self.dashboard_page = page
         self._set_dynamic_page(page)
 
-    def show_coverage(self):
+    def show_coverage(self, select_tag=None):
         page = CoveragePage(self)
         self._set_dynamic_page(page)
+        if select_tag:
+            page.select_and_scroll_to_tag(select_tag)
 
     def show_index(self, series_number, equip_key, filters=None):
         page = IndexPage(self, series_number, equip_key, filters)
@@ -922,6 +931,9 @@ class MainWindow(QMainWindow):
         page = self.current_dynamic_page
         if isinstance(page, CoveragePage):
             page.reload()
+
+    def open_global_search(self):
+        GlobalSearchDialog(self, self).exec()
 
     def show_instructions(self):
         dlg = QDialog(self)
@@ -1516,6 +1528,55 @@ class CoveragePage(QWidget):
         n = len(self._selected_missing)
         self.add_selected_btn.setEnabled(n > 0)
         self.add_selected_btn.setText(f"Add {n} Selected to Tracker" if n else "Add Selected to Tracker")
+
+    def _leaf_tag(self, item):
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            return None
+        kind, payload = data
+        if kind == "matched":
+            return payload["master"]["tag"]
+        if kind == "missing":
+            return payload["tag"]
+        if kind == "orphan":
+            return da.canonical_tag(payload["key_value"])
+        if kind == "out_of_scope":
+            return payload["tag"]
+        return None
+
+    def select_and_scroll_to_tag(self, tag):
+        """Phase 14 - lands global search's 'master-list-only hit' one
+        click away from Add to tracker: forces the 'All' chip (so the
+        target leaf is guaranteed to be rendered regardless of whatever
+        chip was last active) then finds, expands to, and selects it."""
+        if self.result is None:
+            return False
+        target = da.canonical_tag(tag)
+        if self.chips.active_id != "all":
+            self.chips.set_active("all")
+            self._render_tree()
+
+        def walk(item):
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if da.canonical_tag(self._leaf_tag(child) or "") == target:
+                    return child
+                found = walk(child)
+                if found is not None:
+                    return found
+            return None
+
+        for i in range(self.tree.topLevelItemCount()):
+            found = walk(self.tree.topLevelItem(i))
+            if found is not None:
+                parent = found.parent()
+                while parent is not None:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
+                self.tree.setCurrentItem(found)
+                self.tree.scrollToItem(found)
+                return True
+        return False
 
     # --------------------------------------------------- create-from-master
     def _create_from_master(self, items):
@@ -4152,6 +4213,112 @@ class MasterListImportDialog(QDialog):
             self, f"Imported {len(snapshot['items'])} row(s) from {snapshot['source_file']} – "
             "open Coverage to see what's matched, missing, or flagged.", duration_ms=5000)
         self.accept()
+
+
+class GlobalSearchDialog(QDialog):
+    """Sensei Index 2.1, Phase 14 - Ctrl+K. Frameless, floats near the
+    top-center of the main window (Ctrl+F stays the existing per-page
+    search - this is the separate, everything-at-once one). Searches
+    every registered series, both equipment kinds, and the master list in
+    one flat, debounced query (da.search_index)."""
+
+    DEBOUNCE_MS = 150
+    RESULT_LIMIT = 50
+
+    def __init__(self, parent, main_window=None):
+        super().__init__(parent, Qt.FramelessWindowHint | Qt.Dialog)
+        self.main_window = main_window if main_window is not None else parent
+        self.setObjectName("GlobalSearchDialog")
+        self.setModal(True)
+        self.resize(560, 420)
+        self._results = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(0)
+
+        self.query_edit = QLineEdit()
+        self.query_edit.setObjectName("GlobalSearchInput")
+        self.query_edit.setPlaceholderText(
+            "Search tag, serial, model, service, system - across everything...")
+        layout.addWidget(self.query_edit)
+
+        self.results_list = QListWidget()
+        self.results_list.setObjectName("GlobalSearchResults")
+        layout.addWidget(self.results_list, stretch=1)
+
+        hint = QLabel("↑↓ to move · Enter to open · Esc to close")
+        hint.setObjectName("FieldLabel")
+        hint.setContentsMargins(10, 4, 10, 8)
+        layout.addWidget(hint)
+
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(self.DEBOUNCE_MS)
+        self._debounce.timeout.connect(self._run_search)
+        self.query_edit.textChanged.connect(lambda _text: self._debounce.start())
+        self.query_edit.returnPressed.connect(self._activate_current)
+        self.results_list.itemActivated.connect(self._activate_item)
+
+        self._position_top_center()
+        self.query_edit.setFocus()
+
+    def _position_top_center(self):
+        # Positioned off the real Qt parent (self.parentWidget()), NOT
+        # self.main_window - main_window is a plain data/navigation
+        # handle in tests (see GlobalSearchDialog(parent, main_window)),
+        # not necessarily a QWidget, and parentWidget() is exactly the
+        # widget this dialog should visually anchor to anyway.
+        anchor = self.parentWidget()
+        if anchor is None:
+            return
+        geo = anchor.geometry()
+        x = geo.x() + max(0, (geo.width() - self.width()) // 2)
+        y = geo.y() + 80
+        self.move(x, y)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.reject()
+            return
+        if event.key() == Qt.Key_Down:
+            self.results_list.setCurrentRow(
+                min(self.results_list.currentRow() + 1, self.results_list.count() - 1))
+            return
+        if event.key() == Qt.Key_Up:
+            self.results_list.setCurrentRow(max(self.results_list.currentRow() - 1, 0))
+            return
+        super().keyPressEvent(event)
+
+    def _run_search(self):
+        query = self.query_edit.text()
+        self.results_list.clear()
+        self._results = da.search_index(query, limit=self.RESULT_LIMIT)
+        for entry in self._results:
+            self.results_list.addItem(QListWidgetItem(entry["label"]))
+        if self.results_list.count():
+            self.results_list.setCurrentRow(0)
+
+    def _activate_current(self):
+        row = self.results_list.currentRow()
+        if row < 0 and self.results_list.count():
+            row = 0
+        if 0 <= row < len(self._results):
+            self._open_result(self._results[row])
+
+    def _activate_item(self, item):
+        row = self.results_list.row(item)
+        if 0 <= row < len(self._results):
+            self._open_result(self._results[row])
+
+    def _open_result(self, entry):
+        self.accept()
+        if entry["source"] == "tracker":
+            key_field = da.EQUIPMENT_TYPES[entry["kind"]]["key_field"]
+            self.main_window.show_index(entry["series"], entry["kind"],
+                                         {key_field: entry["key_value"]})
+        else:
+            self.main_window.show_coverage(select_tag=entry["key_value"])
 
 
 class PopulatingWizardDialog(QDialog):
