@@ -408,6 +408,24 @@ def run_with_lock_retry(parent, action, error_title="Couldn't save"):
             return False
 
 
+def export_progress_report_flow(parent):
+    """Phase 17 - the 'Export Progress Report' button's action, shared by
+    Dashboard and Coverage (both spec'd to have this button) so the two
+    can never drift into different behavior. Writes the report, then
+    opens the reports/ folder - same 'do the thing, then show where it
+    landed' pattern as ExportDialog's own PDF export."""
+    try:
+        out_path = da.export_progress_report()
+    except Exception as exc:
+        QMessageBox.critical(parent, "Couldn't export report", str(exc))
+        return
+    show_toast(parent, f"Wrote {out_path.name} to {out_path.parent}", duration_ms=5000)
+    try:
+        da.open_file(out_path.parent)
+    except Exception:
+        pass  # the report itself is safely written either way - opening the folder is a convenience
+
+
 def _accepted_row_color():
     """Background for the Row # cell once Accepted is checked - picked per
     active theme so it still reads as 'success green' rather than
@@ -1263,12 +1281,22 @@ class DashboardPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
 
+        header_row = QHBoxLayout()
+        title_col = QVBoxLayout()
         title = QLabel("K1B Equipment Inspection Tracker")
         title.setObjectName("PageTitle")
-        layout.addWidget(title)
+        title_col.addWidget(title)
         subtitle = QLabel("Instrumentation QA/QC Tracker")
         subtitle.setObjectName("PageSubtitle")
-        layout.addWidget(subtitle)
+        title_col.addWidget(subtitle)
+        header_row.addLayout(title_col)
+        header_row.addStretch()
+        export_report_btn = make_button("Export Progress Report", "Ghost")
+        export_report_btn.setToolTip("Summary / Missing / Flags, straight from the same numbers "
+                                      "Coverage and this Dashboard already show")
+        export_report_btn.clicked.connect(lambda: export_progress_report_flow(self))
+        header_row.addWidget(export_report_btn)
+        layout.addLayout(header_row)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1461,14 +1489,24 @@ class CoveragePage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
+        header_row = QHBoxLayout()
+        header_col = QVBoxLayout()
         header = QLabel("Coverage")
         header.setObjectName("PageTitle")
-        outer.addWidget(header)
+        header_col.addWidget(header)
         subtitle = QLabel("What's tracked against the client's Instrumentation Master List, "
                            "and what isn't - matched, missing, orphaned, or flagged.")
         subtitle.setObjectName("PageSubtitle")
         subtitle.setWordWrap(True)
-        outer.addWidget(subtitle)
+        header_col.addWidget(subtitle)
+        header_row.addLayout(header_col)
+        header_row.addStretch()
+        export_report_btn = make_button("Export Progress Report", "Ghost")
+        export_report_btn.setToolTip("Summary / Missing / Flags, straight from these same "
+                                      "matched/missing/flag numbers")
+        export_report_btn.clicked.connect(lambda: export_progress_report_flow(self))
+        header_row.addWidget(export_report_btn)
+        outer.addLayout(header_row)
 
         self.banner = QLabel()
         self.banner.setObjectName("Breadcrumb")

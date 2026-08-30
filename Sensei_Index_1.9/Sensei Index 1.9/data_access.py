@@ -2385,3 +2385,248 @@ def restore_backup(backup_path):
     invalidate_workbook_cache()
     invalidate_search_index()
     return safety_snapshot
+
+
+# ---------------------------------------------------------------------------
+# Phase 17 - Client progress report export.
+#
+# build_progress_report_data() is pure computation - zero new math. Every
+# number in it comes straight from reconcile_master_list(),
+# read_index_rows_with_progress(), and compute_progress()'s own milestone
+# ids, the exact same functions Coverage and the Dashboard already call -
+# so the report can never disagree with what's on screen (17's own
+# acceptance criterion).
+# ---------------------------------------------------------------------------
+FLAG_LABELS = {
+    "installed_mismatch": "Installed mismatch (master vs tracker)",
+    "model_mismatch": "Model mismatch (master vs tracker)",
+}
+
+
+def find_all_duplicate_serials(equip_key):
+    """Every group of 2+ rows (across ALL registered series) sharing the
+    same primary serial value for this kind - the whole-tracker version
+    of find_rows_with_duplicate_serial()'s single-value check, used by
+    the report's Flags sheet. [{'serial', 'rows': [{'series','row',
+    'key_value'}, ...]}, ...]. One pass per series/sheet, same as
+    find_rows_with_duplicate_serial."""
+    field = SERIAL_FIELD_BY_KIND.get(equip_key)
+    if not field:
+        return []
+    etype = EQUIPMENT_TYPES[equip_key]
+    export_mod = etype["export_module"]
+    key_field = etype["key_field"]
+
+    by_serial = {}
+    for series_number in list_series():
+        try:
+            sheet_name = get_sheet_name(series_number, equip_key)
+        except KeyError:
+            continue
+        wb = _get_cached_workbook(data_only=False)
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        field_to_col = export_mod.load_column_map(ws)
+        serial_col = field_to_col.get(field)
+        key_col = field_to_col.get(key_field)
+        if not serial_col or not key_col:
+            continue
+        for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
+            raw_serial = export_mod.cell_to_str(ws.cell(row=r, column=serial_col).value)
+            target = _normalize_for_compare(raw_serial)
+            if not target:
+                continue
+            key_val = export_mod.cell_to_str(ws.cell(row=r, column=key_col).value)
+            if not key_val:
+                continue
+            by_serial.setdefault(target, {"serial": raw_serial.strip(), "rows": []})
+            by_serial[target]["rows"].append({"series": series_number, "row": r, "key_value": key_val})
+
+    return [group for group in by_serial.values() if len(group["rows"]) > 1]
+
+
+def build_progress_report_data():
+    """Returns {'has_master_list': bool, 'summary': [...], 'missing':
+    [...], 'flags': [...]}. summary rows: one per area x kind when a
+    master list has been imported (in-scope = matched + missing, exactly
+    Coverage's own definition); one per series x kind (tracker-only,
+    noted as such) when it hasn't - 17's own 'degrades to tracker-only
+    summary with a note' requirement."""
+    snapshot = load_master_list()
+    reconciliation = reconcile_master_list() if snapshot else None
+
+    summary = []
+    missing = []
+    flags = []
+
+    if reconciliation:
+        groups = {}
+        for pair in reconciliation["matched"]:
+            item = pair["master"]
+            groups.setdefault((item["area"], item["kind"]), {"matched": [], "missing": []})
+            groups[(item["area"], item["kind"])]["matched"].append(pair)
+        for item in reconciliation["missing"]:
+            groups.setdefault((item["area"], item["kind"]), {"matched": [], "missing": []})
+            groups[(item["area"], item["kind"])]["missing"].append(item)
+
+        for (area, kind), bucket in sorted(groups.items()):
+            matched, miss = bucket["matched"], bucket["missing"]
+            total = len(matched) + len(miss)
+            milestone_counts = {mid: 0 for mid, _label in PROGRESS_MILESTONES}
+            percents = []
+            for pair in matched:
+                percents.append(pair["progress"]["percent"])
+                for m in pair["progress"]["milestones"]:
+                    if m["done"]:
+                        milestone_counts[m["id"]] += 1
+            summary.append({
+                "area": area, "kind": kind, "total_in_scope": total,
+                "created": milestone_counts["created"],
+                "serials_captured": milestone_counts["serial_captured"],
+                "installed": milestone_counts["installed"],
+                "inspection_complete": milestone_counts["inspection_complete"],
+                "submitted": milestone_counts["submitted"],
+                "accepted": milestone_counts["accepted"],
+                "avg_percent": round(sum(percents) / len(percents)) if percents else 0,
+            })
+
+        for item in reconciliation["missing"]:
+            missing.append({
+                "tag": item["tag"], "service": item.get("service", ""),
+                "type_desc": item.get("type_desc", ""), "sheet": item.get("source_sheet", ""),
+            })
+
+        for pair in reconciliation["matched"]:
+            if pair["flags"]:
+                flags.append({
+                    "tag": pair["master"]["tag"], "kind": pair["master"]["kind"],
+                    "detail": "; ".join(FLAG_LABELS.get(f, f) for f in pair["flags"]),
+                })
+    else:
+        for series_number in list_series():
+            for equip_key, etype in EQUIPMENT_TYPES.items():
+                try:
+                    rows = read_index_rows_with_progress(series_number, equip_key)
+                except KeyError:
+                    continue
+                if not rows:
+                    continue
+                milestone_counts = {mid: 0 for mid, _label in PROGRESS_MILESTONES}
+                percents = []
+                for entry in rows:
+                    percents.append(entry["progress"]["percent"])
+                    for m in entry["progress"]["milestones"]:
+                        if m["done"]:
+                            milestone_counts[m["id"]] += 1
+                summary.append({
+                    "area": f"{series_display_label(series_number)} (tracker only)", "kind": equip_key,
+                    "total_in_scope": len(rows),
+                    "created": milestone_counts["created"],
+                    "serials_captured": milestone_counts["serial_captured"],
+                    "installed": milestone_counts["installed"],
+                    "inspection_complete": milestone_counts["inspection_complete"],
+                    "submitted": milestone_counts["submitted"],
+                    "accepted": milestone_counts["accepted"],
+                    "avg_percent": round(sum(percents) / len(percents)) if percents else 0,
+                })
+
+    # 13.5 validation warnings, across the whole tracker - independent of
+    # whether a master list has been imported.
+    for equip_key, etype in EQUIPMENT_TYPES.items():
+        key_field = etype["key_field"]
+        for series_number in list_series():
+            try:
+                rows = read_index_rows(series_number, equip_key)
+            except KeyError:
+                continue
+            for r in rows:
+                key_val = r.get(key_field, "")
+                warning = tag_shape_warning(key_val)
+                if warning:
+                    flags.append({"tag": key_val, "kind": equip_key, "detail": warning})
+        for group in find_all_duplicate_serials(equip_key):
+            tags = ", ".join(f"{row['key_value']} (series {row['series']})" for row in group["rows"])
+            flags.append({
+                "tag": tags, "kind": equip_key,
+                "detail": f"Duplicate serial \"{group['serial']}\"",
+            })
+
+    return {"has_master_list": bool(snapshot), "summary": summary, "missing": missing, "flags": flags}
+
+
+def write_progress_report_xlsx(data, out_path):
+    """Renders build_progress_report_data()'s dict to a standalone
+    workbook - openpyxl only, no new dependency. Modest formatting: bold
+    header row, autofilter, frozen header row, and the workbook's own
+    Good/Bad palette (reused from row_status colors' hex values, kept in
+    sync by hand since theme.py's Qt colors and this file's openpyxl
+    fills are two different color systems with no shared source)."""
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    GOOD_FILL = PatternFill("solid", fgColor="C6EFCE")
+    BAD_FILL = PatternFill("solid", fgColor="FFC7CE")
+    HEADER_FONT = Font(bold=True)
+
+    wb = openpyxl.Workbook()
+
+    def _write_sheet(ws, headers, rows, pct_col=None, header_row=1):
+        """header_row lets Sheet 1 carry a note above the header (the
+        tracker-only degrade case) without duplicating this whole
+        function - everything below just shifts down."""
+        for c, text in enumerate(headers, start=1):
+            cell = ws.cell(row=header_row, column=c, value=text)
+            cell.font = HEADER_FONT
+        ws.freeze_panes = ws.cell(row=header_row + 1, column=1).coordinate
+        ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(headers))}{header_row}"
+        for r, row in enumerate(rows, start=header_row + 1):
+            for c, value in enumerate(row, start=1):
+                ws.cell(row=r, column=c, value=value)
+        if pct_col is not None:
+            for r in range(header_row + 1, ws.max_row + 1):
+                cell = ws.cell(row=r, column=pct_col)
+                cell.fill = GOOD_FILL if isinstance(cell.value, (int, float)) and cell.value >= 100 else BAD_FILL
+        for c in range(1, len(headers) + 1):
+            ws.column_dimensions[get_column_letter(c)].width = 22
+
+    ws1 = wb.active
+    ws1.title = "Summary"
+    header_row = 1
+    if not data["has_master_list"]:
+        ws1.append(["No master list has been imported - this report is tracker-only "
+                     "(every row's own scope, not reconciled against the client's master list)."])
+        ws1.append([])
+        header_row = 3
+    headers1 = ["Area", "Kind", "Total In Scope", "Created", "Serials Captured",
+                "Installed", "Inspection Complete", "Submitted", "Accepted", "Avg %"]
+    rows1 = [[r["area"], r["kind"], r["total_in_scope"], r["created"], r["serials_captured"],
+              r["installed"], r["inspection_complete"], r["submitted"], r["accepted"], r["avg_percent"]]
+             for r in data["summary"]]
+    _write_sheet(ws1, headers1, rows1, pct_col=len(headers1), header_row=header_row)
+
+    ws2 = wb.create_sheet("Missing")
+    _write_sheet(ws2, ["Tag", "Service", "Type Description", "Sheet"],
+                 [[r["tag"], r["service"], r["type_desc"], r["sheet"]] for r in data["missing"]])
+
+    ws3 = wb.create_sheet("Flags")
+    _write_sheet(ws3, ["Tag(s)", "Kind", "Detail"],
+                 [[r["tag"], r["kind"], r["detail"]] for r in data["flags"]])
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(out_path)
+    return out_path
+
+
+def export_progress_report():
+    """Builds the report and saves it to reports/Progress_Report_<date>.
+    xlsx next to the workbook. Returns the path written."""
+    data = build_progress_report_data()
+    stamp = datetime.date.today().isoformat()
+    out_path = REPORTS_DIR / f"Progress_Report_{stamp}.xlsx"
+    n = 2
+    while out_path.exists():
+        out_path = REPORTS_DIR / f"Progress_Report_{stamp}-{n}.xlsx"
+        n += 1
+    return write_progress_report_xlsx(data, out_path)
