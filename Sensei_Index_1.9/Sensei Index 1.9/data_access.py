@@ -206,7 +206,15 @@ def _mutating_workbook():
     the cache is invalidated - otherwise a half-finished edit (say, the
     Transmitter sheet got copied for a new series but the Valve sheet copy
     then failed) would sit in memory looking like valid, current data on
-    every subsequent read, when what's actually on disk never changed."""
+    every subsequent read, when what's actually on disk never changed.
+
+    Phase 16.1: also the single choke point for automatic backups - a
+    snapshot of the CURRENT on-disk file is taken here, before this
+    block's write, whenever the last one is older than
+    backup_interval_minutes (or there isn't one yet). Never blocks the
+    actual mutation: a backup failure (disk full, permissions) is warned
+    to console and swallowed."""
+    _backup_workbook_if_due()
     wb = _get_cached_workbook(data_only=False)
     try:
         yield wb
@@ -619,10 +627,53 @@ def delete_rows(series_number, equip_key, row_nums, source="edit_dialog"):
     return cleared_keys
 
 
+class WorkbookLockedError(Exception):
+    """Raised in place of the raw PermissionError when the workbook
+    appears to be open in Excel (or another program holding an exclusive
+    lock) at save time (16.2) - callers show a specific 'close it, then
+    Retry' dialog for this, instead of the generic Program-Files/admin-
+    rights PermissionError message."""
+
+
+def _excel_lock_file_path():
+    # Excel's own convention: '~$<filename>' next to the real file,
+    # created the moment the workbook is opened and removed on a clean
+    # close. A stale one (Excel/the OS crashed) is possible but rare - a
+    # false positive here just means one extra Retry click, never data
+    # loss - so it's used as a hint, not sole proof.
+    return WORKBOOK_PATH.with_name(f"~${WORKBOOK_PATH.name}")
+
+
+def is_workbook_locked():
+    """Best-effort, never raises - a check that itself fails is treated
+    as 'not locked' (the real answer comes from the save attempt either
+    way). The '~$...' lockfile is the portable signal; on Windows, an
+    exclusive-rename probe backs it up for the case Excel didn't leave
+    one (or it was already cleaned up) but still holds the file open."""
+    try:
+        if _excel_lock_file_path().exists():
+            return True
+    except OSError:
+        pass
+    if os.name == "nt" and WORKBOOK_PATH.exists():
+        try:
+            # Renaming a file to its own name fails on Windows if any
+            # process has it open with a sharing lock that blocks
+            # renames - which Excel's own open-for-edit lock does.
+            os.rename(WORKBOOK_PATH, WORKBOOK_PATH)
+        except OSError:
+            return True
+    return False
+
+
 def _save_workbook(wb):
     try:
         wb.save(WORKBOOK_PATH)
     except PermissionError:
+        if is_workbook_locked():
+            raise WorkbookLockedError(
+                "The workbook is open in Excel. Close it there, then click Retry."
+            ) from None
         raise PermissionError(
             f"Can't save '{WORKBOOK_PATH.name}'. One of two things is almost "
             "always the cause: it's open in Excel (or another program) right "
@@ -2224,3 +2275,113 @@ def search_index(query, limit=50):
         return []
     matches = [e for e in get_search_index() if query in e["searchable"]]
     return matches[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Phase 16.1 - Automatic workbook backups.
+#
+# _backup_workbook_if_due() is called from _mutating_workbook()'s entry
+# (above) - the one choke point every write already passes through.
+# Never blocks a save: any failure here is warned to console and
+# swallowed, same reasoning as write_json_atomic's sidecar writes.
+# ---------------------------------------------------------------------------
+BACKUPS_DIR = HERE / "backups"
+REPORTS_DIR = HERE / "reports"
+BACKUP_NAME_PREFIX = "Equipment_Inspection_Tracker."
+BACKUP_NAME_SUFFIX = ".xlsx"
+
+
+def _list_backup_paths():
+    """Oldest first (by mtime) - [] if the folder doesn't exist yet."""
+    if not BACKUPS_DIR.exists():
+        return []
+    paths = [p for p in BACKUPS_DIR.glob(f"{BACKUP_NAME_PREFIX}*{BACKUP_NAME_SUFFIX}") if p.is_file()]
+    return sorted(paths, key=lambda p: p.stat().st_mtime)
+
+
+def _write_backup_snapshot():
+    """Copies the CURRENT on-disk workbook into backups/, timestamped to
+    the second. Collision-safe (two backups in the same second get a
+    '-2', '-3', ... suffix) so nothing is ever silently overwritten."""
+    BACKUPS_DIR.mkdir(exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = BACKUPS_DIR / f"{BACKUP_NAME_PREFIX}{stamp}{BACKUP_NAME_SUFFIX}"
+    n = 2
+    while dest.exists():
+        dest = BACKUPS_DIR / f"{BACKUP_NAME_PREFIX}{stamp}-{n}{BACKUP_NAME_SUFFIX}"
+        n += 1
+    shutil.copy2(WORKBOOK_PATH, dest)
+    return dest
+
+
+def _prune_backups():
+    keep = get_setting("backup_keep")
+    if not keep or keep <= 0:
+        return
+    existing = _list_backup_paths()  # oldest first
+    for old in existing[:-keep]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def _backup_workbook_if_due():
+    if not WORKBOOK_PATH.exists():
+        return  # nothing to back up yet (a brand-new install)
+    try:
+        interval_minutes = get_setting("backup_interval_minutes")
+        if interval_minutes is None:
+            interval_minutes = 30  # `or 30` would also override an explicit 0 ("always back up")
+        existing = _list_backup_paths()
+        if existing:
+            newest = existing[-1]
+            age_minutes = (datetime.datetime.now().timestamp() - newest.stat().st_mtime) / 60
+            if age_minutes < interval_minutes:
+                return
+        _write_backup_snapshot()
+        _prune_backups()
+    except OSError as exc:
+        print(f"WARNING: automatic workbook backup failed (continuing without backing up): {exc}")
+
+
+def list_backups():
+    """[{'path', 'name', 'mtime', 'size'}, ...], NEWEST first - the
+    Backups dialog's list."""
+    result = []
+    for p in reversed(_list_backup_paths()):
+        try:
+            stat = p.stat()
+        except OSError:
+            continue
+        result.append({"path": p, "name": p.name, "mtime": stat.st_mtime, "size": stat.st_size})
+    return result
+
+
+def backup_now():
+    """The Backups dialog's 'Back up now' button - always writes a fresh
+    snapshot regardless of backup_interval_minutes, then prunes to
+    backup_keep same as the automatic path."""
+    if not WORKBOOK_PATH.exists():
+        raise FileNotFoundError("No workbook to back up yet.")
+    dest = _write_backup_snapshot()
+    _prune_backups()
+    return dest
+
+
+def restore_backup(backup_path):
+    """Copies the chosen snapshot over the live workbook - AFTER taking
+    ONE MORE safety snapshot of whatever's currently live, so restoring
+    is itself undoable (by restoring that safety snapshot by hand).
+    Returns the safety snapshot's path (None if there was no live
+    workbook to protect - a restore onto a fresh install)."""
+    backup_path = Path(backup_path)
+    if not backup_path.exists():
+        raise FileNotFoundError(f"Backup not found: {backup_path}")
+    safety_snapshot = None
+    if WORKBOOK_PATH.exists():
+        safety_snapshot = _write_backup_snapshot()
+    shutil.copy2(backup_path, WORKBOOK_PATH)
+    invalidate_workbook_cache()
+    invalidate_search_index()
+    return safety_snapshot

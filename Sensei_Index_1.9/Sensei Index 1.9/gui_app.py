@@ -384,6 +384,30 @@ def show_toast(widget, text, duration_ms=3000):
     return Toast(_toast_anchor(widget), text, duration_ms)
 
 
+def run_with_lock_retry(parent, action, error_title="Couldn't save"):
+    """Phase 16.2 - calls action() (a zero-arg callable performing one
+    workbook write). If it raises da.WorkbookLockedError, shows the
+    specific 'close Excel, then Retry' dialog and loops on Retry - the
+    exact wording IS the acceptance criterion's own phrasing. Any other
+    exception shows the normal critical dialog and is NOT retried.
+    Returns True if action() eventually succeeded, False if the user
+    cancelled out or a non-lock error occurred (already shown to them)."""
+    while True:
+        try:
+            action()
+            return True
+        except da.WorkbookLockedError as exc:
+            reply = QMessageBox.question(
+                parent, "Workbook is open in Excel", str(exc),
+                QMessageBox.Retry | QMessageBox.Cancel, QMessageBox.Retry)
+            if reply != QMessageBox.Retry:
+                return False
+            continue
+        except Exception as exc:
+            QMessageBox.critical(parent, error_title, str(exc))
+            return False
+
+
 def _accepted_row_color():
     """Background for the Row # cell once Accepted is checked - picked per
     active theme so it still reads as 'success green' rather than
@@ -751,9 +775,10 @@ class MainWindow(QMainWindow):
         master_list_btn.clicked.connect(self.open_master_list_import)
         layout.addWidget(master_list_btn)
 
-        drive_btn = make_button("\u2601  Connect to Drive", "SidebarFooterButton")
-        drive_btn.setToolTip("Cloud backup / sync - not built yet")
-        drive_btn.clicked.connect(self.connect_to_drive)
+        drive_btn = make_button("\U0001F4BE  Backups...", "SidebarFooterButton")
+        drive_btn.setToolTip("Automatic local snapshots of the workbook - "
+                              "back up now, restore, or open the folder")
+        drive_btn.clicked.connect(self.open_backups_dialog)
         layout.addWidget(drive_btn)
 
         settings_btn = make_button("\u2699  Settings", "SidebarFooterButton")
@@ -944,17 +969,12 @@ class MainWindow(QMainWindow):
         self.apply_theme()
         self.refresh_sidebar_and_dashboard()
 
-    def connect_to_drive(self):
-        """Placeholder entry point for a future cloud-backup/sync
-        integration. Deliberately does nothing to any data - it only tells
-        the person this isn't built yet, rather than staying silent (a
-        button that visibly does nothing is worse than one that's honest
-        about being unfinished)."""
-        QMessageBox.information(
-            self, "Connect to Drive",
-            "W.I.P.\n\nCloud sync isn't built yet - this button is a placeholder "
-            "for a future update. Your data stays exactly where it is today: "
-            "the workbook and JSON files next to the app.")
+    def open_backups_dialog(self):
+        """Sensei Index 2.1, Phase 16.1 - what used to be the 'Connect to
+        Drive' placeholder now does a real job: local snapshot backups,
+        not cloud sync (that's still not built - this button was never
+        promising it, only labeled for a future update it never got)."""
+        BackupsDialog(self).exec()
 
     def open_populating_wizard(self):
         dlg = PopulatingWizardDialog(self, self)
@@ -1715,11 +1735,14 @@ class CoveragePage(QWidget):
         if confirm != QMessageBox.Yes:
             return
 
-        try:
-            created = da.create_rows_from_master_items([(it["kind"], it) for it in items])
-        except Exception as exc:
-            QMessageBox.critical(self, "Couldn't create rows", str(exc))
+        result = {}
+
+        def do_create():
+            result["created"] = da.create_rows_from_master_items([(it["kind"], it) for it in items])
+
+        if not run_with_lock_retry(self, do_create, error_title="Couldn't create rows"):
             return
+        created = result["created"]
 
         self._record_create_undo(created)
         self.main_window.refresh_sidebar_and_dashboard()
@@ -2354,10 +2377,10 @@ class IndexPage(QWidget):
         previous = bool(entry.get(field)) if entry else (not checked)
         if previous == checked:
             return
-        try:
-            da.set_status(self.series_number, self.equip_key, key_value, **{field: checked})
-        except Exception as exc:
-            QMessageBox.critical(self, "Couldn't save status", str(exc))
+        ok = run_with_lock_retry(
+            self, lambda: da.set_status(self.series_number, self.equip_key, key_value, **{field: checked}),
+            error_title="Couldn't save status")
+        if not ok:
             checkbox.blockSignals(True)
             checkbox.setChecked(previous)
             checkbox.blockSignals(False)
@@ -2457,12 +2480,12 @@ class IndexPage(QWidget):
                 return
             new_value = cleaned
 
-        try:
+        def do_save():
             da.save_row(self.series_number, self.equip_key, row_num, {field: new_value})
             if field == key_field:
                 da.rename_status_key(self.series_number, self.equip_key, old_value, new_value)
-        except Exception as exc:
-            QMessageBox.critical(self, "Couldn't save", str(exc))
+
+        if not run_with_lock_retry(self, do_save):
             self._revert_cell_text(row_num, field, old_value)
             return
 
@@ -2530,10 +2553,8 @@ class IndexPage(QWidget):
         if not bulk_payload:
             return
 
-        try:
-            da.save_fields_bulk(self.series_number, self.equip_key, bulk_payload)
-        except Exception as exc:
-            QMessageBox.critical(self, "Couldn't save", str(exc))
+        if not run_with_lock_retry(
+                self, lambda: da.save_fields_bulk(self.series_number, self.equip_key, bulk_payload)):
             return
 
         self.table.blockSignals(True)
@@ -2826,10 +2847,8 @@ class IndexPage(QWidget):
             return
         before = {e.get(self.etype["key_field"]): bool(e.get(field)) for e in entries}
         keys = [(self.series_number, self.equip_key, kv) for kv in before]
-        try:
-            da.bulk_set_status(keys, **{field: value})
-        except Exception as exc:
-            QMessageBox.critical(self, "Couldn't save status", str(exc))
+        if not run_with_lock_retry(self, lambda: da.bulk_set_status(keys, **{field: value}),
+                                     error_title="Couldn't save status"):
             return
         self._record_bulk_status_undo(field, before, value)
         self.reload(reselect_row=row_nums)
@@ -2928,10 +2947,8 @@ class IndexPage(QWidget):
             status = da.get_status(self.series_number, self.equip_key, key_val) if key_val else None
             snapshots.append((rn, values, status))
 
-        try:
-            da.delete_rows(self.series_number, self.equip_key, row_nums)
-        except Exception as exc:
-            QMessageBox.critical(self, "Couldn't remove rows", str(exc))
+        if not run_with_lock_retry(self, lambda: da.delete_rows(self.series_number, self.equip_key, row_nums),
+                                     error_title="Couldn't remove rows"):
             return
 
         self._record_remove_undo(snapshots)
@@ -3420,10 +3437,8 @@ class EditDialog(QDialog):
                                  f'and PDF filenames are both keyed off it.')
             return
 
-        try:
-            da.save_row(self.series_number, self.equip_key, self.row_num, values)
-        except Exception as exc:
-            QMessageBox.critical(self, "Couldn't save", str(exc))
+        if not run_with_lock_retry(
+                self, lambda: da.save_row(self.series_number, self.equip_key, self.row_num, values)):
             return
 
         self._warn_dont_block(key_value, values)
@@ -3624,6 +3639,126 @@ class SettingsDialog(QDialog):
             return
         da.set_setting("desktop_shortcut_created", True)
         show_toast(self, f"Shortcut created: {path}")
+
+
+class BackupsDialog(QDialog):
+    """Sensei Index 2.1, Phase 16.1 - what the sidebar's Backups... button
+    (formerly the 'Connect to Drive' placeholder) opens. Automatic
+    snapshots already happen in the background (_mutating_workbook's
+    entry, via da._backup_workbook_if_due); this dialog is for the
+    manual/visible side of it: see what's there, force one now, open the
+    folder, or restore an older one."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Backups")
+        self.resize(640, 440)
+
+        layout = QVBoxLayout(self)
+        header = QLabel("Backups")
+        header.setObjectName("PageTitle")
+        layout.addWidget(header)
+
+        settings = da.load_settings()
+        info = QLabel(
+            f"Automatic snapshots every {settings.get('backup_interval_minutes', 30)} minute(s) "
+            f"of activity, keeping the newest {settings.get('backup_keep', 20)}. Adjust either in "
+            f"app_settings.json (backup_interval_minutes / backup_keep).")
+        info.setObjectName("FieldLabel")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["Snapshot", "Size"])
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        layout.addWidget(self.table, stretch=1)
+
+        btn_row = QHBoxLayout()
+        backup_now_btn = make_button("Back Up Now", "Primary")
+        backup_now_btn.clicked.connect(self._backup_now)
+        btn_row.addWidget(backup_now_btn)
+        open_folder_btn = make_button("Open Backups Folder", "Ghost")
+        open_folder_btn.clicked.connect(self._open_folder)
+        btn_row.addWidget(open_folder_btn)
+        btn_row.addStretch()
+        self.restore_btn = make_button("Restore...", "Danger")
+        self.restore_btn.clicked.connect(self._restore_selected)
+        self.restore_btn.setEnabled(False)
+        btn_row.addWidget(self.restore_btn)
+        close_btn = make_button("Close", "Ghost")
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        self.table.itemSelectionChanged.connect(
+            lambda: self.restore_btn.setEnabled(bool(self.table.selectedItems())))
+
+        self._reload()
+
+    def _reload(self):
+        self._backups = da.list_backups()
+        self.table.setRowCount(len(self._backups))
+        for r, b in enumerate(self._backups):
+            when = datetime.datetime.fromtimestamp(b["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
+            self.table.setItem(r, 0, QTableWidgetItem(f"{b['name']}  ({when})"))
+            size_kb = b["size"] / 1024
+            self.table.setItem(r, 1, QTableWidgetItem(f"{size_kb:,.0f} KB"))
+        if not self._backups:
+            self.table.setRowCount(1)
+            none_item = QTableWidgetItem("No backups yet - they start once the workbook is first saved.")
+            self.table.setItem(0, 0, none_item)
+            self.table.setSpan(0, 0, 1, 2)
+
+    def _backup_now(self):
+        try:
+            da.backup_now()
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't back up", str(exc))
+            return
+        self._reload()
+        show_toast(self, "Backed up")
+
+    def _open_folder(self):
+        da.BACKUPS_DIR.mkdir(exist_ok=True)
+        try:
+            da.open_file(da.BACKUPS_DIR)
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't open folder", str(exc))
+
+    def _restore_selected(self):
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self._backups):
+            return
+        backup = self._backups[row]
+
+        text, ok = QInputDialog.getText(
+            self, "Restore backup",
+            f"This replaces the current, LIVE workbook with:\n\n{backup['name']}\n\n"
+            "A safety snapshot of what's live right now is taken first, so this "
+            "itself is undoable - but nothing done since that snapshot's timestamp "
+            "otherwise survives without it.\n\nType RESTORE to confirm:")
+        if not ok or text.strip().upper() != "RESTORE":
+            return
+
+        try:
+            safety = da.restore_backup(backup["path"])
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't restore", str(exc))
+            return
+
+        self._reload()
+        msg = f"Restored {backup['name']}"
+        if safety:
+            msg += f" (safety snapshot: {safety.name})"
+        show_toast(self, msg, duration_ms=5000)
+        main_window = self.parent()
+        if main_window is not None:
+            main_window.refresh_current_view()
 
 
 class SignatureManagerDialog(QDialog):
