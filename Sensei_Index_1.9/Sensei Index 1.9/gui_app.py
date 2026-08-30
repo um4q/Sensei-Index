@@ -426,6 +426,23 @@ def export_progress_report_flow(parent):
         pass  # the report itself is safely written either way - opening the folder is a convenience
 
 
+def export_cleaned_workbook_flow(parent):
+    """Phase 18 - the 'Export Cleaned Copy' button's action. Same 'do the
+    thing, then show where it landed' pattern as export_progress_report_flow
+    right above - the live workbook is never touched, only read; everything
+    written goes into a brand-new file under cleaned/."""
+    try:
+        out_path = da.export_cleaned_workbook()
+    except Exception as exc:
+        QMessageBox.critical(parent, "Couldn't export cleaned copy", str(exc))
+        return
+    show_toast(parent, f"Wrote {out_path.name} to {out_path.parent}", duration_ms=5000)
+    try:
+        da.open_file(out_path.parent)
+    except Exception:
+        pass  # the file itself is safely written either way - opening the folder is a convenience
+
+
 def _accepted_row_color():
     """Background for the Row # cell once Accepted is checked - picked per
     active theme so it still reads as 'success green' rather than
@@ -1296,6 +1313,12 @@ class DashboardPage(QWidget):
                                       "Coverage and this Dashboard already show")
         export_report_btn.clicked.connect(lambda: export_progress_report_flow(self))
         header_row.addWidget(export_report_btn)
+        export_cleaned_btn = make_button("Export Cleaned Copy", "Ghost")
+        export_cleaned_btn.setToolTip("A new xlsx with stray whitespace trimmed and tags upper-cased; "
+                                       "duplicate serials and odd-shaped tags are flagged, not touched. "
+                                       "The live workbook itself is never changed.")
+        export_cleaned_btn.clicked.connect(lambda: export_cleaned_workbook_flow(self))
+        header_row.addWidget(export_cleaned_btn)
         layout.addLayout(header_row)
 
         scroll = QScrollArea()

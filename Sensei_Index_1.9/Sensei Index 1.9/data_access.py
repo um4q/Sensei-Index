@@ -2630,3 +2630,223 @@ def export_progress_report():
         out_path = REPORTS_DIR / f"Progress_Report_{stamp}-{n}.xlsx"
         n += 1
     return write_progress_report_xlsx(data, out_path)
+
+
+# ---------------------------------------------------------------------------
+# Phase 18 - "Cleaned copy" export.
+#
+# Never opens Equipment_Inspection_Tracker.xlsx itself for writing - reads
+# it through the normal cached read path (same as every report/validation
+# function above) to work out what a cleanup WOULD do, then makes a
+# byte-identical copy (shutil.copy2, not an openpyxl load/re-save - that
+# keeps every data-validation dropdown, conditional-formatting rule, and
+# style exactly as they are) and only opens THAT copy to apply cell-value
+# fixes. Never inserts, deletes, or reorders rows - same reason the
+# "Removing rows" comment above gives for clearing a row in place instead
+# of ws.delete_rows(): data-validation ranges and conditional-formatting
+# rules are anchored to specific row numbers, and openpyxl's support for
+# re-anchoring those on a shift is known to be incomplete. A truly blank
+# row is left exactly as-is - indistinguishable from unused capacity, same
+# as save_row leaves a cleared one.
+#
+# Two kinds of cleanup, and the line between them is never guessed:
+#   - Fixed automatically (always safe, always deterministic): leading/
+#     trailing whitespace trimmed off every non-date, string-typed schema
+#     field, plus the row's key field (Tag / Equip #) upper-cased too. A
+#     cell is only written if the raw value actually changes, and only
+#     when it's already a plain str - a numeric/bool/date-typed cell is
+#     never touched, so its type and number format always survive. This
+#     also means the comparison is against the RAW cell value, not
+#     cell_to_str()'s output: that helper already strips whitespace itself
+#     (str(value).strip()) and reformats other types (a float cell's
+#     "2171.0" comes back as "2171"), so diffing against it would both
+#     hide real whitespace and misreport an ordinary numeric-type
+#     difference as a whitespace "fix".
+#   - Flagged, never touched: a duplicate primary serial
+#     (find_all_duplicate_serials) or a tag that still doesn't look like
+#     AREA-TYPE-NUMBER after trimming/upper-casing (tag_shape_warning) -
+#     both already-trusted checks the Progress Report's Flags sheet uses,
+#     reused here rather than reinvented, so the two can't disagree with
+#     each other about what counts as an issue.
+# Both are also listed on a new "Cleanup Log" sheet appended to the copy,
+# and lightly highlighted in place on the copy's own data sheets, so
+# either is visible without leaving the workbook.
+# ---------------------------------------------------------------------------
+CLEANED_DIR = HERE / "cleaned"
+
+
+def build_cleanup_plan():
+    """Dry-run over the live workbook (read-only, never opens it for
+    writing) - {'fixes': [...], 'flags': [...]}. Safe to call any time,
+    including just to preview what a cleanup would find."""
+    fixes = []
+    flags = []
+    for equip_key, etype in EQUIPMENT_TYPES.items():
+        export_mod = etype["export_module"]
+        key_field = etype["key_field"]
+        date_fields = set(etype.get("date_fields", []))
+        for series_number in list_series():
+            try:
+                sheet_name = get_sheet_name(series_number, equip_key)
+            except KeyError:
+                continue
+            wb = _get_cached_workbook(data_only=False)
+            if sheet_name not in wb.sheetnames:
+                continue
+            ws = wb[sheet_name]
+            field_to_col = export_mod.load_column_map(ws)
+            key_col = field_to_col.get(key_field)
+            if not key_col:
+                continue
+            for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
+                key_val = export_mod.cell_to_str(ws.cell(row=r, column=key_col).value)
+                if not key_val.strip():
+                    continue  # unused row - left exactly as-is
+                for fid, col in field_to_col.items():
+                    if fid in date_fields:
+                        continue  # never rewrite a date cell's type/format
+                    raw = ws.cell(row=r, column=col).value
+                    # Only ever touch a cell that's actually a Python str -
+                    # cell_to_str() itself already strips whitespace before
+                    # a caller sees it (str(value).strip()), so comparing
+                    # against ITS output would silently mask real
+                    # whitespace and, worse, would flag a plain type
+                    # difference (e.g. a float cell's "2171.0" vs.
+                    # cell_to_str's "2171") as a "fix" - a type change, not
+                    # a whitespace trim. Reading the raw value directly and
+                    # skipping anything that isn't already a str sidesteps
+                    # both: a numeric/bool/date-typed cell is never
+                    # rewritten by this path at all.
+                    if not isinstance(raw, str):
+                        continue
+                    old_text = raw
+                    new_text = raw.strip()
+                    if fid == key_field:
+                        new_text = new_text.upper()
+                    if new_text != old_text:
+                        fixes.append({
+                            "series": series_number, "equip_key": equip_key, "row": r,
+                            "sheet": sheet_name, "col": col, "field": fid,
+                            "key_value": key_val.strip().upper(),
+                            "old": old_text, "new": new_text,
+                        })
+                final_key = key_val.strip().upper()
+                warning = tag_shape_warning(final_key)
+                if warning:
+                    flags.append({
+                        "series": series_number, "equip_key": equip_key, "row": r,
+                        "sheet": sheet_name, "key_value": final_key, "detail": warning,
+                    })
+
+        for group in find_all_duplicate_serials(equip_key):
+            tag_list = ", ".join(f"{row['key_value']} (series {row['series']})" for row in group["rows"])
+            for row in group["rows"]:
+                flags.append({
+                    "series": row["series"], "equip_key": equip_key, "row": row["row"],
+                    "sheet": get_sheet_name(row["series"], equip_key), "key_value": row["key_value"],
+                    "detail": f"Duplicate serial \"{group['serial']}\" - shared with {tag_list}",
+                })
+
+    return {"fixes": fixes, "flags": flags}
+
+
+def _apply_cleanup_plan(out_wb, plan):
+    """Mutates out_wb (a freshly-loaded copy, never the live workbook) in
+    place: writes each fix's new value and highlights it, then highlights
+    the key cell of every flagged row. Cell-value and cell-fill writes
+    only - no row insert/delete, so nothing anchored to a row number
+    (data validation, conditional formatting) is ever disturbed."""
+    from openpyxl.styles import PatternFill
+    FIXED_FILL = PatternFill("solid", fgColor="FFEB9C")  # light amber - "changed by cleanup"
+    FLAG_FILL = PatternFill("solid", fgColor="FFC7CE")   # same red as the Progress Report's BAD_FILL
+
+    for fix in plan["fixes"]:
+        cell = out_wb[fix["sheet"]].cell(row=fix["row"], column=fix["col"])
+        cell.value = fix["new"]
+        cell.fill = FIXED_FILL
+
+    already_flagged = set()
+    for flag in plan["flags"]:
+        cell_key = (flag["sheet"], flag["row"])
+        if cell_key in already_flagged:
+            continue
+        already_flagged.add(cell_key)
+        etype = EQUIPMENT_TYPES[flag["equip_key"]]
+        export_mod = etype["export_module"]
+        ws = out_wb[flag["sheet"]]
+        key_col = export_mod.load_column_map(ws).get(etype["key_field"])
+        if key_col:
+            ws.cell(row=flag["row"], column=key_col).fill = FLAG_FILL
+
+
+def _write_cleanup_log_sheet(wb, plan):
+    """Appends a new 'Cleanup Log' sheet after every existing sheet in wb -
+    original sheet order/tabs are otherwise untouched."""
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+    HEADER_FONT = Font(bold=True)
+
+    ws = wb.create_sheet("Cleanup Log")
+    r = 1
+    ws.cell(row=r, column=1, value="Auto-fixed cells").font = HEADER_FONT
+    r += 1
+    for c, text in enumerate(
+        ["Series", "Sheet", "Row", "Tag/Equip #", "Field", "Old value", "New value"], start=1
+    ):
+        ws.cell(row=r, column=c, value=text).font = HEADER_FONT
+    r += 1
+    if not plan["fixes"]:
+        ws.cell(row=r, column=1, value="(nothing to fix - already clean)")
+        r += 1
+    for fix in plan["fixes"]:
+        for c, value in enumerate(
+            [fix["series"], fix["sheet"], fix["row"], fix["key_value"], fix["field"], fix["old"], fix["new"]],
+            start=1,
+        ):
+            ws.cell(row=r, column=c, value=value)
+        r += 1
+
+    r += 1
+    ws.cell(row=r, column=1, value="Needs manual review (not auto-fixed)").font = HEADER_FONT
+    r += 1
+    for c, text in enumerate(["Series", "Sheet", "Row", "Tag/Equip #", "Issue"], start=1):
+        ws.cell(row=r, column=c, value=text).font = HEADER_FONT
+    r += 1
+    if not plan["flags"]:
+        ws.cell(row=r, column=1, value="(nothing flagged - already clean)")
+        r += 1
+    for flag in plan["flags"]:
+        for c, value in enumerate(
+            [flag["series"], flag["sheet"], flag["row"], flag["key_value"], flag["detail"]], start=1
+        ):
+            ws.cell(row=r, column=c, value=value)
+        r += 1
+
+    for c in range(1, 8):
+        ws.column_dimensions[get_column_letter(c)].width = 26
+
+
+def export_cleaned_workbook():
+    """Writes cleaned/Equipment_Inspection_Tracker_CLEANED_<date>.xlsx next
+    to the live workbook - collision-suffixed like export_progress_report(),
+    so a same-day re-export never clobbers an earlier one. The live
+    workbook (WORKBOOK_PATH) is only ever read by this function, never
+    opened for writing. Returns the path written."""
+    if not WORKBOOK_PATH.exists():
+        raise FileNotFoundError("No workbook to clean yet.")
+    plan = build_cleanup_plan()
+
+    CLEANED_DIR.mkdir(exist_ok=True)
+    stamp = datetime.date.today().isoformat()
+    out_path = CLEANED_DIR / f"Equipment_Inspection_Tracker_CLEANED_{stamp}.xlsx"
+    n = 2
+    while out_path.exists():
+        out_path = CLEANED_DIR / f"Equipment_Inspection_Tracker_CLEANED_{stamp}-{n}.xlsx"
+        n += 1
+    shutil.copy2(WORKBOOK_PATH, out_path)
+
+    out_wb = openpyxl.load_workbook(out_path)
+    _apply_cleanup_plan(out_wb, plan)
+    _write_cleanup_log_sheet(out_wb, plan)
+    out_wb.save(out_path)
+    return out_path

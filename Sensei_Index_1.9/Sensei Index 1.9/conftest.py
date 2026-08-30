@@ -81,6 +81,7 @@ def isolated_app_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(da, "ACTIVITY_LOG_PATH", tmp_path / "activity_log.jsonl", raising=False)
     monkeypatch.setattr(da, "BACKUPS_DIR", tmp_path / "backups", raising=False)
     monkeypatch.setattr(da, "REPORTS_DIR", tmp_path / "reports", raising=False)
+    monkeypatch.setattr(da, "CLEANED_DIR", tmp_path / "cleaned", raising=False)
     da.invalidate_workbook_cache()
 
     yield tmp_path, da
