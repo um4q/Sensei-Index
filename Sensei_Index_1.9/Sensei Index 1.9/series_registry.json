@@ -1,0 +1,52 @@
+{
+  "series": [
+    {
+      "number": 100,
+      "transmitter_sheet": "Transmitter Log 100",
+      "valve_sheet": "Valve Log 100",
+      "name": "Mod 100"
+    },
+    {
+      "number": 200,
+      "transmitter_sheet": "Transmitter Log 200",
+      "valve_sheet": "Valve Log 200",
+      "name": "Mod 200"
+    },
+    {
+      "number": 29103,
+      "transmitter_sheet": "Transmitter Log 29103",
+      "valve_sheet": "Valve Log 29103",
+      "name": "Mainline Separator"
+    },
+    {
+      "number": 29152,
+      "transmitter_sheet": "Transmitter Log 29152",
+      "valve_sheet": "Valve Log 29152",
+      "name": "Drain Tank 2"
+    },
+    {
+      "number": 29151,
+      "transmitter_sheet": "Transmitter Log 29151",
+      "valve_sheet": "Valve Log 29151",
+      "name": "Drain Tank 1"
+    },
+    {
+      "number": 29203,
+      "transmitter_sheet": "Transmitter Log 29203",
+      "valve_sheet": "Valve Log 29203",
+      "name": "K1B Flowline"
+    },
+    {
+      "number": 400,
+      "transmitter_sheet": "Transmitter Log 400",
+      "valve_sheet": "Valve Log 400",
+      "name": "CMM"
+    },
+    {
+      "number": 500,
+      "transmitter_sheet": "Transmitter Log 500",
+      "valve_sheet": "Valve Log 500",
+      "name": "SUS Cooler"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+WHERE THESE TWO FILES GO
+=============================
+
+Both files in this folder need to land directly inside your InstINDEX
+installation folder - the same folder that has gui_app.py,
+data_access.py, START_INSTINDEX.bat, etc. in it. Overwrite the existing
+copies of both when asked.
+
+1. Equipment_Inspection_Tracker.xlsx
+   - The actual data: sheets renamed/reorganized, 24 instruments moved
+     into the right area, 14 new ones added, dates fixed.
+
+2. series_registry.json
+   - The list of series and what to call each one in the sidebar. This
+     is what was missing last time - the workbook alone doesn't carry
+     the display names ("Mod 100", "CMM", "Drain Tank 1", etc.), this
+     file does. Without it, the app still runs fine, it just shows raw
+     series numbers instead of names, and doesn't know series 400 (CMM)
+     or 500 (SUS Cooler) exist at all.
+
+Replace BOTH. Then start InstINDEX the normal way.

@@ -1,0 +1,382 @@
+INSTINDEX - WHAT'S NEW
+==========================
+(Latest update is at the top. Scroll down for previous updates' notes.)
+
+HOW TO RUN THIS VERSION
+---------------------------
+This one's delivered as a patch, not a full folder - see APPLY_UPDATE.bat /
+README_PATCH.txt alongside it for how to apply it. Once applied, running
+the app is unchanged: double-click START_INSTINDEX.bat.
+
+
+=================================================================
+LATEST UPDATE - IMPORT DATASHEET PDF
+=================================================================
+
+WHAT'S NEW
+----------------
+A new way to start a row: pull it straight from an engineering data sheet
+PDF instead of retyping everything by hand. Sidebar -> "Import Datasheet
+PDF...", or Ctrl+Shift+I.
+
+    1. Pick one or more PDFs. One file can hold several instruments (each
+       its own two-page data sheet) - all of them get found and listed.
+    2. Pick which series to bring them into. It defaults to whichever
+       existing series' number matches most of the detected tags' own
+       area code, if one matches.
+    3. Tick which detected records to bring in, then "Review & Add
+       Checked". Each one opens through the completely normal Add New
+       form, pre-filled - nothing gets saved until that form's own Save
+       button is clicked, so every field still gets a final look. Closing
+       a form without saving just skips that one record; everything
+       already saved before that stays saved.
+
+WHAT IT CAN AND CAN'T READ
+------------------------------------
+This currently recognizes one specific datasheet family: the CNOOC/
+Oilsands-style "DS-" data sheets (Control Valve, Temp Trans Element and
+TW, Vortex Flowmeter). Anything else isn't recognized, and needs to be
+entered by hand same as always - it says so plainly rather than guessing
+at an unfamiliar layout.
+
+Only fields the data sheet gives a direct, unambiguous answer for get
+pre-filled - Tag, P&ID #, Line #, Service, Make/Model, ranges, and so on.
+Serial numbers, field test results, and sign-offs all start blank, same
+as any new row, since none of that exists yet on a pre-purchase data
+sheet. Two fields are educated guesses rather than a direct read (the
+data sheet's own wording doesn't map onto InstINDEX's pick-lists
+one-for-one): Signal Type, and Valve Type for valves (guessed from the
+tag prefix - LV/FV/PV/XV) - both are worth a specific second look on the
+pre-filled form before saving. A couple of very wide range values on the
+Temperature Transmitter sheets specifically (Instrument Range,
+Calibration Range) can come back blank rather than guessed at, on sheets
+where the PDF's own text layer has scrambled them past reliably reading
+back - better blank than wrong.
+
+Everything else on the data sheet - dimensions, materials, test
+requirements, the full notes page - stays exactly where it already is:
+on the PDF itself, unchanged, one click away for anyone who needs the
+full spec. This isn't trying to replace the data sheet, just save the
+retyping for the fields InstINDEX actually has a column for.
+
+
+=================================================================
+PREVIOUS UPDATE
+=================================================================
+
+
+=================================================================
+LATEST UPDATE - VALVES GET A REAL QC SIGN-OFF DATE
+=================================================================
+
+WHAT CHANGED
+------------------
+Valves never had a real, trackable sign-off date - only transmitters did
+(QA Rep Date / Client Rep Date). The valve paperwork's own "Date:" line
+next to the QC Representative's signature had no digital field behind it
+at all; it was meant to be hand-written after printing.
+
+That's fixed. There's now a real "QC Rep Date" column for valves, working
+exactly the same way as every other date field in the app:
+
+    - Shows up as its own column in the Valve Index, right alongside TE
+      Cal. Date - editable in place, mass-editable with Ctrl+C/Ctrl+V/
+      Ctrl+D/Backspace, and through Mass Edit Dates (Ctrl+Shift+D).
+    - Starts blank on every row, same as always - nothing auto-fills it.
+    - Flows straight into the exported PDF the normal way, because a real
+      fillable field ("Date:", right where it's always been printed, in
+      the YANDA QC Representative Sign-Off box) was added to the PDF
+      template itself.
+
+This required three real, structural changes, not just app code:
+    1. A genuine new fillable field was added to the valve PDF template,
+       positioned exactly on the existing printed "Date:" line - nothing
+       moved, nothing else on the form changed.
+    2. A matching new column ("YANDA QC Representative - Date") was added
+       to the Valve Log sheet in the workbook, for all three series (100,
+       200, and the K1B Drain Tank 1 SOUTH series) - appended at the end
+       of each sheet rather than inserted in the middle, so no existing
+       column, formula, or formatting shifted.
+    3. The Export dialog's old "Stamp a date on the signature" option
+       (which used to silently draw today's date at that exact spot as a
+       one-off image overlay, separate from any real data) is gone - it
+       would now draw directly over the real field's text. Valves work
+       the same way transmitters always have: set the date field ahead of
+       time, export, done. The standalone Run_Export_Valves.bat script's
+       underlying --sign-date flag was updated to match (blank by
+       default, only for the rare case of wanting an extra stamp next to
+       the signature IMAGE specifically).
+
+Nothing about Commissioning Representative changed - it still has no date
+field, same as before. That can be added the same way if it's ever needed.
+
+
+=================================================================
+PREVIOUS UPDATE
+=================================================================
+
+
+=================================================================
+LATEST UPDATE - EXCEL-STYLE GRID EDITING, DATES, EXPORT DATES
+=================================================================
+
+1. THE INDEX TABLE NOW EDITS LIKE A SPREADSHEET
+----------------------------------------------------
+Tag, System, Type, and every date column can be edited right in the table -
+click a cell and just start typing (or press F2/Enter first if you'd rather
+not overwrite what's there), then Enter or Tab to move to the next one.
+Double-clicking a cell still opens the full Edit form, exactly like before -
+that didn't change.
+
+For editing many rows at once, the same shortcuts Excel uses:
+    Ctrl+C        copy the focused cell's value
+    Ctrl+V        paste - with several rows selected, broadcasts the SAME
+                  copied value into that column on every one of them (the
+                  main mass-edit move). Pasting a real multi-cell block
+                  (copied from Excel itself) walks it across the visible
+                  editable columns/rows starting from wherever you click.
+    Ctrl+D        fill the top selected row's value down through the rest
+                  of the selection
+    Backspace     clear that column's value on every selected row
+
+Tag/Equip # is exempt from all four of those (it has to stay unique per
+row, so it's only ever edited one cell at a time, with a duplicate check
+built in) - editing it in place also carries that row's Installed/
+Submitted/Accepted/Export status over to the new value automatically, so
+nothing appears to reset just because the tag text changed.
+
+Every one of these - a single typed edit or a mass paste/fill/clear
+spanning fifty rows - is a single Ctrl+Z undo step.
+
+
+2. DATE FIELDS: NOW EDITABLE COLUMNS, PROPERLY FORMATTED, MASS-EDITABLE
+----------------------------------------------------------------------------
+Every date field is now a real column in the Index table (Test Equipment
+Calibration Date x1-3, QA Rep Date, Client Rep Date for transmitters; Test
+Equipment Calibration Date for valves) - editable the same way as above.
+
+Along the way, a real pre-existing data problem got fixed: a number of
+calibration dates in the workbook were stored as a bare Excel serial number
+with no date formatting (e.g. "46234" instead of a real date) - Excel
+itself would have shown the same raw number until that cell's format was
+fixed. These now display as a plain "2026-07-31" everywhere in the app
+(the Index grid, Edit form, Show More). This is cosmetic only until a date
+field is actually edited - at that point whatever gets typed (or Mass Edit
+Dates sets) is saved as clean text and that cell's formatting problem is
+gone for good.
+
+New rows still always start with every date blank - nothing auto-fills a
+date. That's still only ever done on purpose, by editing a cell or using:
+
+
+3. NEW: MASS EDIT DATES (Ctrl+Shift+D)
+-------------------------------------------
+Index page toolbar -> "Mass Edit Dates..." Pick a date field, pick a scope
+(selected rows, or every row currently shown), then either set a date or
+tick "Clear this date instead" to blank it out across all of them at once.
+Same underlying action as the copy/paste grid shortcuts above, with a
+guided form around it for anyone who'd rather not use the keyboard
+shortcuts.
+
+
+4. EXPORT DIALOG: NEW "DATES" SECTION
+--------------------------------------------
+    - "Include today's date in each filename" - appends it to every output
+      file, e.g. "29103-PIT-1021 DEV. 2026-08-27.pdf". Works for both
+      Transmitters and Valves.
+    - Valves only - "Stamp a date on the signature": the valve PDF template
+      has no real fillable date field next to the signature, so a date
+      there has always been drawn on as an image overlay. This used to be
+      silently hardcoded to today's date any time a signature was included
+      - it's now OFF by default, and only stamps the date you explicitly
+      pick after turning it on. Leave dates blank unless you're actually
+      setting one, same principle as everywhere else in this update.
+    - Transmitters already have real QA Rep Date / Client Rep Date columns
+      - edit those directly in the grid, or with Mass Edit Dates, before
+      exporting; there's a note in the dialog pointing to that instead of a
+      duplicate stamping mechanism.
+
+
+WHAT DIDN'T CHANGE (THIS ROUND)
+--------------------------------------
+The PDF templates, the schema/field-map files, and the command-line
+Run_Export_*.bat scripts are untouched. Every other Log-sheet column (not
+a date) behaves exactly as before except that it's now also directly
+editable in the grid, the same as Tag/System/Type always implicitly were
+via double-click -> Edit.
+
+
+=================================================================
+PREVIOUS UPDATE
+=================================================================
+
+
+HOW TO RUN THIS VERSION
+---------------------------
+Double-click START_INSTINDEX.bat, same as always. It runs "python gui_app.py"
+directly - it does NOT use a compiled .exe - so this update takes effect the
+moment you drop these files in, no rebuild needed.
+
+The old SenseiINDEX.exe has been removed from this folder on purpose: it was
+compiled from the PREVIOUS version of the code, so double-clicking it would
+have silently opened the old app with none of what's below. If you want a
+standalone .exe of THIS version back, see "REBUILDING THE .EXE" at the
+bottom - it's a five-minute, one-time thing on a Windows machine with Python.
+
+
+1. FIXED: CHECKBOXES YOU COULDN'T SEE WERE CHECKED
+------------------------------------------------------
+This was a real, well-known Qt styling bug: the app's stylesheet changed how
+checkboxes and radio buttons look, but never told Qt how to draw the actual
+checkmark - so on some Windows setups a checkbox could BE checked (the click
+registered, the setting saved) while LOOKING empty. Settings, the Export
+dialog, and anywhere else with a checkbox are affected.
+
+Fixed by taking over the whole checkbox/radio drawing ourselves: unchecked is
+now a plain outlined box, checked is a solid filled box, in both Light and
+Dark themes. There's no glyph left to fail to render - the state IS the
+fill - so this can't silently misrepresent itself again.
+
+
+2. INSTALLED / SUBMITTED / ACCEPTED / EXPORT ARE NOW CHECKBOXES, NOT TOGGLES
+--------------------------------------------------------------------------------
+Every row in the Index table now has its own Installed, Submitted, Accepted,
+and Export checkboxes right there in the table. Click one directly - no more
+"select a row, then click a separate Toggle button" round trip. The old
+Toggle Installed / Toggle Submitted / Toggle Accepted buttons are gone.
+
+For working on many rows at once, "Bulk Status" (in the toolbar) still lets
+you mark or unmark any of the four on every currently-selected row in one go,
+and right-click a row for the same options in its context menu.
+
+The Row # cell colors itself automatically from these:
+    - plain              -> nothing checked yet
+    - yellow              -> Submitted is checked (Accepted isn't)
+    - green               -> Accepted is checked (wins over yellow)
+
+
+3. EXPORT NOW DEFAULTS TO "ROWS YOU'VE CHECKED", NOT THE EXCEL Y/N COLUMN
+------------------------------------------------------------------------------
+The new Export checkbox column (see above) is a queue: check any rows you
+want turned into PDFs, then Export... - the dialog now defaults to "Only
+rows checked in the Export column" instead of the sheet's old "Export to PDF
+(Y/N)" flag. That flag still works too (now the second option), and "every
+row with a Tag/Equip # filled in" is still there as the third.
+
+Two toolbar buttons speed this up:
+    - Queue All Shown for Export     - checks Export on everything the
+                                        current search/filter is showing
+    - Clear Export Queue (Shown)     - unchecks it on everything shown
+
+By default, a successful export un-checks the rows it just wrote (so the
+queue empties as you use it) - there's a checkbox in the Export dialog if
+you'd rather it stayed checked.
+
+
+4. "SHOW MORE" - SEE THE WHOLE ROW, NOT JUST THE SUMMARY COLUMNS
+---------------------------------------------------------------------
+The Index table only ever has room for 3-4 columns. Select a row and click
+"Show More" for a read-only list of EVERY field on that row, grouped into
+the same sections as the paper form, with an "Edit This Row..." button right
+there if you need to change something. This doesn't build a PDF (that's
+still what "View Details" does) - it's just a fast, in-app look at
+everything.
+
+
+5. DASHBOARD: PER-SERIES INSTALLED / SUBMITTED / ACCEPTED BREAKDOWN
+------------------------------------------------------------------------
+A new "BY SERIES" section on the Dashboard, one card per series, showing how
+many Transmitters and Valves are logged AND how many of each are Installed,
+Submitted, and Accepted. The existing overall totals + by-system cards at
+the top are unchanged.
+
+
+6. NEW: POPULATING WIZARD - BULK-ENTER A BATCH OF SIMILAR EQUIPMENT
+------------------------------------------------------------------------
+Sidebar -> Populating Wizard (or Ctrl+Shift+W). Three steps:
+
+  1. SETUP - pick the Series and equipment type, then Area Code (defaults to
+     29103), Tag Type (e.g. FIT), and System. These combine with a Sequence
+     you type per item to build the Tag/Equip # automatically:
+         29103  +  FIT  +  1011   =   29103-FIT-1011
+          Area      Type   Sequence
+
+  2. REPETITION - tick any field that should carry the SAME value into every
+     entry this session (Make, Test Equipment, the sign-off name, ...).
+     Sensible defaults are pre-checked; "Check All" / "Uncheck All" / "Use
+     Suggested Defaults" are there for fast adjustment. Leave a field
+     unticked and it resets to blank after every save - use that for
+     anything that genuinely changes per item (Serial Number, K-Factor, ...).
+
+  3. ENTERING - type the Sequence, fill in whatever isn't repeating, then
+     "Save & Next" writes the row straight into the workbook and immediately
+     opens a fresh entry with the repeating fields still filled in. Keeps
+     going until you click Stop. "Edit Template" goes back to step 2 without
+     losing entries already saved.
+
+  SAVE AS DRAFT & CLOSE stashes the whole in-progress batch - setup, the
+  repeating values, and whatever's typed in the current unsaved entry - as
+  ONE resumable draft. Reopening the Wizard offers to resume it. It's a
+  single slot (saving a new draft overwrites the old one), not a library of
+  drafts - meant for "I got pulled away mid-batch," not long-term storage.
+
+
+7. UNDO / REDO (CTRL+Z / CTRL+SHIFT+Z)
+-------------------------------------------
+Ctrl+Z undoes the last status checkbox change, Add New, Edit, or Remove
+Selected - up to 50 steps back this session. Ctrl+Shift+Z (or Ctrl+Y) redoes.
+A message at the bottom of the window confirms what was undone/redone.
+This doesn't cover typing inside an open Edit form or the Wizard - Cancel
+there just discards unsaved changes, same as before.
+
+
+8. MORE KEYBOARD SHORTCUTS
+-------------------------------
+    Ctrl+N            Add New (on an Index page)
+    Ctrl+E            Edit the selected row
+    Ctrl+F            Jump to the Search box
+    Delete            Remove the selected row(s)
+    Ctrl+Shift+E      Open the Export dialog
+    F5                Refresh from the workbook
+    Ctrl+Z            Undo
+    Ctrl+Shift+Z / Ctrl+Y   Redo
+    Ctrl+,            Open Settings
+    Ctrl+Shift+W      Open the Populating Wizard
+
+
+9. CONNECT TO DRIVE (PLACEHOLDER)
+--------------------------------------
+A new sidebar button. It's not built yet - clicking it says so plainly
+("W.I.P.") rather than pretending to do something. Nothing about your data
+changes when you click it.
+
+
+10. INSTRUCTIONS REWRITTEN
+-------------------------------
+Sidebar -> Instructions now opens with a full, always-available App Guide
+covering what every button, checkbox, and keyboard shortcut does, followed
+by whatever's in the workbook's own Instructions sheet (the paperwork-side
+notes, unchanged).
+
+
+WHAT DIDN'T CHANGE
+-----------------------
+The workbook itself, the PDF templates, export_to_pdf.py / export_valve_to_
+pdf.py, the schema/field-map files, and the command-line Run_Export_*.bat
+scripts are all untouched. Nothing about how a PDF actually gets filled in
+was touched - only how you tell the app which rows to work on and how their
+status is tracked.
+
+
+REBUILDING THE .EXE (OPTIONAL)
+-----------------------------------
+Only needed if you specifically want a standalone .exe again (for pinning to
+the taskbar without a console window, or handing the app to someone without
+Python). On a Windows machine, with this folder's contents in place:
+
+    python -m pip install --user pyinstaller
+    python -m PyInstaller --onefile --windowed --name SenseiINDEX gui_app.py
+
+That produces dist\SenseiINDEX.exe. Copy it back into this folder (next to
+Equipment_Inspection_Tracker.xlsx and the rest) before using it - like the
+Python version, it needs everything else here sitting right next to it.
