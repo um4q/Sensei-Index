@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QMessageBox,
     QInputDialog, QFileDialog, QCheckBox, QRadioButton, QButtonGroup,
     QGroupBox, QSizePolicy, QAbstractItemView, QSpacerItem, QAbstractScrollArea,
-    QMenu, QStatusBar, QDateEdit,
+    QMenu, QStatusBar, QDateEdit, QStyledItemDelegate,
 )
 
 import data_access as da
@@ -1572,6 +1572,50 @@ class CoveragePage(QWidget):
         mw.undo_stack.push(f"add {len(created)} row(s) from master list", do_undo, do_redo)
 
 
+class DateEditDelegate(QStyledItemDelegate):
+    """Phase 13.4 - every date_fields grid cell edits through a QDateEdit
+    with a calendar popup (plus a 'Today' convenience button) instead of
+    a plain text editor. Writes back in exactly the 'yyyy-MM-dd' format
+    Mass Edit Dates already uses, so a date set via either path round-
+    trips identically - open a cell this delegate just wrote and the
+    calendar shows the same day, not a parse failure."""
+
+    DISPLAY_FORMAT = "yyyy-MM-dd"
+
+    def createEditor(self, parent, option, index):
+        container = QWidget(parent)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        date_edit = QDateEdit(container)
+        date_edit.setCalendarPopup(True)
+        date_edit.setDisplayFormat(self.DISPLAY_FORMAT)
+        today_btn = QPushButton("Today", container)
+        today_btn.setFixedWidth(48)
+        today_btn.clicked.connect(lambda: date_edit.setDate(QDate.currentDate()))
+        layout.addWidget(date_edit, stretch=1)
+        layout.addWidget(today_btn)
+        container.date_edit = date_edit  # stashed for setEditorData/setModelData below
+        container.setFocusProxy(date_edit)
+        return container
+
+    def setEditorData(self, editor, index):
+        text = index.model().data(index, Qt.EditRole) or ""
+        date = QDate.fromString(text, self.DISPLAY_FORMAT)
+        # An existing value that isn't 'yyyy-MM-dd' (blank, or something a
+        # user typed by hand before this delegate existed) can't be
+        # represented in a strict date picker - default the CALENDAR to
+        # today rather than blocking the edit; the cell's real text is
+        # untouched unless the user actually commits a change.
+        editor.date_edit.setDate(date if date.isValid() else QDate.currentDate())
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.date_edit.date().toString(self.DISPLAY_FORMAT), Qt.EditRole)
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
+
+
 # =============================================================================
 # Index page - searchable / sortable table for one series + equipment type
 # =============================================================================
@@ -1829,6 +1873,14 @@ class IndexPage(QWidget):
             self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Fixed)
             self.table.setColumnWidth(i, 118 if i < 1 + n_summary + n_dates else 92)
         self.table.verticalHeader().setVisible(False)
+
+        # Phase 13.4 - date columns edit through a calendar picker instead
+        # of a plain text editor. One delegate instance shared by every
+        # date column (kept on self so it isn't garbage-collected out from
+        # under the table).
+        self._date_delegate = DateEditDelegate(self.table)
+        for i in range(1 + n_summary, 1 + n_summary + n_dates):
+            self.table.setItemDelegateForColumn(i, self._date_delegate)
         self.table.doubleClicked.connect(self._on_row_double_clicked)
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
