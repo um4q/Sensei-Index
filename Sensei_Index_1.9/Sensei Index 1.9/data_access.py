@@ -927,6 +927,197 @@ def master_list_needs_reimport():
 
 
 # ---------------------------------------------------------------------------
+# Phase 11 - Coverage / reconciliation.
+#
+# Answers, per area and per equipment kind, which master-list instruments
+# have a tracker row and which don't - and the reverse. Matching is by
+# canonical_tag ONLY, across every registered series of the matching kind
+# (a master item isn't required to belong to its sheet's mapped_series to
+# be found - the tag might already be tracked under a different series
+# number by mistake, and that's worth surfacing too, not silently missed).
+# ---------------------------------------------------------------------------
+def _normalize_for_compare(value):
+    """case/space-insensitive comparison key for the Model mismatch flag
+    (11.1) - not a display value."""
+    return re.sub(r"\s+", "", str(value or "")).casefold()
+
+
+def _tracker_refs_by_tag(equip_key):
+    """{canonical_tag: {'series', 'equip_key', 'row', 'key_value',
+    'installed'}} across every registered series for one equipment kind.
+    First occurrence wins on an accidental duplicate canonical tag (same
+    convention as the master-list parser)."""
+    etype = EQUIPMENT_TYPES[equip_key]
+    key_field = etype["key_field"]
+    refs = {}
+    for series_number in list_series():
+        try:
+            rows = read_index_rows_with_status(series_number, equip_key)
+        except KeyError:
+            continue
+        for entry in rows:
+            tag = canonical_tag(entry.get(key_field, ""))
+            if not tag or tag in refs:
+                continue
+            refs[tag] = {
+                "series": series_number, "equip_key": equip_key, "row": entry["row"],
+                "key_value": entry.get(key_field, ""), "installed": bool(entry.get("installed")),
+            }
+    return refs
+
+
+def reconcile_master_list():
+    """The Coverage page's core computation. Returns None if nothing has
+    ever been imported (mirrors load_master_list()'s own convention -
+    callers show Coverage's empty state in that case, never a crash).
+    Otherwise:
+
+    {'matched': [{'master': item, 'tracker': ref, 'flags': [str, ...]}, ...],
+     'missing': [item, ...],          # in-scope master items, no tracker row anywhere
+     'orphans': [ref, ...],           # tracker rows whose tag isn't in the master list
+     'out_of_scope_count': int,
+     'out_of_scope_items': [item, ...]}   # shown collapsed (count only), expandable
+
+    ref (a tracker-side row reference): {'series', 'equip_key', 'row',
+    'key_value', 'installed'}. flags are machine-readable ids
+    ('installed_mismatch', 'model_mismatch') - the UI supplies wording.
+
+    matched + missing always == every in-scope (transmitter/valve) master
+    item; orphans are counted separately, same as 11's own acceptance
+    criteria."""
+    snapshot = load_master_list()
+    if not snapshot:
+        return None
+
+    tracker_refs = {equip_key: _tracker_refs_by_tag(equip_key) for equip_key in EQUIPMENT_TYPES}
+    matched_tags = {equip_key: set() for equip_key in EQUIPMENT_TYPES}
+
+    matched, missing, out_of_scope_items = [], [], []
+
+    for item in snapshot.get("items", []):
+        kind = item.get("kind")
+        if kind not in EQUIPMENT_TYPES:
+            out_of_scope_items.append(item)
+            continue
+
+        ref = tracker_refs[kind].get(item["tag"])
+        if ref is None:
+            missing.append(item)
+            continue
+
+        matched_tags[kind].add(item["tag"])
+        flags = []
+        if bool(item.get("ml_installed")) != ref["installed"]:
+            flags.append("installed_mismatch")
+
+        model_field = "model" if kind == "transmitter" else "valve_model"
+        tracker_model = read_full_row(ref["series"], kind, ref["row"]).get(model_field, "")
+        master_model = item.get("model", "")
+        if (master_model and tracker_model
+                and _normalize_for_compare(master_model) != _normalize_for_compare(tracker_model)):
+            flags.append("model_mismatch")
+
+        matched.append({"master": item, "tracker": ref, "flags": flags})
+
+    orphans = [
+        ref for equip_key, refs_by_tag in tracker_refs.items()
+        for tag, ref in refs_by_tag.items() if tag not in matched_tags[equip_key]
+    ]
+
+    return {
+        "matched": matched,
+        "missing": missing,
+        "orphans": orphans,
+        "out_of_scope_count": len(out_of_scope_items),
+        "out_of_scope_items": out_of_scope_items,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 11.3 - Create-from-master: turn a "Missing" master item into a real
+# tracker row. Only maps to fields that actually exist on that equipment
+# kind's schema - Valve has no single generic "service"/"manufacturer"
+# field the way Transmitter does, so those two are silently omitted for
+# valves (the confirm dialog lists exactly what's set, so nothing is
+# hidden from the user - there's just nowhere on the valve form for a
+# generic Service/Manufacturer value to go).
+# ---------------------------------------------------------------------------
+def master_item_to_row_values(item, equip_key):
+    """{field_id: value} to pre-fill a brand-new tracker row from one
+    master-list item - values.py's blank-means-unset convention applies
+    (an empty string here is the same as not setting the field at all)."""
+    qa_name = get_setting("default_qa_rep_name")
+    if equip_key == "valve":
+        values = {
+            "equip_number": item.get("tag", ""),
+            "pid_number": item.get("pid", ""),
+            "line_number": item.get("line_number", ""),
+            "valve_model": item.get("model", ""),
+        }
+        if qa_name:
+            values["qc_rep_name"] = qa_name
+    else:
+        values = {
+            "tag": item.get("tag", ""),
+            "service": item.get("service", ""),
+            "pid_number": item.get("pid", ""),
+            "line_number": item.get("line_number", ""),
+            "make": item.get("manufacturer", ""),
+            "model": item.get("model", ""),
+        }
+        if qa_name:
+            values["yanda_qa_name"] = qa_name
+    return {k: v for k, v in values.items() if v}
+
+
+def create_rows_from_master_items(items_with_kind):
+    """items_with_kind: [(equip_key, master_item), ...]. Creates one new
+    tracker row per entry - find_first_blank_row + the same cell-write
+    save_row() does - in a SINGLE workbook save regardless of how many
+    series/sheets are touched (save_fields_bulk's efficiency reasoning
+    applies here too). This is the same commit path as any other new row:
+    there's no separate "pending" staging layer in this app to route
+    through instead.
+
+    Raises ValueError before writing anything if any item has no valid
+    target series registered - a batch is all-or-nothing, never partially
+    applied.
+
+    Returns [{'series', 'equip_key', 'row', 'tag', 'values'}, ...] in the
+    same order, for the caller to build ONE undo entry covering the whole
+    batch."""
+    registered = set(list_series())
+    for equip_key, item in items_with_kind:
+        if item.get("mapped_series") not in registered:
+            raise ValueError(
+                f"'{item.get('tag')}' has no valid target series - map its sheet to "
+                "a series first (Master List import, step 2).")
+
+    created = []
+    with _mutating_workbook() as wb:
+        for equip_key, item in items_with_kind:
+            series_number = item["mapped_series"]
+            sheet_name = get_sheet_name(series_number, equip_key)
+            row_num = find_first_blank_row(series_number, equip_key)
+            values = master_item_to_row_values(item, equip_key)
+
+            etype = EQUIPMENT_TYPES[equip_key]
+            export_mod = etype["export_module"]
+            ws = wb[sheet_name]
+            field_to_col = export_mod.load_column_map(ws)
+            for fid, val in values.items():
+                col = field_to_col.get(fid)
+                if col is not None:
+                    ws.cell(row=row_num, column=col).value = val
+
+            created.append({
+                "series": series_number, "equip_key": equip_key, "row": row_num,
+                "tag": item.get("tag", ""), "values": values,
+            })
+    return created
+
+
+# ---------------------------------------------------------------------------
 # App-wide settings: theme, default export preferences, which signature
 # image is "active". Lives in its own small JSON file - nothing to do with
 # the workbook at all.

@@ -298,6 +298,21 @@ QPushButton#Link {
 }
 QPushButton#Link:hover { color: #2c49ab; }
 
+QPushButton#FilterChip {
+    background: #eceef2;
+    color: #3a4258;
+    border: 1px solid #d6dae3;
+    border-radius: 13px;
+    padding: 4px 12px;
+    font-weight: 600;
+}
+QPushButton#FilterChip:hover { background: #e2e5ec; }
+QPushButton#FilterChip:checked {
+    background: #3a63e0;
+    color: #ffffff;
+    border: 1px solid #3a63e0;
+}
+
 /* -------------------------------------------------------------- scroll */
 QScrollBar:vertical {
     background: transparent;
@@ -590,6 +605,21 @@ QPushButton#Link {
     padding: 4px 2px;
 }
 QPushButton#Link:hover { color: #89b4fa; }
+
+QPushButton#FilterChip {
+    background: #262b3d;
+    color: #c0caf5;
+    border: 1px solid #363b54;
+    border-radius: 13px;
+    padding: 4px 12px;
+    font-weight: 600;
+}
+QPushButton#FilterChip:hover { background: #2f3550; }
+QPushButton#FilterChip:checked {
+    background: #7aa2f7;
+    color: #16161e;
+    border: 1px solid #7aa2f7;
+}
 
 /* -------------------------------------------------------------- scroll */
 QScrollBar:vertical {

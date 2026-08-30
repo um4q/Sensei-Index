@@ -232,6 +232,64 @@ def make_button(text, object_name=None, width=None):
     return btn
 
 
+class FilterChipBar(QWidget):
+    """A row of mutually-exclusive toggle 'chips'. One reusable widget for
+    every filter row in the app - Coverage (Phase 11) is the first user,
+    IndexPage (Phase 13) reuses it rather than growing a second, slightly
+    different filter-row implementation."""
+
+    def __init__(self, options, on_change=None, parent=None):
+        """options: [(id, base_label), ...], in display order. on_change,
+        if given, is called with the newly active id every time the
+        selection changes (not at construction)."""
+        super().__init__(parent)
+        self._on_change = on_change
+        self._base_labels = dict(options)
+        self._buttons = {}
+        self.active_id = options[0][0] if options else None
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        for opt_id, label in options:
+            btn = make_button(label, "FilterChip")
+            btn.setCheckable(True)
+            btn.setChecked(opt_id == self.active_id)
+            btn.clicked.connect(lambda _checked, oid=opt_id: self._select(oid))
+            self._group.addButton(btn)
+            self._buttons[opt_id] = btn
+            layout.addWidget(btn)
+        layout.addStretch()
+
+    def _select(self, opt_id):
+        if opt_id == self.active_id:
+            return
+        self.active_id = opt_id
+        if self._on_change:
+            self._on_change(opt_id)
+
+    def set_active(self, opt_id):
+        """Programmatic selection (e.g. restoring a saved view) - does NOT
+        fire on_change, matching QComboBox/QTreeWidget convention for
+        silent state restoration."""
+        if opt_id not in self._buttons:
+            return
+        self.active_id = opt_id
+        self._buttons[opt_id].setChecked(True)
+
+    def set_counts(self, counts):
+        """counts: {id: int}. Appends ' (n)' to each chip whose id is
+        present; leaves chips not in counts showing their bare label."""
+        for opt_id, btn in self._buttons.items():
+            base = self._base_labels[opt_id]
+            if opt_id in counts:
+                btn.setText(f"{base} ({counts[opt_id]})")
+            else:
+                btn.setText(base)
+
+
 def _accepted_row_color():
     """Background for the Row # cell once Accepted is checked - picked per
     active theme so it still reads as 'success green' rather than
@@ -525,6 +583,10 @@ class MainWindow(QMainWindow):
         dash_item.setData(0, self.NAV_ROLE, ("dashboard",))
         self.tree.addTopLevelItem(dash_item)
 
+        coverage_item = QTreeWidgetItem(["\u2611  Coverage"])
+        coverage_item.setData(0, self.NAV_ROLE, ("coverage",))
+        self.tree.addTopLevelItem(coverage_item)
+
         for series_number in da.list_series():
             series_item = QTreeWidgetItem([da.series_display_label(series_number)])
             series_item.setData(0, self.NAV_ROLE, ("series", series_number))
@@ -563,6 +625,8 @@ class MainWindow(QMainWindow):
             return
         if nav[0] == "dashboard":
             self.show_dashboard()
+        elif nav[0] == "coverage":
+            self.show_coverage()
         elif nav[0] == "series":
             item.setExpanded(not item.isExpanded())
         elif nav[0] == "index":
@@ -636,6 +700,10 @@ class MainWindow(QMainWindow):
     def show_dashboard(self):
         page = DashboardPage(self)
         self.dashboard_page = page
+        self._set_dynamic_page(page)
+
+    def show_coverage(self):
+        page = CoveragePage(self)
         self._set_dynamic_page(page)
 
     def show_index(self, series_number, equip_key, filters=None):
@@ -1095,6 +1163,285 @@ class DashboardPage(QWidget):
     def _open_first_type(self, series_number):
         first_key = next(iter(da.EQUIPMENT_TYPES))
         self.main_window.show_index(series_number, first_key, None)
+
+
+# =============================================================================
+# Coverage page - Sensei Index 2.1, Phase 11.
+#
+# Answers, per area and per equipment kind, which master-list instruments
+# have a tracker row and which don't - and the reverse (orphans). Entirely
+# read-only except "Add to tracker" (create-from-master), which is the
+# same commit path as any other new row (no separate pending-edit layer
+# exists in this app to route through instead).
+# =============================================================================
+COVERAGE_FLAG_LABELS = {
+    "installed_mismatch": "Installed mismatch",
+    "model_mismatch": "Model mismatch",
+}
+
+
+class CoveragePage(QWidget):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.result = None
+        self._selected_missing = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        header = QLabel("Coverage")
+        header.setObjectName("PageTitle")
+        outer.addWidget(header)
+        subtitle = QLabel("What's tracked against the client's Instrumentation Master List, "
+                           "and what isn't - matched, missing, orphaned, or flagged.")
+        subtitle.setObjectName("PageSubtitle")
+        subtitle.setWordWrap(True)
+        outer.addWidget(subtitle)
+
+        self.banner = QLabel()
+        self.banner.setObjectName("Breadcrumb")
+        self.banner.setWordWrap(True)
+        self.banner.hide()
+        outer.addWidget(self.banner)
+
+        self.empty_state = self._build_empty_state()
+        outer.addWidget(self.empty_state, stretch=1)
+
+        self.content = QWidget()
+        content_layout = QVBoxLayout(self.content)
+        content_layout.setContentsMargins(0, 8, 0, 0)
+
+        chip_row = QHBoxLayout()
+        self.chips = FilterChipBar(
+            [("all", "All"), ("missing", "Missing"), ("orphans", "Orphans"), ("flags", "Flags")],
+            on_change=lambda _id: self._render_tree())
+        chip_row.addWidget(self.chips)
+        chip_row.addStretch()
+        self.add_selected_btn = make_button("Add Selected to Tracker", "Primary")
+        self.add_selected_btn.setEnabled(False)
+        self.add_selected_btn.clicked.connect(lambda: self._create_from_master(list(self._selected_missing)))
+        chip_row.addWidget(self.add_selected_btn)
+        content_layout.addLayout(chip_row)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.itemSelectionChanged.connect(self._on_selection_changed)
+        content_layout.addWidget(self.tree, stretch=1)
+
+        outer.addWidget(self.content, stretch=1)
+
+        self.reload()
+
+    # ----------------------------------------------------------- empty state
+    def _build_empty_state(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addStretch()
+        label = QLabel(
+            "No master list imported yet.\n\n"
+            "Import the client's Instrumentation Master List to see coverage - "
+            "what's tracked, what's missing, and what doesn't match.")
+        label.setAlignment(Qt.AlignCenter)
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn = make_button("Import Master List...", "Primary")
+        btn.clicked.connect(lambda: self.main_window.open_master_list_import())
+        btn_row.addWidget(btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+        layout.addStretch()
+        return page
+
+    # ---------------------------------------------------------------- reload
+    def reload(self):
+        self.result = da.reconcile_master_list()
+        if self.result is None:
+            self.content.hide()
+            self.banner.hide()
+            self.empty_state.show()
+            return
+
+        self.empty_state.hide()
+        self.content.show()
+        if da.master_list_needs_reimport():
+            self.banner.setText(
+                "⚠ The master list file on disk has changed since it was last imported. "
+                "Use “Master List...” in the sidebar to re-import.")
+            self.banner.show()
+        else:
+            self.banner.hide()
+        self._render_tree()
+
+    # ------------------------------------------------------------ rendering
+    def _grouped_by_area(self):
+        groups = {}
+
+        def bucket(area, kind):
+            return groups.setdefault(area or "(no area)", {}).setdefault(
+                kind, {"matched": [], "missing": [], "orphans": []})
+
+        for pair in self.result["matched"]:
+            item = pair["master"]
+            bucket(item["area"], item["kind"])["matched"].append(pair)
+        for item in self.result["missing"]:
+            bucket(item["area"], item["kind"])["missing"].append(item)
+        for ref in self.result["orphans"]:
+            area = da.parse_area_code(da.canonical_tag(ref["key_value"]))
+            bucket(area, ref["equip_key"])["orphans"].append(ref)
+        return groups
+
+    def _leaves_for_bucket(self, bucket, active_chip):
+        leaves = []
+        if active_chip in ("all", "flags"):
+            pairs = bucket["matched"] if active_chip == "all" else \
+                [p for p in bucket["matched"] if p["flags"]]
+            for pair in pairs:
+                item = pair["master"]
+                flag_text = ""
+                if pair["flags"]:
+                    wording = ", ".join(COVERAGE_FLAG_LABELS.get(f, f) for f in pair["flags"])
+                    flag_text = f"  ⚠ {wording}"
+                leaves.append((f"✓ {item['tag']} — {item['service']}{flag_text}",
+                                ("matched", pair)))
+        if active_chip in ("all", "missing"):
+            for item in bucket["missing"]:
+                leaves.append((f"○ {item['tag']} — {item['service']} (not tracked)",
+                                ("missing", item)))
+        if active_chip in ("all", "orphans"):
+            for ref in bucket["orphans"]:
+                leaves.append((f"? {ref['key_value']} (not in master list)",
+                                ("orphan", ref)))
+        return leaves
+
+    def _render_tree(self):
+        self.tree.clear()
+        active = self.chips.active_id
+        groups = self._grouped_by_area()
+
+        for area in sorted(groups.keys()):
+            area_item = QTreeWidgetItem([area])
+            self.tree.addTopLevelItem(area_item)
+            any_children = False
+            for equip_key, etype in da.EQUIPMENT_TYPES.items():
+                bucket = groups[area].get(equip_key)
+                if not bucket:
+                    continue
+                matched_n = len(bucket["matched"])
+                missing_n = len(bucket["missing"])
+                orphans_n = len(bucket["orphans"])
+                flags_n = sum(1 for p in bucket["matched"] if p["flags"])
+                label = (f"{etype['label']}s: {matched_n} matched · {missing_n} missing · "
+                         f"{orphans_n} orphans · {flags_n} flags")
+                kind_item = QTreeWidgetItem([label])
+                area_item.addChild(kind_item)
+                any_children = True
+
+                for text, data in self._leaves_for_bucket(bucket, active):
+                    leaf = QTreeWidgetItem([text])
+                    leaf.setData(0, Qt.UserRole, data)
+                    kind_item.addChild(leaf)
+                kind_item.setExpanded(active != "all")
+            area_item.setExpanded(any_children)
+
+        if self.result["out_of_scope_count"]:
+            oos_item = QTreeWidgetItem([f"Out of scope ({self.result['out_of_scope_count']})"])
+            self.tree.addTopLevelItem(oos_item)
+            for item in self.result["out_of_scope_items"]:
+                text = f"{item['tag']} — {item['type_desc'] or item['service'] or '(no description)'}"
+                leaf = QTreeWidgetItem([text])
+                leaf.setData(0, Qt.UserRole, ("out_of_scope", item))
+                oos_item.addChild(leaf)
+            oos_item.setExpanded(False)
+
+        self._on_selection_changed()
+
+    # ------------------------------------------------------------- clicking
+    def _on_item_clicked(self, item, _column):
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            item.setExpanded(not item.isExpanded())
+            return
+        kind, payload = data
+        if kind == "matched":
+            ref = payload["tracker"]
+            key_field = da.EQUIPMENT_TYPES[ref["equip_key"]]["key_field"]
+            self.main_window.show_index(ref["series"], ref["equip_key"],
+                                         {key_field: ref["key_value"]})
+        elif kind == "missing":
+            self._create_from_master([payload])
+        elif kind == "orphan":
+            key_field = da.EQUIPMENT_TYPES[payload["equip_key"]]["key_field"]
+            self.main_window.show_index(payload["series"], payload["equip_key"],
+                                         {key_field: payload["key_value"]})
+        # out_of_scope: informational only, nothing to jump to or create.
+
+    def _on_selection_changed(self):
+        self._selected_missing = [
+            item.data(0, Qt.UserRole)[1] for item in self.tree.selectedItems()
+            if item.data(0, Qt.UserRole) and item.data(0, Qt.UserRole)[0] == "missing"
+        ]
+        n = len(self._selected_missing)
+        self.add_selected_btn.setEnabled(n > 0)
+        self.add_selected_btn.setText(f"Add {n} Selected to Tracker" if n else "Add Selected to Tracker")
+
+    # --------------------------------------------------- create-from-master
+    def _create_from_master(self, items):
+        if not items:
+            return
+        registered = set(da.list_series())
+        unmapped = [it for it in items if it.get("mapped_series") not in registered]
+        if unmapped:
+            tags = ", ".join(it["tag"] for it in unmapped)
+            QMessageBox.warning(
+                self, "Can't add yet",
+                f"These items' sheets aren't mapped to a series yet, so there's nowhere to "
+                f"create them: {tags}\n\nRe-import the master list and map that sheet to a "
+                f"series (Master List... in the sidebar), or add these by hand.")
+            return
+
+        lines = [f"About to create {len(items)} new row(s):"]
+        for it in items:
+            lines.append(f"  • {it['tag']} → {da.series_display_label(it['mapped_series'])} "
+                          f"({da.EQUIPMENT_TYPES[it['kind']]['label']})")
+        confirm = QMessageBox.question(
+            self, "Add to tracker", "\n".join(lines),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if confirm != QMessageBox.Yes:
+            return
+
+        try:
+            created = da.create_rows_from_master_items([(it["kind"], it) for it in items])
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't create rows", str(exc))
+            return
+
+        self._record_create_undo(created)
+        self.main_window.refresh_sidebar_and_dashboard()
+        self.reload()
+        self.main_window.statusBar().showMessage(f"Added {len(created)} row(s) from the master list", 4000)
+
+    def _record_create_undo(self, created):
+        mw = self.main_window
+
+        def do_undo():
+            by_sheet = {}
+            for c in created:
+                by_sheet.setdefault((c["series"], c["equip_key"]), []).append(c["row"])
+            for (series_number, equip_key), rows in by_sheet.items():
+                da.delete_rows(series_number, equip_key, rows)
+            mw.refresh_current_view()
+
+        def do_redo():
+            for c in created:
+                da.save_row(c["series"], c["equip_key"], c["row"], c["values"])
+            mw.refresh_current_view()
+
+        mw.undo_stack.push(f"add {len(created)} row(s) from master list", do_undo, do_redo)
 
 
 # =============================================================================
