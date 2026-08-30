@@ -2661,7 +2661,10 @@ def export_progress_report():
 #     (str(value).strip()) and reformats other types (a float cell's
 #     "2171.0" comes back as "2171"), so diffing against it would both
 #     hide real whitespace and misreport an ordinary numeric-type
-#     difference as a whitespace "fix".
+#     difference as a whitespace "fix". A formula cell's raw value is
+#     ALSO a plain str with data_only=False (its formula text, not its
+#     computed result) - excluded too, so a string literal embedded
+#     inside a formula is never silently rewritten.
 #   - Flagged, never touched: a duplicate primary serial
 #     (find_all_duplicate_serials) or a tag that still doesn't look like
 #     AREA-TYPE-NUMBER after trimming/upper-casing (tag_shape_warning) -
@@ -2699,9 +2702,17 @@ def build_cleanup_plan():
             if not key_col:
                 continue
             for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
-                key_val = export_mod.cell_to_str(ws.cell(row=r, column=key_col).value)
-                if not key_val.strip():
+                # "Is this row used" uses the exact same raw (None, "")
+                # test as read_index_rows()/find_first_blank_row() - NOT
+                # cell_to_str()'s stripped output, which would collapse a
+                # whitespace-only tag (a real, visible row everywhere else
+                # in this app) to "" and wrongly skip the whole row here,
+                # including every one of its OTHER fields that might
+                # genuinely need a whitespace fix.
+                raw_key_val = ws.cell(row=r, column=key_col).value
+                if raw_key_val in (None, ""):
                     continue  # unused row - left exactly as-is
+                key_val = export_mod.cell_to_str(raw_key_val)
                 for fid, col in field_to_col.items():
                     if fid in date_fields:
                         continue  # never rewrite a date cell's type/format
@@ -2716,8 +2727,13 @@ def build_cleanup_plan():
                     # a whitespace trim. Reading the raw value directly and
                     # skipping anything that isn't already a str sidesteps
                     # both: a numeric/bool/date-typed cell is never
-                    # rewritten by this path at all.
-                    if not isinstance(raw, str):
+                    # rewritten by this path at all. A formula cell's raw
+                    # value is ALSO a plain str (its formula text, e.g.
+                    # "=CONCATENATE(...)") with data_only=False, so it's
+                    # excluded explicitly too - trimming/upper-casing that
+                    # text would silently rewrite a string literal INSIDE
+                    # the formula, changing what it actually computes.
+                    if not isinstance(raw, str) or raw.startswith("="):
                         continue
                     old_text = raw
                     new_text = raw.strip()
@@ -2739,11 +2755,22 @@ def build_cleanup_plan():
                     })
 
         for group in find_all_duplicate_serials(equip_key):
-            tag_list = ", ".join(f"{row['key_value']} (series {row['series']})" for row in group["rows"])
+            # find_all_duplicate_serials()'s own key_value is only
+            # whitespace-stripped (via cell_to_str), not upper-cased - it's
+            # shared with the Progress Report's Flags sheet (Phase 17),
+            # which has its own tests expecting that exact behavior, so
+            # it's never changed here. Normalized separately, just for
+            # this flag's own display, so it matches the casing every
+            # OTHER Cleanup Log entry (and the actual fixed cell, if this
+            # same row's key also got trimmed/upper-cased above) uses.
+            tag_list = ", ".join(
+                f"{row['key_value'].strip().upper()} (series {row['series']})" for row in group["rows"]
+            )
             for row in group["rows"]:
                 flags.append({
                     "series": row["series"], "equip_key": equip_key, "row": row["row"],
-                    "sheet": get_sheet_name(row["series"], equip_key), "key_value": row["key_value"],
+                    "sheet": get_sheet_name(row["series"], equip_key),
+                    "key_value": row["key_value"].strip().upper(),
                     "detail": f"Duplicate serial \"{group['serial']}\" - shared with {tag_list}",
                 })
 
@@ -2752,41 +2779,65 @@ def build_cleanup_plan():
 
 def _apply_cleanup_plan(out_wb, plan):
     """Mutates out_wb (a freshly-loaded copy, never the live workbook) in
-    place: writes each fix's new value and highlights it, then highlights
-    the key cell of every flagged row. Cell-value and cell-fill writes
+    place: writes each fix's new value, then highlights every touched
+    cell - amber for a plain fix, red for a flagged-only key cell, and a
+    third color for a key cell that's BOTH (trimmed/upper-cased by a fix
+    AND still flagged afterward - e.g. a bad tag shape that whitespace
+    alone can't cure) so that overlap is never silently lost to whichever
+    color happened to be applied second. Cell-value and cell-fill writes
     only - no row insert/delete, so nothing anchored to a row number
     (data validation, conditional formatting) is ever disturbed."""
     from openpyxl.styles import PatternFill
-    FIXED_FILL = PatternFill("solid", fgColor="FFEB9C")  # light amber - "changed by cleanup"
-    FLAG_FILL = PatternFill("solid", fgColor="FFC7CE")   # same red as the Progress Report's BAD_FILL
+    FIXED_FILL = PatternFill("solid", fgColor="FFEB9C")       # light amber - "changed by cleanup"
+    FLAG_FILL = PatternFill("solid", fgColor="FFC7CE")        # same red as the Progress Report's BAD_FILL
+    FIXED_AND_FLAG_FILL = PatternFill("solid", fgColor="FFD966")  # amber+red blend - both apply
 
-    for fix in plan["fixes"]:
-        cell = out_wb[fix["sheet"]].cell(row=fix["row"], column=fix["col"])
-        cell.value = fix["new"]
-        cell.fill = FIXED_FILL
+    fixed_by_cell = {(fix["sheet"], fix["row"], fix["col"]): fix for fix in plan["fixes"]}
 
-    already_flagged = set()
+    flagged_key_cell_by_row = {}
     for flag in plan["flags"]:
-        cell_key = (flag["sheet"], flag["row"])
-        if cell_key in already_flagged:
+        row_key = (flag["sheet"], flag["row"])
+        if row_key in flagged_key_cell_by_row:
             continue
-        already_flagged.add(cell_key)
         etype = EQUIPMENT_TYPES[flag["equip_key"]]
         export_mod = etype["export_module"]
         ws = out_wb[flag["sheet"]]
         key_col = export_mod.load_column_map(ws).get(etype["key_field"])
         if key_col:
-            ws.cell(row=flag["row"], column=key_col).fill = FLAG_FILL
+            flagged_key_cell_by_row[row_key] = key_col
+    flagged_cells = {(sheet, row, col) for (sheet, row), col in flagged_key_cell_by_row.items()}
+
+    for cell_id, fix in fixed_by_cell.items():
+        sheet, row, col = cell_id
+        cell = out_wb[sheet].cell(row=row, column=col)
+        cell.value = fix["new"]
+        cell.fill = FIXED_AND_FLAG_FILL if cell_id in flagged_cells else FIXED_FILL
+
+    for cell_id in flagged_cells:
+        if cell_id in fixed_by_cell:
+            continue  # already colored FIXED_AND_FLAG_FILL above
+        sheet, row, col = cell_id
+        out_wb[sheet].cell(row=row, column=col).fill = FLAG_FILL
 
 
 def _write_cleanup_log_sheet(wb, plan):
-    """Appends a new 'Cleanup Log' sheet after every existing sheet in wb -
-    original sheet order/tabs are otherwise untouched."""
+    """Appends a new sheet named 'Cleanup Log' (or, on the rare chance the
+    live workbook already has one - e.g. a previous cleaned copy was
+    promoted to become the new live tracker - a collision-suffixed name
+    like a repeat backup gets: never silently reused, renamed, or
+    overwritten, so an old log is never mistaken for this run's) after
+    every existing sheet in wb - original sheet order/tabs are otherwise
+    untouched."""
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
     HEADER_FONT = Font(bold=True)
 
-    ws = wb.create_sheet("Cleanup Log")
+    title = "Cleanup Log"
+    n = 2
+    while title in wb.sheetnames:
+        title = f"Cleanup Log ({n})"
+        n += 1
+    ws = wb.create_sheet(title)
     r = 1
     ws.cell(row=r, column=1, value="Auto-fixed cells").font = HEADER_FONT
     r += 1

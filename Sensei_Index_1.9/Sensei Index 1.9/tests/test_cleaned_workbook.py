@@ -152,6 +152,23 @@ def test_export_applies_fixes_and_highlights_them(isolated_app_dir):
 
 
 def test_export_highlights_flagged_rows_key_cell(isolated_app_dir):
+    """A tag that's flagged but needs NO fix (already upper-case, no
+    whitespace) - pure flag-only case, gets the plain red flag color."""
+    tmp_path, da = isolated_app_dir
+    row = da.find_first_blank_row(29103, "transmitter")
+    da.save_row(29103, "transmitter", row, {"tag": "NOTAVALIDSHAPE"})
+
+    out_path = da.export_cleaned_workbook()
+    out_wb = openpyxl.load_workbook(out_path)
+    ws = out_wb["Transmitter Log 29103"]
+    col_map = export_to_pdf.load_column_map(ws)
+    assert "FFC7CE" in ws.cell(row=row, column=col_map["tag"]).fill.fgColor.rgb
+
+
+def test_export_highlights_both_fixed_and_flagged_cell_distinctly(isolated_app_dir):
+    """A tag that needed a fix (case) AND is still flagged afterward (bad
+    shape) must not silently lose one signal to the other - it gets its
+    own distinct color, and the value is still correctly written."""
     tmp_path, da = isolated_app_dir
     row = da.find_first_blank_row(29103, "transmitter")
     da.save_row(29103, "transmitter", row, {"tag": "not a valid shape"})
@@ -160,7 +177,11 @@ def test_export_highlights_flagged_rows_key_cell(isolated_app_dir):
     out_wb = openpyxl.load_workbook(out_path)
     ws = out_wb["Transmitter Log 29103"]
     col_map = export_to_pdf.load_column_map(ws)
-    assert "FFC7CE" in ws.cell(row=row, column=col_map["tag"]).fill.fgColor.rgb
+    cell = ws.cell(row=row, column=col_map["tag"])
+    assert cell.value == "NOT A VALID SHAPE"
+    assert "FFD966" in cell.fill.fgColor.rgb
+    assert "FFEB9C" not in cell.fill.fgColor.rgb
+    assert "FFC7CE" not in cell.fill.fgColor.rgb
 
 
 def test_export_appends_cleanup_log_sheet_after_original_sheets(isolated_app_dir):
@@ -233,3 +254,149 @@ def test_export_works_with_zero_rows_anywhere(isolated_app_dir):
     ws = openpyxl.load_workbook(out_path)["Cleanup Log"]
     values = [c.value for r in ws.iter_rows() for c in r if c.value]
     assert any("already clean" in str(v) for v in values)
+
+
+def test_formula_cell_is_never_touched_even_though_its_raw_value_is_a_str(isolated_app_dir):
+    """A formula's raw value (data_only=False) is a plain str too (its
+    formula TEXT, e.g. '=CONCATENATE(...)') - rewriting that would
+    silently mutate a string literal embedded inside the formula, changing
+    what it actually computes. Must be excluded exactly like a
+    numeric/bool/date cell is."""
+    tmp_path, da = isolated_app_dir
+    row = da.find_first_blank_row(29103, "transmitter")
+    da.save_row(29103, "transmitter", row, {"tag": "29103-PIT-2171"})
+
+    wb = openpyxl.load_workbook(da.WORKBOOK_PATH)
+    ws = wb["Transmitter Log 29103"]
+    col = export_to_pdf.load_column_map(ws)["system_number"]
+    formula = '=CONCATENATE("sys","-",1)'
+    ws.cell(row=row, column=col).value = formula
+    wb.save(da.WORKBOOK_PATH)
+    da.invalidate_workbook_cache()
+
+    plan = da.build_cleanup_plan()
+    assert not any(f["row"] == row and f["field"] == "system_number" for f in plan["fixes"])
+
+    out_path = da.export_cleaned_workbook()
+    out_ws = openpyxl.load_workbook(out_path)["Transmitter Log 29103"]
+    assert out_ws.cell(row=row, column=col).value == formula
+
+
+def test_formula_in_key_field_is_flagged_but_never_rewritten(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    row = da.find_first_blank_row(29103, "transmitter")
+
+    wb = openpyxl.load_workbook(da.WORKBOOK_PATH)
+    ws = wb["Transmitter Log 29103"]
+    col = export_to_pdf.load_column_map(ws)["tag"]
+    formula = '=CONCATENATE("29103","-pit-","2171")'
+    ws.cell(row=row, column=col).value = formula
+    wb.save(da.WORKBOOK_PATH)
+    da.invalidate_workbook_cache()
+
+    plan = da.build_cleanup_plan()
+    assert not any(f["row"] == row and f["field"] == "tag" for f in plan["fixes"])
+
+    out_path = da.export_cleaned_workbook()
+    out_ws = openpyxl.load_workbook(out_path)["Transmitter Log 29103"]
+    assert out_ws.cell(row=row, column=col).value == formula  # untouched, still a live formula
+
+
+def test_whitespace_only_key_field_still_counts_as_a_used_row(isolated_app_dir):
+    """Matches read_index_rows()/find_first_blank_row()'s own definition
+    of "used" (raw value not in (None, "")) - a whitespace-only tag is a
+    real row there, so it must be one here too: its OTHER fields still get
+    fixed, not silently skipped."""
+    tmp_path, da = isolated_app_dir
+    row = da.find_first_blank_row(29103, "transmitter")
+    da.save_row(29103, "transmitter", row, {"tag": "   ", "system_number": "  SYS-9  "})
+
+    assert any(r["row"] == row for r in da.read_index_rows(29103, "transmitter"))
+
+    plan = da.build_cleanup_plan()
+    fix = next(f for f in plan["fixes"] if f["row"] == row and f["field"] == "system_number")
+    assert fix["old"] == "  SYS-9  "
+    assert fix["new"] == "SYS-9"
+
+
+def test_cleanup_log_name_collision_gets_a_distinct_suffixed_name(isolated_app_dir):
+    """If the live workbook already carries a sheet literally named
+    'Cleanup Log' (e.g. a previous cleaned copy was promoted to become the
+    new live tracker), this run's real log must never be silently written
+    into - or on top of - that old one under openpyxl's own silent
+    auto-rename behavior. The old sheet is left exactly as it was, and
+    this run's log gets its own clearly distinct name."""
+    tmp_path, da = isolated_app_dir
+    row = da.find_first_blank_row(29103, "transmitter")
+    da.save_row(29103, "transmitter", row, {"tag": "29103-pit-2171"})
+
+    wb = openpyxl.load_workbook(da.WORKBOOK_PATH)
+    stale = wb.create_sheet("Cleanup Log")
+    stale["A1"] = "STALE - from an earlier cleanup run"
+    wb.save(da.WORKBOOK_PATH)
+    da.invalidate_workbook_cache()
+
+    out_path = da.export_cleaned_workbook()
+    out_wb = openpyxl.load_workbook(out_path)
+    assert out_wb["Cleanup Log"]["A1"].value == "STALE - from an earlier cleanup run"
+    assert "Cleanup Log (2)" in out_wb.sheetnames
+    new_log_values = [c.value for r in out_wb["Cleanup Log (2)"].iter_rows() for c in r if c.value]
+    assert any(v == "29103-PIT-2171" for v in new_log_values)
+
+
+def test_duplicate_serial_flag_key_value_is_normalized_like_every_other_entry(isolated_app_dir):
+    """A duplicate-serial flag's key_value/detail text must match the
+    same trimmed+upper-cased casing every other Cleanup Log entry (and the
+    actual fixed cell, if this row's key also needed a fix) uses - not the
+    raw, un-normalized value find_all_duplicate_serials() itself returns
+    (which Phase 17's Progress Report still relies on as-is)."""
+    tmp_path, da = isolated_app_dir
+    r1 = da.find_first_blank_row(29103, "transmitter")
+    da.save_row(29103, "transmitter", r1, {"tag": "  29103-pit-0001  ", "serial_number": "SN-DUP"})
+    r2 = da.find_first_blank_row(29103, "transmitter")
+    da.save_row(29103, "transmitter", r2, {"tag": "29103-PIT-0002", "serial_number": "SN-DUP"})
+
+    plan = da.build_cleanup_plan()
+    fix = next(f for f in plan["fixes"] if f["row"] == r1 and f["field"] == "tag")
+    assert fix["new"] == "29103-PIT-0001"
+
+    flag = next(f for f in plan["flags"] if f["row"] == r1 and "Duplicate serial" in f["detail"])
+    assert flag["key_value"] == "29103-PIT-0001"  # matches the fix, not the raw lowercase original
+    assert "29103-PIT-0001" in flag["detail"]
+    assert "29103-pit-0001" not in flag["detail"]
+
+
+def test_valve_rows_are_fixed_and_flagged_same_as_transmitter_rows(isolated_app_dir):
+    """The valve branch uses a different export module, key_field
+    ("equip_number"), and serial field ("valve_serial") than transmitter -
+    exercised here explicitly rather than only ever reached with empty
+    sheets."""
+    tmp_path, da = isolated_app_dir
+    row = da.find_first_blank_row(29103, "valve")
+    da.save_row(29103, "valve", row, {"equip_number": "29103-pv-0001", "valve_serial": "  VS-001  "})
+
+    plan = da.build_cleanup_plan()
+    key_fix = next(f for f in plan["fixes"] if f["row"] == row and f["field"] == "equip_number")
+    assert key_fix["new"] == "29103-PV-0001"
+    serial_fix = next(f for f in plan["fixes"] if f["row"] == row and f["field"] == "valve_serial")
+    assert serial_fix["old"] == "  VS-001  "
+    assert serial_fix["new"] == "VS-001"
+
+    out_path = da.export_cleaned_workbook()
+    out_ws = openpyxl.load_workbook(out_path)["Valve Log 29103"]
+    import export_valve_to_pdf
+    col_map = export_valve_to_pdf.load_column_map(out_ws)
+    assert out_ws.cell(row=row, column=col_map["equip_number"]).value == "29103-PV-0001"
+    assert out_ws.cell(row=row, column=col_map["valve_serial"]).value == "VS-001"
+
+
+def test_valve_duplicate_serials_are_flagged(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    r1 = da.find_first_blank_row(29103, "valve")
+    da.save_row(29103, "valve", r1, {"equip_number": "29103-PV-0001", "valve_serial": "VS-DUP"})
+    r2 = da.find_first_blank_row(29103, "valve")
+    da.save_row(29103, "valve", r2, {"equip_number": "29103-PV-0002", "valve_serial": "VS-DUP"})
+
+    plan = da.build_cleanup_plan()
+    dup_flags = [f for f in plan["flags"] if f["equip_key"] == "valve" and "Duplicate serial" in f["detail"]]
+    assert {f["row"] for f in dup_flags} == {r1, r2}
