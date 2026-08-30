@@ -393,6 +393,16 @@ def _submitted_row_color():
     return QColor("#6b551f") if theme == "dark" else QColor("#f5dd8f")
 
 
+def _validation_warning_color():
+    """Background for a single CELL (not a whole row) flagged by Phase
+    13.5's warn-don't-block checks - a distinct orange, not the amber used
+    for Submitted-row status, so the two visually different meanings
+    (this cell's value looks off vs. this row's overall status) never get
+    confused when both happen to color something in the same row."""
+    theme = da.get_setting("theme") or "light"
+    return QColor("#6b3d1f") if theme == "dark" else QColor("#f7c99a")
+
+
 def row_status_color(entry):
     """The single row-status color rule used everywhere a Row # cell is
     painted: Accepted wins over Submitted, Submitted colors it if Accepted
@@ -1835,7 +1845,18 @@ class IndexPage(QWidget):
 
             for c, fid in enumerate(self.etype["summary_fields"], start=1):
                 val = str(entry.get(fid) or "")
-                self.table.setItem(r, c, QTableWidgetItem(val))
+                item = QTableWidgetItem(val)
+                if fid == self.etype["key_field"]:
+                    # Phase 13.5 - warn, don't block: a malformed tag shape
+                    # still saves and still displays; this is purely a
+                    # visual nudge to double-check it, recomputed fresh
+                    # every reload rather than a one-shot toast, so it
+                    # also catches anything already in the workbook.
+                    warning = da.tag_shape_warning(val)
+                    if warning:
+                        item.setBackground(_validation_warning_color())
+                        item.setToolTip(warning)
+                self.table.setItem(r, c, item)
 
             for c, fid in enumerate(date_fields, start=1 + n_summary):
                 val = str(entry.get(fid) or "")
@@ -2930,7 +2951,30 @@ class EditDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Couldn't save", str(exc))
             return
+
+        self._warn_dont_block(key_value, values)
         self.accept()
+
+    def _warn_dont_block(self, key_value, values):
+        """Phase 13.5 - advisory checks only, run AFTER the save above
+        already succeeded, so nothing here can ever prevent or undo the
+        save - they only tell the user something's worth a second look."""
+        warnings = []
+        tag_warning = da.tag_shape_warning(key_value)
+        if tag_warning:
+            warnings.append(tag_warning)
+
+        serial_field = da.SERIAL_FIELD_BY_KIND.get(self.equip_key)
+        serial_value = values.get(serial_field, "") if serial_field else ""
+        if serial_field and serial_value.strip():
+            dupes = da.find_rows_with_duplicate_serial(
+                self.equip_key, serial_value, exclude_series_row=(self.series_number, self.row_num))
+            if dupes:
+                others = ", ".join(f"{m['key_value']} (series {m['series']})" for m in dupes)
+                warnings.append(f'Serial "{serial_value.strip()}" is also used on: {others}')
+
+        if warnings:
+            QMessageBox.warning(self, "Saved, but worth a look", "\n\n".join(warnings))
 
 
 class SettingsDialog(QDialog):

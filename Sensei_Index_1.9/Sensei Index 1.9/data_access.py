@@ -1683,6 +1683,84 @@ def find_duplicate_row(series_number, equip_key, key_value, exclude_row=None):
 
 
 # ---------------------------------------------------------------------------
+# Phase 13.5 - warn-don't-block validation. Unlike find_duplicate_row()
+# above (a hard block - a shared Tag/Equip # would corrupt the status
+# store), both of these are advisory: the value is saved regardless of
+# what they return, they only tell the caller something's worth a second
+# look.
+# ---------------------------------------------------------------------------
+TAG_SHAPE_RE = re.compile(r"^[A-Za-z0-9]+-[A-Za-z]+-[A-Za-z0-9]+$")
+
+
+def tag_shape_warning(key_value):
+    """None if key_value looks like AREA-TYPE-NUMBER (e.g.
+    '29103-PIT-2171'); otherwise a short human-readable string. A blank
+    value is out of scope here - that's find_duplicate_row/the required-
+    field check's job, both of which DO block."""
+    value = (key_value or "").strip()
+    if not value or TAG_SHAPE_RE.match(value):
+        return None
+    return (f"“{value}” doesn't look like AREA-TYPE-NUMBER "
+            f"(e.g. 29103-PIT-2171) - saved anyway.")
+
+
+# Only the kind's single, primary identifying serial is checked - the
+# common real case (one instrument, one serial). Transmitter has exactly
+# one serial field; a valve's several component serials (actuator/
+# positioner/solenoid/position_limit) are excluded from this check since
+# those are frequently, legitimately reused parts across different valves.
+SERIAL_FIELD_BY_KIND = {"transmitter": "serial_number", "valve": "valve_serial"}
+
+
+def find_rows_with_duplicate_serial(equip_key, serial_value, exclude_series_row=None):
+    """Every {'series', 'row', 'key_value'} across ALL registered series of
+    this equipment kind whose primary serial field matches serial_value
+    (case/space-insensitive) - a duplicate physical serial number is
+    almost always a data-entry mistake (the same instrument entered
+    twice, or two different ones sharing a typo'd serial), but never
+    blocks a save the way a duplicate Tag does. exclude_series_row:
+    (series_number, row_num) of the row being saved, so it never flags
+    itself. A blank serial never counts as a duplicate of another blank
+    one - reads every row's serial in ONE pass per series (reusing the
+    header-derived column map), not a read_full_row() call per row."""
+    field = SERIAL_FIELD_BY_KIND.get(equip_key)
+    if not field:
+        return []
+    target = _normalize_for_compare(serial_value)
+    if not target:
+        return []
+
+    etype = EQUIPMENT_TYPES[equip_key]
+    export_mod = etype["export_module"]
+    key_field = etype["key_field"]
+    matches = []
+    for series_number in list_series():
+        try:
+            sheet_name = get_sheet_name(series_number, equip_key)
+        except KeyError:
+            continue
+        wb = _get_cached_workbook(data_only=False)
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        field_to_col = export_mod.load_column_map(ws)
+        serial_col = field_to_col.get(field)
+        key_col = field_to_col.get(key_field)
+        if not serial_col or not key_col:
+            continue
+        for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
+            if exclude_series_row == (series_number, r):
+                continue
+            raw_serial = export_mod.cell_to_str(ws.cell(row=r, column=serial_col).value)
+            if _normalize_for_compare(raw_serial) != target:
+                continue
+            key_val = export_mod.cell_to_str(ws.cell(row=r, column=key_col).value)
+            if key_val:
+                matches.append({"series": series_number, "row": r, "key_value": key_val})
+    return matches
+
+
+# ---------------------------------------------------------------------------
 # By-system breakdown, aggregated across every series - powers the Main
 # Menu's dashboard (which otherwise only had one grand total per type).
 # ---------------------------------------------------------------------------
