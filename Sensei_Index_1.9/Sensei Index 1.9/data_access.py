@@ -36,6 +36,13 @@ import transmitter_schema
 import valve_schema
 import export_to_pdf
 import export_valve_to_pdf
+import master_list_reader
+# Re-exported here (not duplicated) so Phase 6 and any other caller finds
+# these where the v2.1 spec says to look for them - data_access.py - while
+# the actual implementation lives in master_list_reader.py, which has no
+# dependency on this module (avoids a circular import: this module needs
+# master_list_reader for the parser itself, further down).
+from master_list_reader import canonical_tag, parse_area_code, classify_kind  # noqa: F401
 
 # When PyInstaller freezes this into a single .exe, __file__ points inside a
 # temporary extraction folder (sys._MEIPASS) that's deleted when the app
@@ -798,6 +805,125 @@ def clear_wizard_draft():
         DRAFTS_PATH.unlink()
     except FileNotFoundError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Phase 10 - Master List import engine.
+#
+# master_list.json is a normalized SNAPSHOT of the last-imported
+# Instrumentation_Master_List.xlsx - read-only reference data. The app
+# never writes back into the user's copy of that workbook; every write
+# here only ever touches master_list.json next to the app, same as any
+# other sidecar.
+# ---------------------------------------------------------------------------
+MASTER_LIST_PATH = HERE / "master_list.json"
+
+
+def load_master_list():
+    """The last-imported snapshot, or None if nothing has ever been
+    imported (or the snapshot was corrupt and got reset - see
+    read_json_with_recovery, which already queues the STARTUP_WARNINGS
+    entry for that case). Callers should treat None exactly like "no
+    master list" - Coverage's empty state, search's empty master-list
+    group, etc."""
+    return read_json_with_recovery(MASTER_LIST_PATH, None)
+
+
+def save_master_list(data):
+    write_json_atomic(MASTER_LIST_PATH, data)
+
+
+def preview_master_list(path):
+    """Read-only parse of a candidate master list file for the import
+    dialog's step 1 - writes nothing. Returns (items_by_sheet, summaries),
+    exactly master_list_reader.read_master_list_file()'s return. A thin
+    pass-through kept here (rather than gui_app.py importing
+    master_list_reader directly) so gui_app.py keeps calling data_access
+    for every data operation, per this module's own design contract."""
+    return master_list_reader.read_master_list_file(path)
+
+
+def guess_master_list_series_mapping(sheet_names):
+    """{sheet_name: series_number or None} pre-guessed against this app's
+    OWN registered series numbers (finding 1.8) - the import dialog's
+    step 2 starting point, always still a user-editable combo per sheet."""
+    return master_list_reader.guess_series_mapping(sheet_names, list_series())
+
+
+def import_master_list(path, sheet_series_map):
+    """Parses the given .xlsx (master_list_reader.read_master_list_file),
+    stamps every item with its sheet's mapped series number from
+    sheet_series_map ({sheet_name: series_number_or_None} - None for a
+    sheet the user left unmapped, finding 1.8), and atomically writes
+    master_list.json - fully REPLACING whatever snapshot was there before
+    (re-importing is idempotent: it never accumulates stale rows from an
+    earlier version of the source file). Also remembers the path in
+    app_settings.json (master_list_path) for one-click re-import.
+
+    Returns (snapshot, summaries): snapshot is exactly what got saved;
+    summaries is the parser's per-sheet list (rows found, transmitter/
+    valve/out_of_scope counts, problems) for the import dialog's step-1
+    review table."""
+    items_by_sheet, summaries = master_list_reader.read_master_list_file(path)
+
+    items = []
+    for sheet_name, sheet_items in items_by_sheet.items():
+        mapped_series = sheet_series_map.get(sheet_name)
+        for item in sheet_items:
+            item = dict(item)
+            item["mapped_series"] = mapped_series
+            items.append(item)
+
+    source_path = Path(path)
+    snapshot = {
+        "imported_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "source_file": source_path.name,
+        "source_mtime": source_path.stat().st_mtime,
+        "sheet_series_map": dict(sheet_series_map),
+        "items": items,
+    }
+    save_master_list(snapshot)
+    set_setting("master_list_path", str(source_path))
+    return snapshot, summaries
+
+
+def master_list_items(kind=None, area=None, series=None):
+    """Filtered view over the last imported master list. [] if nothing has
+    been imported yet. `series` filters on mapped_series (a sheet's
+    confirmed target series number, not the raw sheet name)."""
+    snapshot = load_master_list()
+    if not snapshot:
+        return []
+    items = snapshot.get("items", [])
+    if kind is not None:
+        items = [it for it in items if it.get("kind") == kind]
+    if area is not None:
+        items = [it for it in items if it.get("area") == area]
+    if series is not None:
+        items = [it for it in items if it.get("mapped_series") == series]
+    return items
+
+
+def master_list_needs_reimport():
+    """True when app_settings.json remembers a master_list_path, that file
+    still exists on disk, and its mtime is newer than what's recorded in
+    the last-saved snapshot - powers the Coverage page's 'Master list has
+    changed on disk - re-import?' banner (10.4/11.2). False (never
+    crashes) if nothing's ever been imported, or the remembered path is
+    gone."""
+    remembered_path = get_setting("master_list_path")
+    if not remembered_path:
+        return False
+    source_path = Path(remembered_path)
+    if not source_path.exists():
+        return False
+    snapshot = load_master_list()
+    if not snapshot:
+        return False
+    try:
+        return source_path.stat().st_mtime > snapshot.get("source_mtime", 0)
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------

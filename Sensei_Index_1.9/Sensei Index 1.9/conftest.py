@@ -76,6 +76,11 @@ def isolated_app_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(da, "SETTINGS_PATH", tmp_path / "app_settings.json", raising=False)
     monkeypatch.setattr(da, "STATUS_PATH", tmp_path / "equipment_status.json", raising=False)
     monkeypatch.setattr(da, "DRAFTS_PATH", tmp_path / "wizard_draft.json", raising=False)
+    monkeypatch.setattr(da, "MASTER_LIST_PATH", tmp_path / "master_list.json", raising=False)
+    monkeypatch.setattr(da, "UI_STATE_PATH", tmp_path / "ui_state.json", raising=False)
+    monkeypatch.setattr(da, "ACTIVITY_LOG_PATH", tmp_path / "activity_log.jsonl", raising=False)
+    monkeypatch.setattr(da, "BACKUPS_DIR", tmp_path / "backups", raising=False)
+    monkeypatch.setattr(da, "REPORTS_DIR", tmp_path / "reports", raising=False)
     da.invalidate_workbook_cache()
 
     yield tmp_path, da

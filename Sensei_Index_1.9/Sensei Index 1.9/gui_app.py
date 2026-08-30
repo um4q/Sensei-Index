@@ -491,6 +491,12 @@ class MainWindow(QMainWindow):
         datasheet_btn.clicked.connect(self.open_datasheet_import)
         layout.addWidget(datasheet_btn)
 
+        master_list_btn = make_button("\U0001F4CB  Master List...", "SidebarFooterButton")
+        master_list_btn.setToolTip("Import the client's Instrumentation Master List "
+                                    "for coverage tracking (Coverage, in the sidebar)")
+        master_list_btn.clicked.connect(self.open_master_list_import)
+        layout.addWidget(master_list_btn)
+
         drive_btn = make_button("\u2601  Connect to Drive", "SidebarFooterButton")
         drive_btn.setToolTip("Cloud backup / sync - not built yet")
         drive_btn.clicked.connect(self.connect_to_drive)
@@ -714,6 +720,14 @@ class MainWindow(QMainWindow):
         dlg.exec()
         self.refresh_sidebar_and_dashboard()
         self.refresh_current_view()
+
+    def open_master_list_import(self):
+        dlg = MasterListImportDialog(self, self)
+        dlg.exec()
+        self.refresh_sidebar_and_dashboard()
+        page = self.current_dynamic_page
+        if isinstance(page, CoveragePage):
+            page.reload()
 
     def show_instructions(self):
         dlg = QDialog(self)
@@ -3097,6 +3111,257 @@ class DatasheetImportDialog(QDialog):
             mw.refresh_current_view()
 
         mw.undo_stack.push(f"import {tag} (row {row_num})", do_undo, do_redo)
+
+
+class MasterListImportDialog(QDialog):
+    """Sensei Index 2.1, Phase 10.4 - three steps: pick file & review what
+    the parser found (read-only so far), confirm which registered series
+    each sheet maps to, then Import. Nothing is written until the final
+    Import click on step 3 - and even then, only master_list.json changes.
+    This never touches Instrumentation_Master_List.xlsx (read-only
+    reference data) or Equipment_Inspection_Tracker.xlsx at all."""
+
+    STEP_TITLES = ["1. Choose file", "2. Map sheets to series", "3. Import"]
+
+    def __init__(self, parent, main_window):
+        super().__init__(parent)
+        self.main_window = main_window
+        self.setWindowTitle("Import Master List")
+        self.resize(820, 600)
+
+        self.file_path = None
+        self.items_by_sheet = None
+        self.summaries = None
+        self.sheet_series_map = {}
+        self.series_combos = {}
+
+        outer = QVBoxLayout(self)
+        header = QLabel("Import Master List")
+        header.setObjectName("PageTitle")
+        header.setContentsMargins(20, 16, 20, 0)
+        outer.addWidget(header)
+        self.step_label = QLabel()
+        self.step_label.setObjectName("FieldLabel")
+        self.step_label.setContentsMargins(20, 0, 20, 6)
+        outer.addWidget(self.step_label)
+
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack, stretch=1)
+        self.stack.addWidget(self._build_step1())
+        self.stack.addWidget(self._build_step2())
+        self.stack.addWidget(self._build_step3())
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(20, 0, 20, 16)
+        self.back_btn = make_button("← Back", "Ghost")
+        self.back_btn.clicked.connect(self._go_back)
+        footer.addWidget(self.back_btn)
+        footer.addStretch()
+        cancel_btn = make_button("Cancel", "Ghost")
+        cancel_btn.clicked.connect(self.reject)
+        footer.addWidget(cancel_btn)
+        self.next_btn = make_button("Next →", "Primary")
+        self.next_btn.clicked.connect(self._go_next)
+        footer.addWidget(self.next_btn)
+        outer.addLayout(footer)
+
+        remembered = da.get_setting("master_list_path")
+        if remembered:
+            self.path_edit.setText(remembered)
+
+        self._refresh_step()
+
+    # ------------------------------------------------------------- step 1
+    def _build_step1(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 0, 20, 0)
+
+        intro = QLabel(
+            "Pick the client's Instrumentation Master List workbook. It's read-only "
+            "reference data - this app never writes anything back into it.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        file_row = QHBoxLayout()
+        self.path_edit = QLineEdit()
+        self.path_edit.setReadOnly(True)
+        self.path_edit.setPlaceholderText("No file chosen")
+        file_row.addWidget(self.path_edit, stretch=1)
+        browse_btn = make_button("Browse...", "Ghost")
+        browse_btn.clicked.connect(self._browse_file)
+        file_row.addWidget(browse_btn)
+        layout.addLayout(file_row)
+
+        self.summary_table = QTableWidget(0, 6)
+        self.summary_table.setHorizontalHeaderLabels(
+            ["Sheet", "Rows Found", "Transmitters", "Valves", "Out of Scope", "Problems"])
+        self.summary_table.horizontalHeader().setStretchLastSection(True)
+        self.summary_table.verticalHeader().setVisible(False)
+        self.summary_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.summary_table, stretch=1)
+
+        return page
+
+    def _browse_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose Instrumentation Master List", "", "Excel files (*.xlsx)")
+        if not path:
+            return
+        try:
+            items_by_sheet, summaries = da.preview_master_list(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't read that file", str(exc))
+            return
+
+        self.file_path = path
+        self.items_by_sheet = items_by_sheet
+        self.summaries = summaries
+        self.path_edit.setText(path)
+        self._populate_summary_table()
+        self.sheet_series_map = {}  # a new file invalidates any prior mapping
+        self._rebuild_step2()
+        self._refresh_step()
+
+    def _populate_summary_table(self):
+        self.summary_table.setRowCount(len(self.summaries))
+        for r, summary in enumerate(self.summaries):
+            values = [
+                summary["sheet_name"], str(summary["rows_found"]),
+                str(summary["transmitter"]), str(summary["valve"]),
+                str(summary["out_of_scope"]),
+                "; ".join(summary["problems"]) if summary["problems"] else "",
+            ]
+            for c, text in enumerate(values):
+                item = QTableWidgetItem(text)
+                if c == 5 and text:
+                    item.setForeground(QColor("#B45309"))
+                self.summary_table.setItem(r, c, item)
+        self.summary_table.resizeColumnsToContents()
+        self.summary_table.horizontalHeader().setStretchLastSection(True)
+
+    # ------------------------------------------------------------- step 2
+    def _build_step2(self):
+        page = QWidget()
+        self.step2_layout = QVBoxLayout(page)
+        self.step2_layout.setContentsMargins(20, 0, 20, 0)
+
+        intro = QLabel(
+            "Confirm which of your registered series each sheet's tag numbers belong "
+            "to. A guessed match costs nothing to double-check; a sheet with no obvious "
+            "match (like a sheet named after an area code that isn't one of your series "
+            "numbers) is left for you to pick, or to leave unmapped.")
+        intro.setWordWrap(True)
+        self.step2_layout.addWidget(intro)
+
+        self.step2_form_host = QWidget()
+        self.step2_form = QFormLayout(self.step2_form_host)
+        self.step2_layout.addWidget(self.step2_form_host)
+        self.step2_layout.addStretch()
+        return page
+
+    def _rebuild_step2(self):
+        while self.step2_form.rowCount():
+            self.step2_form.removeRow(0)
+        self.series_combos = {}
+        if not self.summaries:
+            return
+
+        sheet_names = [s["sheet_name"] for s in self.summaries]
+        guesses = da.guess_master_list_series_mapping(sheet_names)
+        all_series = da.list_series()
+
+        for sheet_name in sheet_names:
+            combo = QComboBox()
+            combo.addItem("— none —", None)
+            selected_index = 0
+            for i, series_number in enumerate(all_series, start=1):
+                combo.addItem(da.series_display_label(series_number), series_number)
+                if guesses.get(sheet_name) == series_number:
+                    selected_index = i
+            combo.setCurrentIndex(selected_index)
+            self.series_combos[sheet_name] = combo
+            self.step2_form.addRow(sheet_name, combo)
+
+    # ------------------------------------------------------------- step 3
+    def _build_step3(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 0, 20, 0)
+        self.step3_summary = QLabel()
+        self.step3_summary.setWordWrap(True)
+        layout.addWidget(self.step3_summary)
+        layout.addStretch()
+        return page
+
+    def _refresh_step3_summary(self):
+        if not self.summaries:
+            self.step3_summary.setText("")
+            return
+        self.sheet_series_map = {
+            sheet_name: combo.currentData() for sheet_name, combo in self.series_combos.items()
+        }
+        total = sum(s["rows_found"] for s in self.summaries)
+        trans = sum(s["transmitter"] for s in self.summaries)
+        valves = sum(s["valve"] for s in self.summaries)
+        oos = sum(s["out_of_scope"] for s in self.summaries)
+        lines = [
+            f"About to import {total} row(s) across {len(self.summaries)} sheet(s): "
+            f"{trans} transmitter(s), {valves} valve(s), {oos} out-of-scope item(s) "
+            "(kept, shown collapsed in Coverage).",
+            "",
+            "Sheet → series:",
+        ]
+        for sheet_name, series_number in self.sheet_series_map.items():
+            target = da.series_display_label(series_number) if series_number is not None else "(unmapped)"
+            lines.append(f"  • {sheet_name} → {target}")
+        lines.append("")
+        lines.append(
+            "This only writes master_list.json next to the app. Your Instrumentation "
+            "Master List file and your tracker workbook are both untouched.")
+        self.step3_summary.setText("\n".join(lines))
+
+    # --------------------------------------------------------- navigation
+    def _refresh_step(self):
+        index = self.stack.currentIndex()
+        self.step_label.setText(self.STEP_TITLES[index])
+        self.back_btn.setEnabled(index > 0)
+        has_parsed = self.items_by_sheet is not None
+        if index == 0:
+            self.next_btn.setText("Next →")
+            self.next_btn.setEnabled(has_parsed)
+        elif index == 1:
+            self.next_btn.setText("Next →")
+            self.next_btn.setEnabled(True)
+        else:
+            self.next_btn.setText("Import")
+            self.next_btn.setEnabled(True)
+
+    def _go_back(self):
+        self.stack.setCurrentIndex(max(0, self.stack.currentIndex() - 1))
+        self._refresh_step()
+
+    def _go_next(self):
+        index = self.stack.currentIndex()
+        if index == 2:
+            self._run_import()
+            return
+        if index == 1:
+            self._refresh_step3_summary()
+        self.stack.setCurrentIndex(index + 1)
+        self._refresh_step()
+
+    def _run_import(self):
+        try:
+            snapshot, summaries = da.import_master_list(self.file_path, self.sheet_series_map)
+        except Exception as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
+            return
+        QMessageBox.information(
+            self, "Master list imported",
+            f"Imported {len(snapshot['items'])} row(s) from {snapshot['source_file']}.\n\n"
+            "Open Coverage from the sidebar to see what's matched, missing, or flagged.")
+        self.accept()
 
 
 class PopulatingWizardDialog(QDialog):
