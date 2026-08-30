@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# App-generated / local-only (this app writes these next to the workbook)
+Sensei_Index_1.9/Sensei Index 1.9/backups/
+Sensei_Index_1.9/Sensei Index 1.9/reports/
+Sensei_Index_1.9/Sensei Index 1.9/output_pdfs/
+Sensei_Index_1.9/Sensei Index 1.9/temp_previews/*.pdf
