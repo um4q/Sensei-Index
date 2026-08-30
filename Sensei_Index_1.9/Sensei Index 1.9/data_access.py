@@ -927,6 +927,47 @@ def master_list_needs_reimport():
 
 
 # ---------------------------------------------------------------------------
+# Phase 13.3 - sticky per-user IndexPage view state: last sort column/
+# order, active filter chip, and (for the columns a user can actually
+# resize - see gui_app.py) column widths. Keyed by "<series>:<equip_key>"
+# so each series+type page remembers its own state independently.
+# ---------------------------------------------------------------------------
+UI_STATE_PATH = HERE / "ui_state.json"
+
+
+def _ui_state_page_key(series_number, equip_key):
+    return f"{series_number}:{equip_key}"
+
+
+def load_ui_state():
+    return read_json_with_recovery(UI_STATE_PATH, dict)
+
+
+def save_ui_state(data):
+    write_json_atomic(UI_STATE_PATH, data)
+
+
+def get_page_view_state(series_number, equip_key):
+    """{} if this page has never saved any view state - callers apply
+    whatever keys are present and fall back to their own defaults for
+    whatever's missing, never crash on a partial or absent entry."""
+    state = load_ui_state()
+    return state.get(_ui_state_page_key(series_number, equip_key), {})
+
+
+def set_page_view_state(series_number, equip_key, **fields):
+    """Merges fields into this page's saved state (doesn't require the
+    caller to pass every key every time) and writes the whole store back
+    atomically."""
+    state = load_ui_state()
+    key = _ui_state_page_key(series_number, equip_key)
+    page_state = dict(state.get(key, {}))
+    page_state.update(fields)
+    state[key] = page_state
+    save_ui_state(state)
+
+
+# ---------------------------------------------------------------------------
 # Phase 11 - Coverage / reconciliation.
 #
 # Answers, per area and per equipment kind, which master-list instruments

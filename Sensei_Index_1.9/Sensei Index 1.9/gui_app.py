@@ -1839,7 +1839,7 @@ class IndexPage(QWidget):
         # with, already baked into self.all_rows by reload()) - all three
         # narrow down together, never replace one another.
         chip_row = QHBoxLayout()
-        self.chips = FilterChipBar(INDEX_CHIP_OPTIONS, on_change=lambda _id: self.apply_filter())
+        self.chips = FilterChipBar(INDEX_CHIP_OPTIONS, on_change=self._on_chip_changed)
         chip_row.addWidget(self.chips)
         chip_row.addStretch()
         layout.addLayout(chip_row)
@@ -1869,9 +1869,20 @@ class IndexPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         for i in range(1, 1 + n_summary):
             self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch)
-        for i in range(1 + n_summary, len(self.columns)):
+        # Phase 13.3 - date columns are the ones a user can actually
+        # resize by hand (Interactive, not Fixed) - Row # auto-sizes to
+        # its content and the summary columns auto-fill via Stretch, so
+        # neither has a meaningful manual "width preference" to remember;
+        # the narrow status checkbox columns stay Fixed on purpose (no
+        # reason to let those get dragged skinny/wide). Sticky column-
+        # width persistence (_restore_view_state/_save_view_state below)
+        # is scoped to exactly the columns this makes resizable.
+        for i in range(1 + n_summary, 1 + n_summary + n_dates):
+            self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Interactive)
+            self.table.setColumnWidth(i, 118)
+        for i in range(1 + n_summary + n_dates, len(self.columns)):
             self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Fixed)
-            self.table.setColumnWidth(i, 118 if i < 1 + n_summary + n_dates else 92)
+            self.table.setColumnWidth(i, 92)
         self.table.verticalHeader().setVisible(False)
 
         # Phase 13.4 - date columns edit through a calendar picker instead
@@ -1887,6 +1898,14 @@ class IndexPage(QWidget):
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         layout.addWidget(self.table, stretch=1)
         self._setup_frozen_columns()
+
+        # Phase 13.3 - sticky per-page view state (sort, active chip,
+        # resizable-column widths). _restoring_view_state guards against
+        # the programmatic changes below (sortByColumn, setColumnWidth,
+        # chips.set_active) re-triggering a save of what was just loaded.
+        self._restoring_view_state = True
+        self.table.horizontalHeader().sortIndicatorChanged.connect(self._save_view_state)
+        self.table.horizontalHeader().sectionResized.connect(self._save_view_state)
 
         # Phase 13.7 - empty state: a series+type with literally zero rows
         # (not just zero after a search/chip/filter narrows it down - see
@@ -1905,8 +1924,60 @@ class IndexPage(QWidget):
         layout.addWidget(tip)
 
         self.reload()
-        self.table.sortByColumn(0, Qt.AscendingOrder)
+        self._restore_view_state()
+        self._restoring_view_state = False
         self.search_edit.setFocus()
+
+    def _on_chip_changed(self, _chip_id):
+        self.apply_filter()
+        self._save_view_state()
+
+    def _restore_view_state(self):
+        """Applies whatever this page's ui_state.json entry has - missing
+        keys fall back to the same defaults the page always had (sort by
+        Row # ascending, chip 'all', default column widths). Never
+        crashes on a stale/malformed entry (e.g. a saved sort_field this
+        version of the schema no longer has)."""
+        state = da.get_page_view_state(self.series_number, self.equip_key)
+
+        chip_id = state.get("chip")
+        if chip_id and chip_id in dict(INDEX_CHIP_OPTIONS):
+            self.chips.set_active(chip_id)
+            self.apply_filter()
+
+        for fid, width in (state.get("column_widths") or {}).items():
+            if fid in self.columns:
+                self.table.setColumnWidth(self.columns.index(fid), int(width))
+
+        sort_field = state.get("sort_field")
+        sort_order = Qt.DescendingOrder if state.get("sort_order") == "desc" else Qt.AscendingOrder
+        sort_col = self.columns.index(sort_field) if sort_field in self.columns else 0
+        self.table.sortByColumn(sort_col, sort_order)
+
+    def _save_view_state(self, *_args):
+        """Connected to sortIndicatorChanged and sectionResized - both
+        pass signal-specific args this doesn't need, hence *_args. No-ops
+        while _restore_view_state() above is applying a just-loaded state
+        (its own sortByColumn/setColumnWidth calls fire these same
+        signals - without this guard, restoring would immediately
+        re-save, harmlessly but pointlessly, and could truncate a wider
+        column's stored width if a resize event fires mid-restore)."""
+        if getattr(self, "_restoring_view_state", False):
+            return
+        header = self.table.horizontalHeader()
+        sort_col = header.sortIndicatorSection()
+        sort_field = self.columns[sort_col] if 0 <= sort_col < len(self.columns) else None
+        widths = {
+            self.columns[i]: self.table.columnWidth(i)
+            for i in range(1 + self._n_summary, 1 + self._n_summary + self._n_dates)
+        }
+        da.set_page_view_state(
+            self.series_number, self.equip_key,
+            chip=self.chips.active_id,
+            sort_field=sort_field,
+            sort_order="desc" if header.sortIndicatorOrder() == Qt.DescendingOrder else "asc",
+            column_widths=widths,
+        )
 
     def _build_empty_state(self):
         page = QWidget()
