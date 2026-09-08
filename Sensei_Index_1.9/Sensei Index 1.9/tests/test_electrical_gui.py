@@ -179,6 +179,41 @@ def test_main_window_add_zone_flow_and_sidebar_tree(qtbot, isolated_app_dir, mon
     assert zone_item.childCount() == 2  # eht_removal + eht_rtd
 
 
+def test_instrumentation_only_shortcuts_are_gated_while_electrical_is_active(
+        qtbot, isolated_app_dir, monkeypatch):
+    """Search (Ctrl+K), Populating Wizard (Ctrl+Shift+W), and Datasheet
+    Import (Ctrl+Shift+I) are reachable via keyboard shortcut even though
+    their sidebar buttons are hidden on the Electrical domain - each must
+    refuse to open its (Instrumentation-only) dialog while active, not
+    just hide its button. Search matters most: opening a result used to
+    desync active_domain from the page actually on screen."""
+    tmp_path, da = isolated_app_dir
+    opened = []
+    monkeypatch.setattr(gui_app, "GlobalSearchDialog",
+                         lambda *a, **k: opened.append("search") or _StubExecDialog())
+    monkeypatch.setattr(gui_app, "PopulatingWizardDialog",
+                         lambda *a, **k: opened.append("wizard") or _StubExecDialog())
+    monkeypatch.setattr(gui_app, "QFileDialog",
+                         type("F", (), {"getOpenFileNames": staticmethod(lambda *a, **k: ([], ""))}))
+
+    win = gui_app.MainWindow()
+    qtbot.addWidget(win)
+    win._switch_domain("electrical")
+
+    win.open_global_search()
+    win.open_populating_wizard()
+    win.open_datasheet_import()  # would call QFileDialog.getOpenFileNames if not gated
+
+    assert opened == []
+    assert win.active_domain == "electrical"  # never desynced
+    assert isinstance(win.current_dynamic_page, gui_app.ElectricalDashboardPage)
+
+
+class _StubExecDialog:
+    def exec(self):
+        return gui_app.QDialog.Rejected
+
+
 def test_switching_to_electrical_never_touches_instrumentation_workbook(qtbot, isolated_app_dir):
     tmp_path, da = isolated_app_dir
     before = da.WORKBOOK_PATH.read_bytes()

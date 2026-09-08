@@ -104,6 +104,31 @@ def test_remove_only_zone_does_not_crash_on_zero_visible_sheets(isolated_app_dir
     assert any(ws.sheet_state == "visible" for ws in wb.worksheets)
 
 
+def test_two_different_zone_names_that_truncate_the_same_do_not_collide(isolated_app_dir):
+    """Two DIFFERENT zone names sharing the same first ~17/21 characters
+    truncate to the identical sheet name - add_zone()'s own "does this
+    exact zone name already exist" check doesn't catch that (it compares
+    full names, not truncated ones), so _sheet_name_for_zone() itself must
+    resolve the collision transparently rather than raise a confusing
+    error naming a sheet the user never typed."""
+    tmp_path, da = isolated_app_dir
+    zone1 = "12345678901234567890AAAA"
+    zone2 = "12345678901234567890BBBB"  # same first 21 chars as zone1
+    entry1 = eda.add_zone(zone1)
+    entry2 = eda.add_zone(zone2)  # must NOT raise
+    assert entry1["eht_removal_sheet"] != entry2["eht_removal_sheet"]
+    assert eda.list_zones() == sorted([zone1, zone2])
+
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry1["eht_removal_sheet"] in wb.sheetnames
+    assert entry2["eht_removal_sheet"] in wb.sheetnames
+
+    # each zone's rows land on ITS OWN sheet, not the other's
+    row1 = eda.find_first_blank_row(zone1, "eht_removal")
+    eda.save_row(zone1, "eht_removal", row1, {"trace_tag": "ZONE1-TAG"})
+    assert eda.read_index_rows(zone2, "eht_removal") == []
+
+
 def test_remove_and_readd_zone_cycle_keeps_workbook_valid(isolated_app_dir):
     """A full remove-then-add-again cycle (a common 'oops, undo that'
     workflow) must leave the workbook in a normal, loadable state, with

@@ -862,9 +862,12 @@ class MainWindow(QMainWindow):
 
         # Instrumentation-only (v2.1 features not built for Electrical yet -
         # hidden rather than shown-but-misleadingly-cross-wired while the
-        # Electrical dashboard is active).
+        # Electrical dashboard is active). search_btn is included: its
+        # results (da.search_index()) are entirely Instrumentation rows,
+        # and navigating to one from the Electrical domain used to leave
+        # active_domain desynced from the page actually on screen.
         self._instrumentation_only_footer_buttons = [
-            add_series_btn, wizard_btn, datasheet_btn, master_list_btn, drive_btn,
+            search_btn, add_series_btn, wizard_btn, datasheet_btn, master_list_btn, drive_btn,
         ]
 
         settings_btn = make_button("\u2699  Settings", "SidebarFooterButton")
@@ -1153,11 +1156,21 @@ class MainWindow(QMainWindow):
         BackupsDialog(self).exec()
 
     def open_populating_wizard(self):
+        if self.active_domain == "electrical":
+            # Reachable via the Ctrl+Shift+W shortcut even though the
+            # sidebar button is hidden on this domain - it's Instrumentation-
+            # only (populates a series' Transmitter/Valve rows), so guard
+            # here too rather than only at the button.
+            self.statusBar().showMessage("Populating Wizard is Instrumentation-only.", 3000)
+            return
         dlg = PopulatingWizardDialog(self, self)
         dlg.exec()
         self.refresh_sidebar_and_dashboard()
 
     def open_datasheet_import(self):
+        if self.active_domain == "electrical":
+            self.statusBar().showMessage("Datasheet Import is Instrumentation-only.", 3000)
+            return
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Import from Datasheet PDF(s)", "", "PDF files (*.pdf)")
         if not paths:
@@ -1191,6 +1204,15 @@ class MainWindow(QMainWindow):
             page.reload()
 
     def open_global_search(self):
+        if self.active_domain == "electrical":
+            # Reachable via Ctrl+K even though the sidebar button is
+            # hidden on this domain - its results are entirely
+            # Instrumentation rows (da.search_index()), and jumping to one
+            # would leave active_domain desynced from the page actually on
+            # screen (the Electrical sidebar tree staying up while an
+            # Instrumentation IndexPage is showing).
+            self.statusBar().showMessage("Search is Instrumentation-only right now.", 3000)
+            return
         GlobalSearchDialog(self, self).exec()
 
     def show_instructions(self):

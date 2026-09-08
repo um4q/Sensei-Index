@@ -209,14 +209,21 @@ def get_sheet_name(zone_name, equip_key):
     raise KeyError(f"Zone '{zone_name}' is not in {ELECTRICAL_CONFIG_PATH.name}")
 
 
-def _sheet_name_for_zone(equip_key, zone_name):
+def _sheet_name_for_zone(equip_key, zone_name, wb):
     """A sheet name under Excel's hard 31-character limit, distinct per
     equipment type - collision-suffixed like _archived_sheet_name() in
-    data_access.py, in the rare case two zone names truncate to the same
-    thing."""
+    data_access.py whenever two DIFFERENT zone names truncate to the same
+    thing (the caller's own "does this exact zone name already exist"
+    check doesn't catch that - it compares full zone names, not truncated
+    sheet names)."""
     prefix = SHEET_NAME_PREFIXES[equip_key]
     budget = 31 - len(prefix) - 3  # " - "
     candidate = f"{prefix} - {zone_name[:budget]}"
+    base, n = candidate, 2
+    while candidate in wb.sheetnames:
+        suffix = f" ({n})"
+        candidate = base[:31 - len(suffix)] + suffix
+        n += 1
     return candidate
 
 
@@ -239,8 +246,11 @@ def add_zone(zone_name):
     """Registers a brand-new zone and creates both its Log sheets from
     scratch (there's no existing zone's sheet to copy from the way
     add_series() copies an existing series - see _build_new_sheet). Raises
-    ValueError if the zone (or either resulting sheet name) already
-    exists."""
+    ValueError only if the zone NAME itself already exists - a truncated
+    SHEET name colliding with a different zone's is resolved transparently
+    by _sheet_name_for_zone()'s own suffix loop, never surfaced as an
+    error the user can't act on (they didn't type the sheet name, and a
+    different zone name could just as easily truncate to the same thing)."""
     zone_name = (zone_name or "").strip()
     if not zone_name:
         raise ValueError("Zone name can't be blank.")
@@ -251,13 +261,14 @@ def add_zone(zone_name):
     new_entry = {"name": zone_name}
     with _mutating_workbook() as wb:
         for equip_key, etype in ELECTRICAL_EQUIPMENT_TYPES.items():
-            sheet_name = _sheet_name_for_zone(equip_key, zone_name)
-            if sheet_name in wb.sheetnames:
-                raise ValueError(f"Sheet '{sheet_name}' already exists in the workbook.")
+            sheet_name = _sheet_name_for_zone(equip_key, zone_name, wb)
             _build_new_sheet(wb, sheet_name, etype["schema"].LOG_COLUMNS)
             new_entry[f"{equip_key}_sheet"] = sheet_name
-        if "Zones go here" in wb.sheetnames and len(wb.sheetnames) > 2:
-            del wb["Zones go here"]  # the bootstrap placeholder, once a real zone exists
+        # the bootstrap placeholder is only ever needed when NO real zone
+        # sheet exists yet - once this loop has created one sheet per
+        # registered equipment type, it's always safe to drop.
+        if "Zones go here" in wb.sheetnames and len(wb.sheetnames) > len(ELECTRICAL_EQUIPMENT_TYPES):
+            del wb["Zones go here"]
 
     cfg["zones"].append(new_entry)
     save_config(cfg)
