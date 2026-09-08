@@ -84,9 +84,24 @@ def isolated_app_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(da, "CLEANED_DIR", tmp_path / "cleaned", raising=False)
     da.invalidate_workbook_cache()
 
+    # Electrical is a fully independent domain (its own workbook/registry,
+    # not tied to da.HERE at all) - isolated here too, in the SAME tmp_path,
+    # so any test that touches gui_app.MainWindow (which always constructs
+    # both a da- and an eda-backed dashboard) never risks the real,
+    # checked-in Electrical_Inspection_Tracker.xlsx either.
+    import electrical_data_access as eda
+    monkeypatch.setattr(eda, "ELECTRICAL_WORKBOOK_PATH",
+                         tmp_path / "Electrical_Inspection_Tracker.xlsx", raising=False)
+    monkeypatch.setattr(eda, "ELECTRICAL_CONFIG_PATH",
+                         tmp_path / "electrical_registry.json", raising=False)
+    monkeypatch.setattr(eda, "ELECTRICAL_TEMP_DIR",
+                         tmp_path / "electrical_temp_previews", raising=False)
+    eda.invalidate_workbook_cache()
+
     yield tmp_path, da
 
     da.invalidate_workbook_cache()
+    eda.invalidate_workbook_cache()
 
 
 class FakeMainWindow:
@@ -116,6 +131,12 @@ class FakeMainWindow:
         pass
 
     def show_coverage(self):
+        pass
+
+    def show_electrical_index(self, *a, **k):
+        pass
+
+    def show_electrical_dashboard(self):
         pass
 
     def open_populating_wizard(self):

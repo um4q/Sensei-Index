@@ -21,3 +21,12 @@ Sensei_Index_1.9/Sensei Index 1.9/ui_state.json
 Sensei_Index_1.9/Sensei Index 1.9/activity_log.jsonl
 Sensei_Index_1.9/Sensei Index 1.9/activity_log.*.jsonl
 Sensei_Index_1.9/Sensei Index 1.9/*.corrupt.*
+
+# Electrical domain: brand new, no real client data exists yet - the
+# workbook and registry are created on first use (electrical_data_access.
+# py's _bootstrap_empty_workbook()/add_zone()), same "populated only by
+# runtime use" reasoning as the sidecars above, not pre-seeded like
+# Equipment_Inspection_Tracker.xlsx (which carries real accumulated data).
+Sensei_Index_1.9/Sensei Index 1.9/Electrical_Inspection_Tracker.xlsx
+Sensei_Index_1.9/Sensei Index 1.9/electrical_registry.json
+Sensei_Index_1.9/Sensei Index 1.9/electrical_temp_previews/

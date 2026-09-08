@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 import data_access as da
+import electrical_data_access as eda
 import datasheet_reader
 from theme import LIGHT_QSS, DARK_QSS
 
@@ -614,6 +615,33 @@ def remove_series_flow(parent_widget, series_number):
         QMessageBox.critical(parent_widget, "Couldn't remove series", str(exc))
 
 
+def remove_zone_flow(parent_widget, zone_name):
+    warned = QMessageBox.warning(
+        parent_widget, "Remove zone",
+        f'Remove "{zone_name}"?\n\n'
+        "This un-registers it from the app immediately - it won't show up "
+        "in the Electrical sidebar or dashboard anymore. Its EHT Removal "
+        "and EHT & RTD Inspection sheets are archived (renamed and hidden) "
+        "in the Electrical workbook rather than deleted, so the data "
+        "itself isn't destroyed and a human can still recover it by hand "
+        "in Excel (right-click any sheet tab → Unhide) if this was a mistake.",
+        QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Cancel)
+    if warned != QMessageBox.Ok:
+        return
+    confirm_text, ok = QInputDialog.getText(
+        parent_widget, "Confirm removal", f'Type "{zone_name}" to confirm:')
+    if not ok:
+        return
+    if confirm_text.strip() != zone_name:
+        QMessageBox.information(parent_widget, "Cancelled",
+                                 "Zone was not removed - confirmation text didn't match.")
+        return
+    try:
+        eda.remove_zone(zone_name)
+    except Exception as exc:
+        QMessageBox.critical(parent_widget, "Couldn't remove zone", str(exc))
+
+
 # =============================================================================
 # Main window: sidebar + stacked content
 # =============================================================================
@@ -625,6 +653,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_TITLE)
         self.resize(1560, 820)
         self.undo_stack = UndoManager()
+        self.active_domain = "instrumentation"
 
         central = QWidget()
         central.setAttribute(Qt.WA_StyledBackground, True)
@@ -773,6 +802,17 @@ class MainWindow(QMainWindow):
         subtitle.setObjectName("SidebarSubtitle")
         layout.addWidget(subtitle)
 
+        domain_row = QHBoxLayout()
+        domain_row.setContentsMargins(20, 10, 20, 6)
+        domain_row.setSpacing(6)
+        self.instrumentation_domain_btn = make_button("Instrumentation", "Primary")
+        self.instrumentation_domain_btn.clicked.connect(lambda: self._switch_domain("instrumentation"))
+        domain_row.addWidget(self.instrumentation_domain_btn)
+        self.electrical_domain_btn = make_button("Electrical", "Ghost")
+        self.electrical_domain_btn.clicked.connect(lambda: self._switch_domain("electrical"))
+        domain_row.addWidget(self.electrical_domain_btn)
+        layout.addLayout(domain_row)
+
         self.tree = QTreeWidget()
         self.tree.setObjectName("SidebarTree")
         self.tree.setHeaderHidden(True)
@@ -791,6 +831,10 @@ class MainWindow(QMainWindow):
         add_series_btn = make_button("+ Add New Series", "SidebarFooterButton")
         add_series_btn.clicked.connect(self.add_series)
         layout.addWidget(add_series_btn)
+        self.add_zone_btn = make_button("+ Add New Zone", "SidebarFooterButton")
+        self.add_zone_btn.clicked.connect(self.add_zone)
+        self.add_zone_btn.setVisible(False)
+        layout.addWidget(self.add_zone_btn)
 
         wizard_btn = make_button("\U0001F9D9  Populating Wizard", "SidebarFooterButton")
         wizard_btn.setToolTip("Bulk-enter a batch of similar equipment "
@@ -816,6 +860,13 @@ class MainWindow(QMainWindow):
         drive_btn.clicked.connect(self.open_backups_dialog)
         layout.addWidget(drive_btn)
 
+        # Instrumentation-only (v2.1 features not built for Electrical yet -
+        # hidden rather than shown-but-misleadingly-cross-wired while the
+        # Electrical dashboard is active).
+        self._instrumentation_only_footer_buttons = [
+            add_series_btn, wizard_btn, datasheet_btn, master_list_btn, drive_btn,
+        ]
+
         settings_btn = make_button("\u2699  Settings", "SidebarFooterButton")
         settings_btn.setToolTip("Theme, default export options, series, "
                                  "signatures (Ctrl+,)")
@@ -834,7 +885,12 @@ class MainWindow(QMainWindow):
 
     def _rebuild_sidebar_tree(self):
         self.tree.clear()
+        if self.active_domain == "electrical":
+            self._rebuild_electrical_tree()
+        else:
+            self._rebuild_instrumentation_tree()
 
+    def _rebuild_instrumentation_tree(self):
         dash_item = QTreeWidgetItem(["\u2302  Dashboard"])
         dash_item.setData(0, self.NAV_ROLE, ("dashboard",))
         self.tree.addTopLevelItem(dash_item)
@@ -874,6 +930,28 @@ class MainWindow(QMainWindow):
 
         dash_item.setSelected(True)
 
+    def _rebuild_electrical_tree(self):
+        dash_item = QTreeWidgetItem(["\u2302  Dashboard"])
+        dash_item.setData(0, self.NAV_ROLE, ("electrical_dashboard",))
+        self.tree.addTopLevelItem(dash_item)
+
+        for zone_name in eda.list_zones():
+            zone_item = QTreeWidgetItem([zone_name])
+            zone_item.setData(0, self.NAV_ROLE, ("zone", zone_name))
+            self.tree.addTopLevelItem(zone_item)
+
+            for equip_key, etype in eda.ELECTRICAL_EQUIPMENT_TYPES.items():
+                try:
+                    count = eda.count_rows(zone_name, equip_key)
+                except KeyError:
+                    continue
+                type_item = QTreeWidgetItem([f"{etype['label']}  ({count})"])
+                type_item.setData(0, self.NAV_ROLE, ("electrical_index", zone_name, equip_key))
+                zone_item.addChild(type_item)
+            zone_item.setExpanded(True)
+
+        dash_item.setSelected(True)
+
     def _on_tree_item_clicked(self, item, _column):
         nav = item.data(0, self.NAV_ROLE)
         if nav is None:
@@ -888,32 +966,53 @@ class MainWindow(QMainWindow):
         elif nav[0] == "index":
             _, series_number, equip_key, filters = nav
             self.show_index(series_number, equip_key, filters)
+        elif nav[0] == "electrical_dashboard":
+            self.show_electrical_dashboard()
+        elif nav[0] == "zone":
+            item.setExpanded(not item.isExpanded())
+        elif nav[0] == "electrical_index":
+            _, zone_name, equip_key = nav
+            self.show_electrical_index(zone_name, equip_key)
 
     def _on_tree_context_menu(self, pos):
         item = self.tree.itemAt(pos)
         if item is None:
             return
         nav = item.data(0, self.NAV_ROLE)
-        if not (nav and nav[0] == "series"):
-            return  # only series tabs get a context menu (not Dashboard, types, or systems)
-        series_number = nav[1]
-
-        menu = QMenu(self)
-        rename_action = menu.addAction("Rename...")
-        remove_action = menu.addAction("Remove...")
-        chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
-        if chosen == rename_action:
-            rename_series_flow(self, series_number)
-            self.refresh_sidebar_and_dashboard()
-        elif chosen == remove_action:
-            remove_series_flow(self, series_number)
-            self.refresh_sidebar_and_dashboard()
+        if nav and nav[0] == "series":
+            series_number = nav[1]
+            menu = QMenu(self)
+            rename_action = menu.addAction("Rename...")
+            remove_action = menu.addAction("Remove...")
+            chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+            if chosen == rename_action:
+                rename_series_flow(self, series_number)
+                self.refresh_sidebar_and_dashboard()
+            elif chosen == remove_action:
+                remove_series_flow(self, series_number)
+                self.refresh_sidebar_and_dashboard()
+        elif nav and nav[0] == "zone":
+            zone_name = nav[1]
+            menu = QMenu(self)
+            remove_action = menu.addAction("Remove...")
+            chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+            if chosen == remove_action:
+                remove_zone_flow(self, zone_name)
+                self.refresh_sidebar_and_dashboard()
+        # else: no context menu (not Dashboard, types, systems, ...)
 
     def refresh_sidebar_and_dashboard(self):
         """Call after anything that changes counts (save, add/remove/rename
-        series, deleting rows, ...)."""
+        series or zone, deleting rows, ...)."""
         self._rebuild_sidebar_tree()
         current = self.current_dynamic_page
+        if self.active_domain == "electrical":
+            if isinstance(current, ElectricalIndexPage) and current.zone_name not in eda.list_zones():
+                self.show_electrical_dashboard()
+                return
+            if self.stack.currentWidget() is self.dashboard_page or self.dashboard_page is None:
+                self.show_electrical_dashboard()
+            return
         if isinstance(current, IndexPage) and current.series_number not in da.list_series():
             # The series being viewed just got removed out from under it
             # (via Settings, which stays reachable from the sidebar no
@@ -967,6 +1066,48 @@ class MainWindow(QMainWindow):
     def show_index(self, series_number, equip_key, filters=None):
         page = IndexPage(self, series_number, equip_key, filters)
         self._set_dynamic_page(page)
+
+    def show_electrical_dashboard(self):
+        page = ElectricalDashboardPage(self)
+        self.dashboard_page = page
+        self._set_dynamic_page(page)
+
+    def show_electrical_index(self, zone_name, equip_key):
+        page = ElectricalIndexPage(self, zone_name, equip_key)
+        self._set_dynamic_page(page)
+
+    def _switch_domain(self, domain):
+        if domain == self.active_domain:
+            return
+        self.active_domain = domain
+        self.instrumentation_domain_btn.setObjectName("Primary" if domain == "instrumentation" else "Ghost")
+        self.electrical_domain_btn.setObjectName("Primary" if domain == "electrical" else "Ghost")
+        for btn in (self.instrumentation_domain_btn, self.electrical_domain_btn):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        self.add_zone_btn.setVisible(domain == "electrical")
+        for btn in self._instrumentation_only_footer_buttons:
+            btn.setVisible(domain != "electrical")
+        self._rebuild_sidebar_tree()
+        if domain == "electrical":
+            self.show_electrical_dashboard()
+        else:
+            self.show_dashboard()
+
+    def add_zone(self):
+        name, ok = QInputDialog.getText(
+            self, "Add New Zone",
+            "Zone name (e.g. \"K1B Well Pad\") - used to name the sheets and "
+            "shown everywhere in the Electrical sidebar/dashboard:")
+        if not ok or not name.strip():
+            return
+        try:
+            eda.add_zone(name.strip())
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't add zone", str(exc))
+            return
+        show_toast(self, f'"{name.strip()}" added.')
+        self.refresh_sidebar_and_dashboard()
 
     # --------------------------------------------------------------- actions
     def add_series(self):
@@ -5210,6 +5351,418 @@ class PopulatingWizardDialog(QDialog):
             if reply != QMessageBox.Yes:
                 return
         super().reject()
+
+
+# =============================================================================
+# Electrical - EHT Removal & Reinstatement / EHT & RTD Installation
+# Inspection tracking. A separate, independent domain from Instrumentation
+# (its own workbook, its own "Zone" registry instead of series numbers) -
+# see electrical_data_access.py's module docstring for the full rationale.
+#
+# v1 scope, deliberately: core CRUD + single-row PDF export + a dashboard,
+# mirroring the ORIGINAL Transmitter/Valve system rather than every v2.1
+# refinement Instrumentation has since grown (frozen columns, chip filters,
+# saved view state, undo/redo, activity log, global search integration).
+# =============================================================================
+def export_electrical_pdf_flow(parent, zone_name, equip_key, row_num):
+    try:
+        out_path = eda.generate_preview_pdf(zone_name, equip_key, row_num)
+    except Exception as exc:
+        QMessageBox.critical(parent, "Couldn't generate PDF", str(exc))
+        return
+    try:
+        da.open_file(out_path)
+    except Exception:
+        pass  # the PDF itself is safely written either way - opening it is a convenience
+
+
+class ElectricalEditDialog(QDialog):
+    """The Electrical equivalent of EditDialog - same section-grouped,
+    scrollable-page layout with a Jump-to dropdown and a fixed Save/Cancel
+    footer, driven by electrical_data_access.py instead of data_access.py.
+    Deliberately simpler: no signature-image row, no tag-shape/duplicate-
+    serial advisory warnings (those are Instrumentation-specific
+    conventions with no established equivalent for EHT trace tags yet)."""
+
+    def __init__(self, parent, zone_name, equip_key, row_num, is_new, prefill=None):
+        super().__init__(parent)
+        self.zone_name = zone_name
+        self.equip_key = equip_key
+        self.row_num = row_num
+        self.etype = eda.ELECTRICAL_EQUIPMENT_TYPES[equip_key]
+        self.widgets = {}
+        self.resize(880, 720)
+
+        schema = self.etype["schema"]
+        existing = {} if is_new else eda.read_full_row(zone_name, equip_key, row_num)
+        effective = dict(existing)
+        if is_new:
+            for fid, val in (prefill or {}).items():
+                effective.setdefault(fid, val)
+
+        self.setWindowTitle(("Add New " if is_new else "Edit ") + self.etype["label"]
+                             + f" – Row {row_num}")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        nav_row = QHBoxLayout()
+        nav_row.setContentsMargins(16, 14, 16, 6)
+        nav_row.addWidget(QLabel("Jump to:"))
+        self.section_picker = QComboBox()
+        self.section_picker.currentIndexChanged.connect(self._jump_to_section)
+        nav_row.addWidget(self.section_picker)
+        nav_row.addStretch()
+        outer.addLayout(nav_row)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setContentsMargins(16, 4, 16, 12)
+        inner_layout.setSpacing(12)
+
+        sections = list(dict.fromkeys(f["section"] for f in schema.LOG_COLUMNS))
+        titles = dict(schema.SECTION_TITLES)
+
+        self.section_boxes = {}
+        for section in sections:
+            section_title = titles.get(section, section.title())
+            box = QGroupBox(section_title)
+            grid = QGridLayout(box)
+            grid.setHorizontalSpacing(14)
+            grid.setVerticalSpacing(8)
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(3, 1)
+
+            fields_here = [f for f in schema.LOG_COLUMNS if f["section"] == section]
+            self._build_section_body(grid, fields_here, effective)
+
+            inner_layout.addWidget(box)
+            self.section_boxes[section] = box
+            self.section_picker.addItem(section_title, section)
+
+        inner_layout.addStretch()
+        self.scroll.setWidget(inner)
+        outer.addWidget(self.scroll, stretch=1)
+
+        footer = QFrame()
+        footer.setObjectName("Card")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(16, 10, 16, 10)
+        footer_layout.addStretch()
+        cancel_btn = make_button("Cancel", "Ghost")
+        cancel_btn.clicked.connect(self.reject)
+        save_btn = make_button("Save", "Success")
+        save_btn.clicked.connect(self.save)
+        footer_layout.addWidget(cancel_btn)
+        footer_layout.addWidget(save_btn)
+        outer.addWidget(footer)
+
+        self.initial_values = {fid: effective.get(fid, "") for fid in self.widgets}
+
+    def _build_section_body(self, grid, fields, existing):
+        row = 0
+        col_pair = 0
+        for field in fields:
+            widget = make_field_widget(field, existing.get(field["id"], ""))
+            self.widgets[field["id"]] = widget
+
+            is_required = field["id"] == self.etype["key_field"]
+            label = QLabel(field["label"] + ("  *" if is_required else ""))
+            label.setObjectName("RequiredLabel" if is_required else "FieldLabel")
+            label.setWordWrap(True)
+
+            if field["ftype"] == "multiline":
+                if col_pair != 0:
+                    row += 1
+                    col_pair = 0
+                grid.addWidget(label, row, 0, 1, 4)
+                row += 1
+                grid.addWidget(widget, row, 0, 1, 4)
+                row += 1
+            else:
+                base_col = col_pair * 2
+                grid.addWidget(label, row, base_col)
+                grid.addWidget(widget, row, base_col + 1)
+                if col_pair == 0:
+                    col_pair = 1
+                else:
+                    col_pair = 0
+                    row += 1
+
+    def _current_values(self):
+        return {fid: read_field_widget(w) for fid, w in self.widgets.items()}
+
+    def _jump_to_section(self, index):
+        section = self.section_picker.itemData(index)
+        box = self.section_boxes.get(section)
+        if box:
+            self.scroll.ensureWidgetVisible(box, ymargin=10)
+
+    def is_dirty(self):
+        return self._current_values() != self.initial_values
+
+    def closeEvent(self, event):
+        if self.is_dirty():
+            reply = QMessageBox.question(self, "Unsaved changes", "Discard unsaved changes?")
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+        event.accept()
+
+    def reject(self):
+        if self.is_dirty():
+            reply = QMessageBox.question(self, "Unsaved changes", "Discard unsaved changes?")
+            if reply != QMessageBox.Yes:
+                return
+        super().reject()
+
+    def save(self):
+        values = self._current_values()
+        key_field = self.etype["key_field"]
+        key_value = values.get(key_field, "").strip()
+
+        if not key_value:
+            key_label = next(f["label"] for f in self.etype["schema"].LOG_COLUMNS if f["id"] == key_field)
+            QMessageBox.warning(self, "Missing required field",
+                                 f'"{key_label}" can\'t be blank - the list, row-selection, '
+                                 f'and the PDF filename are all built from it.')
+            return
+
+        dup_row = eda.find_duplicate_row(self.zone_name, self.equip_key, key_value, exclude_row=self.row_num)
+        if dup_row is not None:
+            key_label = next(f["label"] for f in self.etype["schema"].LOG_COLUMNS if f["id"] == key_field)
+            QMessageBox.warning(self, f"Duplicate {key_label}",
+                                 f'"{key_value}" is already used on row {dup_row}. Each '
+                                 f'{key_label} must be unique.')
+            return
+
+        try:
+            eda.save_row(self.zone_name, self.equip_key, self.row_num, values)
+        except eda.WorkbookLockedError as exc:
+            QMessageBox.warning(self, "Workbook is open in Excel", str(exc))
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't save", str(exc))
+            return
+        self.accept()
+
+
+class ElectricalIndexPage(QWidget):
+    """The Electrical equivalent of IndexPage - deliberately simpler (a
+    plain sortable table, no frozen columns/chip filters/saved view state/
+    mass-edit/undo-redo integration - see this section's module-level
+    docstring for the v1 scope decision)."""
+
+    def __init__(self, main_window, zone_name, equip_key):
+        super().__init__()
+        self.main_window = main_window
+        self.zone_name = zone_name
+        self.equip_key = equip_key
+        self.etype = eda.ELECTRICAL_EQUIPMENT_TYPES[equip_key]
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+
+        header_row = QHBoxLayout()
+        title_col = QVBoxLayout()
+        title = QLabel(self.etype["label"])
+        title.setObjectName("PageTitle")
+        title_col.addWidget(title)
+        subtitle = QLabel(f"Zone: {zone_name}")
+        subtitle.setObjectName("PageSubtitle")
+        title_col.addWidget(subtitle)
+        header_row.addLayout(title_col)
+        header_row.addStretch()
+
+        add_btn = make_button("+ Add New", "Primary")
+        add_btn.clicked.connect(self.add_new)
+        header_row.addWidget(add_btn)
+        edit_btn = make_button("Edit", "Ghost")
+        edit_btn.clicked.connect(self.edit_selected)
+        header_row.addWidget(edit_btn)
+        pdf_btn = make_button("View / Export PDF", "Ghost")
+        pdf_btn.clicked.connect(self.export_pdf_selected)
+        header_row.addWidget(pdf_btn)
+        remove_btn = make_button("Remove", "Ghost")
+        remove_btn.clicked.connect(self.remove_selected)
+        header_row.addWidget(remove_btn)
+        layout.addLayout(header_row)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(len(self.etype["summary_fields"]))
+        self.table.setHorizontalHeaderLabels(self.etype["summary_labels"])
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.itemDoubleClicked.connect(lambda _item: self.edit_selected())
+        layout.addWidget(self.table, stretch=1)
+
+        self.reload()
+
+    def reload(self):
+        try:
+            rows = eda.read_index_rows(self.zone_name, self.equip_key)
+        except KeyError:
+            rows = []
+        self.table.setRowCount(len(rows))
+        for r, entry in enumerate(rows):
+            for c, fid in enumerate(self.etype["summary_fields"]):
+                item = QTableWidgetItem(entry.get(fid, ""))
+                if c == 0:
+                    item.setData(Qt.UserRole, entry["row"])
+                self.table.setItem(r, c, item)
+        self.table.resizeColumnsToContents()
+
+    def selected_row_num(self):
+        items = self.table.selectedItems()
+        if not items:
+            return None
+        first_col_item = self.table.item(items[0].row(), 0)
+        return first_col_item.data(Qt.UserRole) if first_col_item else None
+
+    def add_new(self):
+        row_num = eda.find_first_blank_row(self.zone_name, self.equip_key)
+        dlg = ElectricalEditDialog(self, self.zone_name, self.equip_key, row_num, is_new=True)
+        if dlg.exec() == QDialog.Accepted:
+            self.reload()
+            self.main_window.refresh_sidebar_and_dashboard()
+            self.main_window.statusBar().showMessage(f"Added row {row_num}", 3000)
+
+    def edit_selected(self):
+        row_num = self.selected_row_num()
+        if row_num is None:
+            return
+        dlg = ElectricalEditDialog(self, self.zone_name, self.equip_key, row_num, is_new=False)
+        if dlg.exec() == QDialog.Accepted:
+            self.reload()
+            self.main_window.refresh_sidebar_and_dashboard()
+            self.main_window.statusBar().showMessage(f"Saved row {row_num}", 3000)
+
+    def export_pdf_selected(self):
+        row_num = self.selected_row_num()
+        if row_num is None:
+            return
+        export_electrical_pdf_flow(self, self.zone_name, self.equip_key, row_num)
+
+    def remove_selected(self):
+        row_num = self.selected_row_num()
+        if row_num is None:
+            return
+        reply = QMessageBox.question(self, "Remove row", f"Clear row {row_num}? This can't be undone.")
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            eda.delete_rows(self.zone_name, self.equip_key, [row_num])
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't remove row", str(exc))
+            return
+        self.reload()
+        self.main_window.refresh_sidebar_and_dashboard()
+
+
+class ElectricalDashboardPage(QWidget):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+
+        header_row = QHBoxLayout()
+        title_col = QVBoxLayout()
+        title = QLabel("Electrical")
+        title.setObjectName("PageTitle")
+        title_col.addWidget(title)
+        subtitle = QLabel("EHT Removal & Reinstatement / EHT & RTD Installation Inspection")
+        subtitle.setObjectName("PageSubtitle")
+        title_col.addWidget(subtitle)
+        header_row.addLayout(title_col)
+        header_row.addStretch()
+        layout.addLayout(header_row)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.viewport().setAttribute(Qt.WA_StyledBackground, True)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(16)
+        totals = eda.count_all_by_type()
+        for equip_key, etype in eda.ELECTRICAL_EQUIPMENT_TYPES.items():
+            card = StatCard(etype["label"], totals.get(equip_key, 0), {})
+            cards_row.addWidget(card)
+        cards_row.addStretch()
+        inner_layout.addLayout(cards_row)
+
+        zones_label = QLabel("ZONES")
+        zones_label.setObjectName("SectionLabel")
+        inner_layout.addWidget(zones_label, alignment=Qt.AlignLeft)
+
+        zone_names = eda.list_zones()
+        if not zone_names:
+            none_label = QLabel("No zones yet - add one from the sidebar (\"+ Add New Zone\").")
+            none_label.setObjectName("StatLabel")
+            inner_layout.addWidget(none_label)
+        else:
+            zones_row = QHBoxLayout()
+            zones_row.setSpacing(10)
+            for zone_name in zone_names:
+                btn = make_button(zone_name, "Primary", width=140)
+                btn.clicked.connect(lambda checked=False, z=zone_name: self._open_first_type(z))
+                zones_row.addWidget(btn)
+            zones_row.addStretch()
+            inner_layout.addLayout(zones_row)
+
+            by_zone_label = QLabel("BY ZONE")
+            by_zone_label.setObjectName("SectionLabel")
+            inner_layout.addWidget(by_zone_label, alignment=Qt.AlignLeft)
+
+            by_zone_row = QHBoxLayout()
+            by_zone_row.setSpacing(16)
+            for zone_name in zone_names:
+                summary = eda.zone_summary(zone_name)
+                by_zone_row.addWidget(self._build_zone_card(zone_name, summary))
+            by_zone_row.addStretch()
+            inner_layout.addLayout(by_zone_row)
+
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, stretch=1)
+
+    def _build_zone_card(self, zone_name, summary):
+        card = QFrame()
+        card.setObjectName("Card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(18, 14, 18, 14)
+        card_layout.setSpacing(6)
+
+        title = QLabel(zone_name)
+        title.setObjectName("SectionLabel")
+        card_layout.addWidget(title)
+
+        for equip_key, etype in eda.ELECTRICAL_EQUIPMENT_TYPES.items():
+            info = summary.get(equip_key)
+            if info is None:
+                continue
+            row = QHBoxLayout()
+            name = QLabel(etype["label"])
+            name.setObjectName("StatLabel")
+            val = QLabel(str(info["total"]))
+            val.setStyleSheet("font-weight: 700;")
+            row.addWidget(name)
+            row.addStretch()
+            row.addWidget(val)
+            card_layout.addLayout(row)
+
+        return card
+
+    def _open_first_type(self, zone_name):
+        first_key = next(iter(eda.ELECTRICAL_EQUIPMENT_TYPES))
+        self.main_window.show_electrical_index(zone_name, first_key)
 
 
 def main():
