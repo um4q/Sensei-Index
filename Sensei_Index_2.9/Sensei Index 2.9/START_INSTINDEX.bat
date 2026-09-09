@@ -33,11 +33,11 @@
 ::978f952a14a936cc963da21a135fa983
 @echo off
 setlocal enabledelayedexpansion
-title Sensei Index 1.9
+title Sensei Index 2.9
 cd /d "%~dp0"
 
 echo ============================================
-echo   Sensei Index 1.9 - Setup and Launch
+echo   Sensei Index 2.9 - Setup and Launch
 echo ============================================
 echo Experimental build Programs a little scuffed
 echo Only used for one-time edits and fast Index --> ITR document converts
