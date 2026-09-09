@@ -16,7 +16,7 @@ import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize, QItemSelectionModel, QDate, QTimer
-from PySide6.QtGui import QFont, QColor, QKeySequence, QShortcut, QPixmap
+from PySide6.QtGui import QFont, QColor, QKeySequence, QShortcut, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFormLayout, QLabel, QPushButton, QLineEdit, QComboBox, QTextEdit,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QFileDialog, QCheckBox, QRadioButton, QButtonGroup,
     QGroupBox, QSizePolicy, QAbstractItemView, QSpacerItem, QAbstractScrollArea,
     QMenu, QStatusBar, QDateEdit, QStyledItemDelegate, QListWidget, QListWidgetItem,
+    QSplashScreen,
 )
 
 import data_access as da
@@ -5787,12 +5788,89 @@ class ElectricalDashboardPage(QWidget):
         self.main_window.show_electrical_index(zone_name, first_key)
 
 
+# =============================================================================
+# Startup splash screen - Sensei Index 2.9. A real Qt window, not a terminal
+# message: the same logo the sidebar uses (there, scaled to a 42px icon),
+# enlarged to splash size, with status text updated at each real startup
+# step (never a fabricated progress bar with no basis behind it).
+# =============================================================================
+SPLASH_LOGO_HEIGHT = 180
+
+
+def _build_splash_pixmap(theme):
+    """Enlarged version of MainWindow._set_logo_pixmap's own theme-aware
+    logo choice, with the app title drawn underneath. Falls back to a
+    blank transparent canvas (never raises) if the asset is missing, same
+    isNull() guard philosophy as _set_logo_pixmap."""
+    filename = "oathplatehelm.png" if theme == "dark" else "oathplatehelm2.png"
+    base = QPixmap(str(da.ASSETS_DIR / filename))
+    text_color = QColor("#EEEEEE") if theme == "dark" else QColor("#333333")
+
+    canvas = QPixmap(420, 300)
+    canvas.fill(Qt.transparent)
+    if base.isNull():
+        return canvas
+
+    logo = base.scaledToHeight(SPLASH_LOGO_HEIGHT, Qt.SmoothTransformation)
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.drawPixmap((canvas.width() - logo.width()) // 2, 20, logo)
+    painter.setFont(QFont("Segoe UI", 15, QFont.Bold))
+    painter.setPen(text_color)
+    painter.drawText(canvas.rect().adjusted(0, SPLASH_LOGO_HEIGHT + 40, 0, 0),
+                      Qt.AlignHCenter | Qt.AlignTop, APP_TITLE)
+    painter.end()
+    return canvas
+
+
+def _run_startup_with_splash(app):
+    """Shows the splash, then runs the app's real startup work in stages,
+    updating the splash's status text immediately before each one (with
+    processEvents() so it actually repaints before that step's real work
+    runs) - each message names work this function is ACTUALLY about to
+    do, in this order, not decoration:
+      1. Loads the Instrumentation workbook/config (da.list_series() +
+         count_all_by_type(), the same read every dashboard card needs -
+         calling it here just means it happens before the window is
+         visible instead of during MainWindow.__init__'s own first tree
+         build).
+      2. Loads the Electrical workbook/registry the same way.
+      3. Constructs MainWindow (now fast - both workbook caches are warm).
+      4. Shows it and closes the splash.
+    Returns the constructed, already-shown MainWindow."""
+    theme = da.get_setting("theme") or "light"
+    splash = QSplashScreen(_build_splash_pixmap(theme))
+    splash.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    text_color = Qt.white if theme == "dark" else Qt.black
+    splash.show()
+    app.processEvents()
+
+    def step(message):
+        splash.showMessage(message, Qt.AlignBottom | Qt.AlignHCenter, text_color)
+        app.processEvents()
+
+    step("Loading Instrumentation data…")
+    da.list_series()
+    da.count_all_by_type()
+
+    step("Loading Electrical data…")
+    eda.list_zones()
+    eda.count_all_by_type()
+
+    step("Building interface…")
+    win = MainWindow()
+
+    step("Ready")
+    win.show()
+    splash.finish(win)
+    return win
+
+
 def main():
     app = QApplication(sys.argv)
     theme = da.get_setting("theme") or "light"
     app.setStyleSheet(DARK_QSS if theme == "dark" else LIGHT_QSS)
-    win = MainWindow()
-    win.show()
+    _run_startup_with_splash(app)
     sys.exit(app.exec())
 
 
