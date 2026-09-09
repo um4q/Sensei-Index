@@ -33,7 +33,7 @@ import datasheet_reader
 from theme import LIGHT_QSS, DARK_QSS
 
 
-APP_TITLE = "Sensei Index"
+APP_TITLE = "Sensei Index 2.9"
 
 
 # =============================================================================
@@ -792,7 +792,7 @@ class MainWindow(QMainWindow):
         header_row.addWidget(logo_label)
 
 
-        title = QLabel("Sensei Index 1.9")
+        title = QLabel("Sensei Index 2.9")
         title.setObjectName("SidebarTitle")
         header_row.addWidget(title)
         header_row.addStretch()
