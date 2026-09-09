@@ -242,7 +242,33 @@ def test_electrical_dashboard_shows_eht_pre_insulation_totals(qtbot, isolated_ap
     qtbot.addWidget(page)
     labels = [w.text() for w in page.findChildren(gui_app.QLabel)]
     assert any(t == "K1B Well Pad" for t in labels)
-    assert any(t == "1" for t in labels)
+
+
+def test_electrical_dashboard_top_stat_card_attributes_the_1_to_eht_pre_insulation_specifically(
+        qtbot, isolated_app_dir, fake_main_window):
+    """The sibling test above only asserts SOME label reads '1' somewhere
+    on the page - a regression isolated to eht_pre_insulation's own count
+    (while the other two types' cards still happen to show a correct
+    number) would slip past that. Found by an adversarial review of Phase B.
+    This attributes the '1' to the specific StatCard whose own title is
+    eht_pre_insulation's label, not just anywhere on the page."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001"})
+
+    page = gui_app.ElectricalDashboardPage(fake_main_window)
+    qtbot.addWidget(page)
+
+    totals_by_title = {}
+    for card in page.findChildren(gui_app.StatCard):
+        title_label = next(w for w in card.findChildren(gui_app.QLabel) if w.objectName() == "StatLabel")
+        number_label = card.findChild(gui_app.QLabel, "StatNumber")
+        totals_by_title[title_label.text()] = number_label.text()
+
+    assert totals_by_title["EHT & RTD Pre-Insulation Installation"] == "1"
+    assert totals_by_title["EHT Removal & Reinstatement"] == "0"
+    assert totals_by_title["EHT & RTD Installation Inspection"] == "0"
 
 
 def test_electrical_index_page_lists_saved_eht_pre_insulation_rows(qtbot, isolated_app_dir, fake_main_window):

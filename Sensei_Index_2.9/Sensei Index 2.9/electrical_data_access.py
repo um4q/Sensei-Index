@@ -214,11 +214,33 @@ def list_zones():
 
 
 def get_sheet_name(zone_name, equip_key):
-    for z in load_config()["zones"]:
+    """Self-healing lookup: a zone registered before `equip_key` existed in
+    ELECTRICAL_EQUIPMENT_TYPES (e.g. any real zone created before
+    eht_pre_insulation was added) has no `<equip_key>_sheet` key yet.
+    Rather than permanently raise for every such zone forever, create the
+    missing sheet and persist the key now, exactly as add_zone() would have
+    done if this equipment type had existed at zone-creation time - the
+    same "create what's missing on first real use" philosophy
+    _bootstrap_empty_workbook() already uses for the whole workbook.
+    Found by an adversarial review of Phase B: every one of get_sheet_name's
+    callers (read_index_rows, read_full_row, find_first_blank_row, save_row,
+    delete_rows, generate_preview_pdf, open_sheet) propagated an uncaught
+    KeyError for this exact case, and remove_zone() already had to code
+    around it defensively (entry.get(...) instead of a hard lookup) -
+    confirming the missing-key case is a real, reachable possibility that
+    now heals instead of failing."""
+    cfg = load_config()
+    for z in cfg["zones"]:
         if z["name"] == zone_name:
             key = f"{equip_key}_sheet"
             if key not in z:
-                raise KeyError(f"Zone '{zone_name}' has no '{equip_key}' sheet registered.")
+                etype = ELECTRICAL_EQUIPMENT_TYPES[equip_key]
+                with _mutating_workbook() as wb:
+                    sheet_name = _sheet_name_for_zone(equip_key, zone_name, wb)
+                    _build_new_sheet(wb, sheet_name, etype["schema"].LOG_COLUMNS)
+                z[key] = sheet_name
+                save_config(cfg)
+                return sheet_name
             return z[key]
     raise KeyError(f"Zone '{zone_name}' is not in {ELECTRICAL_CONFIG_PATH.name}")
 
@@ -462,13 +484,20 @@ def count_all_by_type():
 
 
 def zone_summary(zone_name):
-    """{'eht_removal': {'total': N}, 'eht_rtd': {'total': N}} for ONE zone."""
-    result = {}
+    """{'eht_removal': {'total': N}, 'eht_rtd': {'total': N}} for ONE zone.
+    Pre-seeds every registry key at 0 first, same shape as
+    count_all_by_type() - a caller can rely on both functions always
+    returning every ELECTRICAL_EQUIPMENT_TYPES key (found by an
+    adversarial review of Phase B: this used to `continue` before ever
+    assigning the key, so it silently omitted it instead of zero-filling
+    it, an inconsistency with count_all_by_type()'s contract for the
+    identical underlying condition)."""
+    result = {k: {"total": 0} for k in ELECTRICAL_EQUIPMENT_TYPES}
     for equip_key in ELECTRICAL_EQUIPMENT_TYPES:
         try:
             result[equip_key] = {"total": count_rows(zone_name, equip_key)}
         except KeyError:
-            continue
+            pass
     return result
 
 

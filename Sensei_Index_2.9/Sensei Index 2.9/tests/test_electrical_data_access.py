@@ -410,3 +410,177 @@ def test_eht_pre_insulation_field_mapping_fidelity_against_its_own_template():
         f"unused template fields: {template_fields - mapped}, "
         f"or FIELD_MAP entries with no matching template field: {mapped - template_fields}"
     )
+
+
+def test_eht_pre_insulation_sheet_name_also_respects_the_31_char_limit(isolated_app_dir):
+    """test_sheet_name_truncates_long_zone_names_safely (above) only checked
+    eht_removal/eht_rtd's own truncation budgets - eht_pre_insulation has
+    ITS OWN budget (SHEET_NAME_PREFIXES['eht_pre_insulation'] = 'EHT PreIns'
+    is a different length than the other two prefixes), so it needs its own
+    assertion rather than assuming the other two passing proves this one
+    does too (found by an adversarial review of Phase B)."""
+    tmp_path, da = isolated_app_dir
+    long_name = "A Very Long Zone Name That Would Blow Past The Excel Sheet Name Limit"
+    entry = eda.add_zone(long_name)
+    assert len(entry["eht_pre_insulation_sheet"]) <= 31
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry["eht_pre_insulation_sheet"] in wb.sheetnames
+
+
+def test_get_sheet_name_backfills_a_zone_registered_before_this_type_existed(isolated_app_dir):
+    """A zone created on a build that only had eht_removal/eht_rtd (i.e.
+    before eht_pre_insulation was registered) has no 'eht_pre_insulation_sheet'
+    key in its registry entry and no corresponding workbook sheet. Every
+    caller of get_sheet_name used to propagate an uncaught KeyError for
+    this - found by an adversarial review of Phase B. get_sheet_name must
+    now self-heal: create the missing sheet and persist the key, rather
+    than fail forever for every zone that predates this equipment type."""
+    tmp_path, da = isolated_app_dir
+    entry = eda.add_zone("K1B Well Pad")
+
+    # Simulate a legacy zone: strip the key AND remove the sheet, exactly
+    # as if eht_pre_insulation had never existed when this zone was made.
+    cfg = eda.load_config()
+    legacy_entry = next(z for z in cfg["zones"] if z["name"] == "K1B Well Pad")
+    old_sheet_name = legacy_entry.pop("eht_pre_insulation_sheet")
+    eda.save_config(cfg)
+    with eda._mutating_workbook() as wb:
+        del wb[old_sheet_name]
+
+    # Must not raise, and must actually work end-to-end.
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-BACKFILL"})
+    assert eda.read_full_row("K1B Well Pad", "eht_pre_insulation", row)["trace_number"] == "TR-BACKFILL"
+
+    # The backfill must be PERSISTED, not just made to work once in memory.
+    cfg2 = eda.load_config()
+    healed_entry = next(z for z in cfg2["zones"] if z["name"] == "K1B Well Pad")
+    assert "eht_pre_insulation_sheet" in healed_entry
+    wb2 = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert healed_entry["eht_pre_insulation_sheet"] in wb2.sheetnames
+
+
+def test_get_sheet_name_backfill_header_row_matches_schema_labels(isolated_app_dir):
+    """The self-healed sheet must be a real, correctly-built Log sheet
+    (header row included) - not just any sheet with the right name."""
+    tmp_path, da = isolated_app_dir
+    import eht_pre_insulation_schema
+    entry = eda.add_zone("K1B Well Pad")
+    cfg = eda.load_config()
+    legacy_entry = next(z for z in cfg["zones"] if z["name"] == "K1B Well Pad")
+    old_sheet_name = legacy_entry.pop("eht_pre_insulation_sheet")
+    eda.save_config(cfg)
+    with eda._mutating_workbook() as wb:
+        del wb[old_sheet_name]
+
+    eda.get_sheet_name("K1B Well Pad", "eht_pre_insulation")  # triggers the backfill
+    cfg2 = eda.load_config()
+    healed_sheet = next(z for z in cfg2["zones"] if z["name"] == "K1B Well Pad")["eht_pre_insulation_sheet"]
+    wb2 = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    ws = wb2[healed_sheet]
+    header = [ws.cell(row=3, column=c).value for c in range(1, len(eht_pre_insulation_schema.LOG_COLUMNS) + 1)]
+    assert header == [f["label"] for f in eht_pre_insulation_schema.LOG_COLUMNS]
+
+
+def test_zone_summary_zero_fills_every_registry_key_same_as_count_all_by_type(isolated_app_dir):
+    """Both functions must share the same 'always has every registry key'
+    contract (found by an adversarial review of Phase B: zone_summary()
+    used to omit a key entirely instead of zero-filling it)."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    assert set(eda.zone_summary("K1B Well Pad").keys()) == set(eda.count_all_by_type().keys())
+    assert eda.zone_summary("K1B Well Pad") == {
+        "eht_removal": {"total": 0}, "eht_rtd": {"total": 0}, "eht_pre_insulation": {"total": 0},
+    }
+
+
+def test_count_all_by_type_and_zone_summary_actually_count_an_eht_pre_insulation_row(isolated_app_dir):
+    """The pre-existing count_all_by_type/zone_summary test only ever
+    asserts a zero eht_pre_insulation count, which would pass even if the
+    real counting logic for this type were broken - found by an adversarial
+    review of Phase B. This saves a REAL row and checks a nonzero count
+    comes back from both functions, for this type specifically."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001"})
+
+    assert eda.count_all_by_type()["eht_pre_insulation"] == 1
+    assert eda.zone_summary("K1B Well Pad")["eht_pre_insulation"] == {"total": 1}
+
+
+def test_eht_pre_insulation_export_fills_every_hand_typed_field_with_a_distinct_value(isolated_app_dir):
+    """test_generate_preview_pdf_eht_pre_insulation_fills_real_fields (above)
+    only value-checks 7 of the 26 hand-typed FIELD_MAP entries - a
+    transposition between two same-shaped fields (e.g. client_rep_date <->
+    client_rep_signature) would pass every existing test, including the
+    bijection-only field-mapping fidelity check, since both are still valid
+    template field names either way. Found by an adversarial review of
+    Phase B.
+
+    Deliberately does NOT look up the expected PDF field name via
+    eht_pre_insulation_field_map.FIELD_MAP - doing so would make this test
+    exactly as blind as the bug it's meant to catch, since build_values_for_row
+    ALSO reads its target field name from that same dict: if FIELD_MAP itself
+    had a transposition, both the production code and a FIELD_MAP-driven
+    test would agree with each other and the swap would still pass. Instead,
+    every hand-typed schema id is listed here literally, independent of the
+    map, and checked directly against the PDF field of THE SAME NAME - true
+    by construction because this template's field names were chosen to be a
+    clean identity mapping onto the schema's own ids (see FIELD_MAP's own
+    docstring)."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+
+    hand_typed_ids = [
+        "customer_name", "project_name", "contract_no", "location",
+        "trace_number", "eht_controller_number", "trace_part_number", "panel_number",
+        "rtds_number", "circuit_number", "trace_line_number", "rev",
+        "test_equip_model", "test_equip_serial", "cal_due_date",
+        "megger_500_reading", "megger_500_result", "megger_1000_reading", "megger_1000_result",
+        "megger_2500_reading", "megger_2500_result", "comments",
+        "yanda_rep_date", "yanda_rep_signature", "client_rep_date", "client_rep_signature",
+    ]
+    # Every hand-typed (non-checklist-loop) schema id gets a value that
+    # encodes its own id, so a swap between any two fields is unmistakable.
+    values = {fid: f"VAL::{fid}" for fid in hand_typed_ids}
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, values)
+
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "eht_pre_insulation", row)
+    fields = PdfReader(str(out_path)).get_fields()
+    for fid in hand_typed_ids:
+        assert fields[fid].get("/V") == f"VAL::{fid}", (
+            f"'{fid}' did not land on the PDF's own '{fid}' field with its own value - "
+            f"possible FIELD_MAP transposition"
+        )
+
+
+def test_export_eht_pre_insulation_cli_main_writes_a_pdf(isolated_app_dir, tmp_path, capsys):
+    """No test invoked export_eht_pre_insulation_to_pdf.py's CLI main() at
+    all (found by an adversarial review of Phase B) - only its DEFAULT_TEMPLATE
+    was ever imported. Exercises --rows parsing and the actual file-write
+    path end-to-end via the real workbook this fixture builds."""
+    tmp_path_app, da = isolated_app_dir
+    import sys
+    import export_eht_pre_insulation_to_pdf as export_mod
+
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    sheet_name = eda.get_sheet_name("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-CLI-001"})
+
+    output_dir = tmp_path / "cli_out"
+    old_argv = sys.argv
+    sys.argv = [
+        "export_eht_pre_insulation_to_pdf.py", str(eda.ELECTRICAL_WORKBOOK_PATH),
+        "--sheet", sheet_name, "--rows", str(row), "--output-dir", str(output_dir),
+    ]
+    try:
+        export_mod.main()
+    finally:
+        sys.argv = old_argv
+
+    out_files = list(output_dir.glob("*.pdf"))
+    assert len(out_files) == 1
+    assert PdfReader(str(out_files[0])).get_fields()["trace_number"].get("/V") == "TR-CLI-001"
