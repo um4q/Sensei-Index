@@ -212,9 +212,9 @@ def test_count_all_by_type_and_zone_summary(isolated_app_dir):
     row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
     eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": "29103-EHT-0001"})
 
-    assert eda.count_all_by_type() == {"eht_removal": 1, "eht_rtd": 0}
+    assert eda.count_all_by_type() == {"eht_removal": 1, "eht_rtd": 0, "eht_pre_insulation": 0}
     assert eda.zone_summary("K1B Well Pad") == {
-        "eht_removal": {"total": 1}, "eht_rtd": {"total": 0},
+        "eht_removal": {"total": 1}, "eht_rtd": {"total": 0}, "eht_pre_insulation": {"total": 0},
     }
 
 
@@ -299,3 +299,114 @@ def test_unknown_zone_raises_keyerror(isolated_app_dir):
     tmp_path, da = isolated_app_dir
     with pytest.raises(KeyError):
         eda.read_index_rows("Nonexistent", "eht_removal")
+
+
+# --------------------------------------------------------------------------
+# eht_pre_insulation - the third Electrical form (Sensei Index 2.9, Phase B).
+# Unlike eht_removal/eht_rtd, its template was built from scratch (no
+# original fillable PDF existed) - see build_eht_pre_insulation_template.py.
+# --------------------------------------------------------------------------
+
+def test_add_zone_creates_eht_pre_insulation_sheet(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    entry = eda.add_zone("K1B Well Pad")
+    assert "eht_pre_insulation_sheet" in entry
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry["eht_pre_insulation_sheet"] in wb.sheetnames
+
+
+def test_add_zone_eht_pre_insulation_header_row_matches_schema_labels(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    import eht_pre_insulation_schema
+    entry = eda.add_zone("K1B Well Pad")
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    ws = wb[entry["eht_pre_insulation_sheet"]]
+    header = [ws.cell(row=3, column=c).value for c in range(1, len(eht_pre_insulation_schema.LOG_COLUMNS) + 1)]
+    assert header == [f["label"] for f in eht_pre_insulation_schema.LOG_COLUMNS]
+
+
+def test_eht_pre_insulation_save_and_read_row_round_trips(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {
+        "trace_number": "TR-PI-001", "eht_controller_number": "EHTC-9",
+        "panel_number": "P-12", "pre_ins_item_1_result": "JD",
+    })
+    full = eda.read_full_row("K1B Well Pad", "eht_pre_insulation", row)
+    assert full["trace_number"] == "TR-PI-001"
+    assert full["eht_controller_number"] == "EHTC-9"
+    assert full["panel_number"] == "P-12"
+    assert full["pre_ins_item_1_result"] == "JD"
+    assert full["pre_ins_item_1_comments"] == ""  # untouched field stays blank
+
+
+def test_eht_pre_insulation_read_index_rows_only_shows_rows_with_key_filled(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"panel_number": "P-12"})  # no trace_number
+    assert eda.read_index_rows("K1B Well Pad", "eht_pre_insulation") == []
+
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001"})
+    rows = eda.read_index_rows("K1B Well Pad", "eht_pre_insulation")
+    assert len(rows) == 1
+    assert rows[0]["trace_number"] == "TR-PI-001"
+
+
+def test_generate_preview_pdf_eht_pre_insulation_fills_real_fields(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {
+        "trace_number": "TR-PI-001", "eht_controller_number": "EHTC-9",
+        "panel_number": "P-12", "pre_ins_item_1_result": "JD",
+        "pre_ins_item_10_comments": "all clear",
+        "megger_500_reading": "5000", "megger_500_result": "Passed",
+        "comments": "line1\nline2",
+        "yanda_rep_signature": "J. Doe",
+    })
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "eht_pre_insulation", row)
+    assert out_path.exists()
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["trace_number"].get("/V") == "TR-PI-001"
+    assert fields["eht_controller_number"].get("/V") == "EHTC-9"
+    assert fields["panel_number"].get("/V") == "P-12"
+    assert fields["pre_ins_item_1_result"].get("/V") == "JD"
+    assert fields["pre_ins_item_10_comments"].get("/V") == "all clear"
+    assert fields["megger_500_reading"].get("/V") == "5000"
+    assert fields["megger_500_result"].get("/V") == "Passed"
+    assert fields["comments"].get("/V") == "line1\nline2"
+    assert fields["yanda_rep_signature"].get("/V") == "J. Doe"
+
+
+def test_eht_pre_insulation_field_mapping_fidelity_against_its_own_template():
+    """There's no 'original file's real widget names' cross-reference for
+    a from-scratch template the way there is for eht_removal/eht_rtd - so
+    this checks the template this form actually ships with directly:
+    every schema field must have a FIELD_MAP entry, and every FIELD_MAP
+    value must be a real field on the built template. This is the check
+    that would catch a typo in a hand-chosen field name."""
+    import eht_pre_insulation_schema as schema
+    import eht_pre_insulation_field_map as fm
+    from export_eht_pre_insulation_to_pdf import DEFAULT_TEMPLATE
+
+    for field in schema.LOG_COLUMNS:
+        assert field["id"] in fm.FIELD_MAP, f"{field['id']} has no FIELD_MAP entry"
+
+    template_fields = set(PdfReader(str(DEFAULT_TEMPLATE)).get_fields().keys())
+    for schema_id, pdf_field in fm.FIELD_MAP.items():
+        assert pdf_field in template_fields, (
+            f"FIELD_MAP['{schema_id}'] = '{pdf_field}' is not a real field on "
+            f"{DEFAULT_TEMPLATE.name}"
+        )
+    # and the reverse: every real field on the template is actually used -
+    # no dangling widget nothing ever writes to (the eht_removal/eht_rtd
+    # precedent explicitly tolerates a couple of ARTIFACT_FIELDS, but this
+    # template was purpose-built - it shouldn't have any).
+    mapped = set(fm.FIELD_MAP.values())
+    assert template_fields == mapped, (
+        f"unused template fields: {template_fields - mapped}, "
+        f"or FIELD_MAP entries with no matching template field: {mapped - template_fields}"
+    )

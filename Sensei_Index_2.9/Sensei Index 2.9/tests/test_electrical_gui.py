@@ -176,7 +176,7 @@ def test_main_window_add_zone_flow_and_sidebar_tree(qtbot, isolated_app_dir, mon
     assert win.tree.topLevelItemCount() == 2
     zone_item = win.tree.topLevelItem(1)
     assert zone_item.text(0) == "K1B Well Pad"
-    assert zone_item.childCount() == 2  # eht_removal + eht_rtd
+    assert zone_item.childCount() == 3  # eht_removal + eht_rtd + eht_pre_insulation
 
 
 def test_instrumentation_only_shortcuts_are_gated_while_electrical_is_active(
@@ -223,3 +223,70 @@ def test_switching_to_electrical_never_touches_instrumentation_workbook(qtbot, i
     win._switch_domain("instrumentation")
     after = da.WORKBOOK_PATH.read_bytes()
     assert before == after
+
+
+# --------------------------------------------------------------------------
+# eht_pre_insulation - the third Electrical form. ElectricalDashboardPage/
+# ElectricalIndexPage/ElectricalEditDialog are generic over
+# ELECTRICAL_EQUIPMENT_TYPES, so these mirror the eht_removal GUI coverage
+# above with no new GUI classes involved.
+# --------------------------------------------------------------------------
+
+def test_electrical_dashboard_shows_eht_pre_insulation_totals(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001"})
+
+    page = gui_app.ElectricalDashboardPage(fake_main_window)
+    qtbot.addWidget(page)
+    labels = [w.text() for w in page.findChildren(gui_app.QLabel)]
+    assert any(t == "K1B Well Pad" for t in labels)
+    assert any(t == "1" for t in labels)
+
+
+def test_electrical_index_page_lists_saved_eht_pre_insulation_rows(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001", "panel_number": "P-12"})
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(page)
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "TR-PI-001"
+    assert page.table.item(0, 0).data(gui_app.Qt.UserRole) == row
+
+
+def test_electrical_index_page_add_new_eht_pre_insulation_via_real_dialog(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(page)
+
+    row_num = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    dlg = gui_app.ElectricalEditDialog(page, "K1B Well Pad", "eht_pre_insulation", row_num, is_new=True)
+    qtbot.addWidget(dlg)
+    dlg.widgets["trace_number"].setText("TR-PI-099")
+    dlg.save()
+    assert dlg.result() == gui_app.QDialog.Accepted
+
+    page.reload()
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "TR-PI-099"
+
+
+def test_export_electrical_pdf_flow_eht_pre_insulation_writes_and_opens_file(
+        qtbot, isolated_app_dir, fake_main_window, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    opened = []
+    monkeypatch.setattr(gui_app.da, "open_file", lambda p: opened.append(p))
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001"})
+
+    widget = gui_app.QWidget()
+    qtbot.addWidget(widget)
+    gui_app.export_electrical_pdf_flow(widget, "K1B Well Pad", "eht_pre_insulation", row)
+    assert len(opened) == 1
+    assert PdfReader(str(opened[0])).get_fields()["trace_number"].get("/V") == "TR-PI-001"

@@ -37,8 +37,10 @@ from data_access import HERE, write_json_atomic, read_json_with_recovery, open_f
 
 import eht_removal_schema
 import eht_rtd_schema
+import eht_pre_insulation_schema
 import export_eht_removal_to_pdf
 import export_eht_rtd_to_pdf
+import export_eht_pre_insulation_to_pdf
 
 ELECTRICAL_WORKBOOK_PATH = HERE / "Electrical_Inspection_Tracker.xlsx"
 ELECTRICAL_CONFIG_PATH = HERE / "electrical_registry.json"
@@ -68,12 +70,24 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "summary_fields": ["trace_number", "controller_number", "panel_number"],
         "summary_labels": ["Trace #", "Controller #", "Panel #"],
     },
+    "eht_pre_insulation": {
+        "label": "EHT & RTD Pre-Insulation Installation",
+        "schema": eht_pre_insulation_schema,
+        "export_module": export_eht_pre_insulation_to_pdf,
+        "key_field": "trace_number",
+        "summary_fields": ["trace_number", "eht_controller_number", "panel_number"],
+        "summary_labels": ["Trace #", "EHT Controller #", "Panel #"],
+    },
 }
 
 # Short, distinct prefixes for sheet names - the equipment types' own
 # "label" above is too long to combine with a zone name and stay under
 # Excel's 31-character sheet-name limit.
-SHEET_NAME_PREFIXES = {"eht_removal": "EHT Removal", "eht_rtd": "EHT RTD"}
+SHEET_NAME_PREFIXES = {
+    "eht_removal": "EHT Removal",
+    "eht_rtd": "EHT RTD",
+    "eht_pre_insulation": "EHT PreIns",
+}
 
 
 # ---------------------------------------------------------------------------
