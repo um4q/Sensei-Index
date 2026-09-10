@@ -21,27 +21,38 @@ number, and structurally much simpler: a single pre-insulation section
 only, no post-insulation section, no per-voltage MI/SR checkbox grid. The
 two are independent equipment types with independent sheets.
 
-Unlike eht_removal/eht_rtd, there was no original fillable PDF for this
-form - every source instance (reference_material/EHT-004_scanned_samples/)
-is a hand-filled, scanned paper form. The template this schema is mapped
-against (EHT_and_RTD_Pre-Insulation_Installation_Report_TEMPLATE.pdf) was
-therefore built from scratch (see build_eht_pre_insulation_template.py),
-so every field name below is one this project chose itself, not one
-reverse-engineered from someone else's PDF authoring.
+REVISION 2 (exact-fidelity template rebuild): the template this schema is
+mapped against is now the real scanned form itself (background image),
+not a reportlab redraw - see build_eht_pre_insulation_template.py's own
+docstring. Rebuilding against the actual scan surfaced two corrections
+versus the original 46-field version:
+
+  - Customer Name / Project Name / Contract # / Location are PRINTED on
+    every one of the 19 scanned instances (confirmed by inspection - not
+    hand-filled anywhere), so they are NOT fillable fields here - they're
+    part of the template's background image, the same precedent
+    eht_removal_schema.py / eht_rtd_schema.py already set for their own
+    header rows. (The original version made these real fields, which was
+    a mistake corrected here.)
+  - The sign-off table's "Yanda Representative" / "Client Representative"
+    columns hold a handwritten NAME on the real form (e.g. "Dana
+    Eshleyah"), not signature-only as originally assumed - added as
+    yanda_rep_name / client_rep_name.
+
+Total: 46 - 4 header fields + 2 name fields = 44.
 
 The "Results (Initial/N/A)" cells are plain text boxes (not checkboxes),
-modeled here as ftype="choice" with a permissive Y/N/NA-style convention -
-same treatment eht_rtd_schema.py gives its own equivalent "Results" cells
-(see that module's docstring) - but since this form's own checklist is
-initialed rather than Y/N/NA, the choices list is left as free-form text
-(ftype="text") instead: whoever fills it in writes their initials or
-"N/A", not a fixed set of codes.
+modeled here as ftype="text" (free-form initials or "N/A" - see
+eht_rtd_schema.py's docstring for why the sibling form's equivalent cells
+are instead modeled as ftype="choice"; this form's checklist is initialed
+rather than Y/N/NA, so a fixed choices list doesn't fit).
 
 The "1.8 Pre-Insulation Insulation Test Results" megger table's section
-banner deliberately repeats "1.8" from item 9 in the checklist above (item
-9 is itself numbered 9, not 1.8 - the "1.8" duplicate is the source
-document's own table caption, not a checklist item number). This is a
-genuine quirk in the client's own form, preserved as-is - not "fixed" here.
+label deliberately repeats "1.8" from item 9 in the checklist above (item
+9 is itself numbered 9, not 1.8 - the "1.8" is the source document's own
+table caption, printed directly above/left of the SR/MI @ 500/1000/2500
+VDC rows, not a checklist item number). This is a genuine quirk in the
+client's own form, preserved as-is - not "fixed" here.
 """
 
 FIELDS = []
@@ -56,20 +67,6 @@ def _add(id_, label, section, ftype="text", choices=None):
         "choices": choices or [],
     })
 
-
-# ---------------------------------------------------------------- Header ---
-# Real fillable fields, same precedent as eht_removal/eht_rtd's own header
-# block (static company/document chrome aside - the logos and the
-# YCQE-EHT-004 Rev.0 title are printed directly on the template, not
-# fields). Default values for a new zone are "COOEC Canada Ltd." /
-# "K1B Well Pad Project" / "CA23007-SCM-AGC-004" / "Module Yard" per the
-# source scans, but - like eht_removal/eht_rtd - nothing in this app's code
-# auto-fills them; whoever fills in the row types them in, same as every
-# other field.
-_add("customer_name", "Customer Name", "header")
-_add("project_name", "Project Name", "header")
-_add("contract_no", "Contract #", "header")
-_add("location", "Location", "header")
 
 # ------------------------------------------------------------ Trace Data ---
 _add("trace_number", "Trace #", "trace_data")
@@ -116,15 +113,14 @@ _add("megger_2500_result", "SR/MI @ 2500 VDC - Passed/Fail", "equipment")
 _add("comments", "Comments", "comments", "multiline")
 
 # ---------------------------------------------------------------- Sign-off -
-# Neither representative has a separate "Print Name" cell on this
-# particular form (unlike eht_removal/eht_rtd's sign-off blocks, which do)
-# - confirmed against every one of the 19 scanned instances, not invented
-# here. Signature is a real fillable field on this template (a typed
-# name/initials entry, not a hand-signed-only field) - a deliberate choice
-# left open by the implementation plan; see
-# eht_pre_insulation_field_map.py's docstring.
+# Both the name and the date/signature cells are real fillable fields on
+# this template - the real form has a handwritten name under each
+# "Yanda Representative"/"Client Representative" column header, not
+# signature-only (see module docstring).
+_add("yanda_rep_name", "Yanda Representative - Name", "signoff")
 _add("yanda_rep_date", "Yanda Representative - Date (yy/mm/dd)", "signoff")
 _add("yanda_rep_signature", "Yanda Representative - Signature", "signoff")
+_add("client_rep_name", "Client Representative - Name", "signoff")
 _add("client_rep_date", "Client Representative - Date (yy/mm/dd)", "signoff")
 _add("client_rep_signature", "Client Representative - Signature", "signoff")
 
@@ -134,7 +130,6 @@ def by_section(section):
 
 
 SECTION_TITLES = {
-    "header": "Header",
     "trace_data": "Trace Data",
     "pre_insulation": "1.0 Pre-Insulation Inspection",
     "equipment": "Insulation Testing Equipment",

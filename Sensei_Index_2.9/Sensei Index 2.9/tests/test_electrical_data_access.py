@@ -511,7 +511,7 @@ def test_count_all_by_type_and_zone_summary_actually_count_an_eht_pre_insulation
 
 def test_eht_pre_insulation_export_fills_every_hand_typed_field_with_a_distinct_value(isolated_app_dir):
     """test_generate_preview_pdf_eht_pre_insulation_fills_real_fields (above)
-    only value-checks 7 of the 26 hand-typed FIELD_MAP entries - a
+    only value-checks a handful of the 24 hand-typed FIELD_MAP entries - a
     transposition between two same-shaped fields (e.g. client_rep_date <->
     client_rep_signature) would pass every existing test, including the
     bijection-only field-mapping fidelity check, since both are still valid
@@ -534,13 +534,13 @@ def test_eht_pre_insulation_export_fills_every_hand_typed_field_with_a_distinct_
     row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
 
     hand_typed_ids = [
-        "customer_name", "project_name", "contract_no", "location",
         "trace_number", "eht_controller_number", "trace_part_number", "panel_number",
         "rtds_number", "circuit_number", "trace_line_number", "rev",
         "test_equip_model", "test_equip_serial", "cal_due_date",
         "megger_500_reading", "megger_500_result", "megger_1000_reading", "megger_1000_result",
         "megger_2500_reading", "megger_2500_result", "comments",
-        "yanda_rep_date", "yanda_rep_signature", "client_rep_date", "client_rep_signature",
+        "yanda_rep_name", "yanda_rep_date", "yanda_rep_signature",
+        "client_rep_name", "client_rep_date", "client_rep_signature",
     ]
     # Every hand-typed (non-checklist-loop) schema id gets a value that
     # encodes its own id, so a swap between any two fields is unmistakable.
