@@ -235,6 +235,17 @@ def make_field_widget(field, initial_value):
         combo.addItems(field["choices"])
         if initial_value in field["choices"]:
             combo.setCurrentText(initial_value)
+        elif initial_value:
+            # The stored value doesn't match any of this field's known
+            # choices (a legacy value, a typo relative to the list's own
+            # inconsistent formatting, or a real value the choice list
+            # simply doesn't cover). Insert it as an extra, selected item
+            # instead of dropping to an unselected state: read_field_widget()
+            # below reads an unselected combo back as "" - which would
+            # silently blank this field out the moment the row is saved,
+            # even if the user never touched it.
+            combo.insertItem(0, initial_value)
+            combo.setCurrentIndex(0)
         else:
             combo.setCurrentIndex(-1)
         return combo
@@ -5377,10 +5388,15 @@ class PopulatingWizardDialog(QDialog):
 
 
 # =============================================================================
-# Electrical - EHT Removal & Reinstatement / EHT & RTD Installation
-# Inspection tracking. A separate, independent domain from Instrumentation
-# (its own workbook, its own "Zone" registry instead of series numbers) -
-# see electrical_data_access.py's module docstring for the full rationale.
+# Electrical - inspection tracking for every form registered in
+# electrical_data_access.py's ELECTRICAL_EQUIPMENT_TYPES (currently EHT
+# Removal & Reinstatement, EHT & RTD Installation, EHT & RTD Pre-Insulation
+# Installation, and the Torqueing Report). A separate, independent domain
+# from Instrumentation (its own workbook, its own "Zone" registry instead
+# of series numbers) - see electrical_data_access.py's module docstring
+# for the full rationale. This comment names the current forms only as a
+# convenience - ElectricalDashboardPage's own subtitle below is built
+# straight from the registry so it can't go stale the way this list can.
 #
 # v1 scope, deliberately: core CRUD + single-row PDF export + a dashboard,
 # mirroring the ORIGINAL Transmitter/Valve system rather than every v2.1
@@ -5577,8 +5593,10 @@ class ElectricalExportDialog(QDialog):
     """The Electrical equivalent of ExportDialog - same "which rows? /
     filename suffix / flatten / merge / output folder" shape, trimmed to
     what actually applies here: no 'flagged' mode (no Excel Y/N gate
-    column on any Electrical schema) and no signature checkbox (none of
-    the three Electrical forms stamp a signature image)."""
+    column on any Electrical schema). The signature checkbox only appears
+    for an equipment type whose registry entry sets
+    supports_signature_stamp=True (currently just "torqueing" - see
+    export_torqueing_to_pdf.py's own stamp_signature())."""
 
     def __init__(self, parent, zone_name, equip_key):
         super().__init__(parent)
@@ -5641,6 +5659,16 @@ class ElectricalExportDialog(QDialog):
         self.merge_check = QCheckBox("Also combine everything into one merged PDF")
         layout.addWidget(self.merge_check)
 
+        self.signature_check = None
+        if self.etype.get("supports_signature_stamp"):
+            layout.addSpacing(4)
+            self.signature_check = QCheckBox("Include signature")
+            self.signature_check.setChecked(True)
+            self.signature_check.setToolTip(
+                "Stamps the Yanda Representative's signature automatically - "
+                "the Client Representative's is always hand-signed.")
+            layout.addWidget(self.signature_check)
+
         layout.addSpacing(10)
         folder_label = QLabel("Output folder")
         folder_label.setStyleSheet("font-weight: 700;")
@@ -5689,7 +5717,8 @@ class ElectricalExportDialog(QDialog):
                 subfolder=self.subfolder_edit.text().strip() or None,
                 merge=self.merge_check.isChecked(),
                 clear_after_selected=self.clear_after_check.isChecked(),
-                include_date_in_filename=self.filename_date_check.isChecked())
+                include_date_in_filename=self.filename_date_check.isChecked(),
+                include_signature=self.signature_check.isChecked() if self.signature_check else True)
         except Exception as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
@@ -5925,7 +5954,11 @@ class ElectricalDashboardPage(QWidget):
         title = QLabel("Electrical")
         title.setObjectName("PageTitle")
         title_col.addWidget(title)
-        subtitle = QLabel("EHT Removal & Reinstatement / EHT & RTD Installation Inspection")
+        # Built from the registry (rather than a hardcoded string) so it
+        # can never again describe fewer forms than actually exist - a
+        # hardcoded version of this already went stale twice before
+        # (missing eht_pre_insulation, then missing torqueing too).
+        subtitle = QLabel(" / ".join(t["label"] for t in eda.ELECTRICAL_EQUIPMENT_TYPES.values()))
         subtitle.setObjectName("PageSubtitle")
         title_col.addWidget(subtitle)
         header_row.addLayout(title_col)

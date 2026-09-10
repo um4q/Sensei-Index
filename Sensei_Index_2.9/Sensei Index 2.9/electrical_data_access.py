@@ -43,9 +43,11 @@ from data_access import HERE, write_json_atomic, read_json_with_recovery, open_f
 import eht_removal_schema
 import eht_rtd_schema
 import eht_pre_insulation_schema
+import torqueing_schema
 import export_eht_removal_to_pdf
 import export_eht_rtd_to_pdf
 import export_eht_pre_insulation_to_pdf
+import export_torqueing_to_pdf
 
 ELECTRICAL_WORKBOOK_PATH = HERE / "Electrical_Inspection_Tracker.xlsx"
 ELECTRICAL_CONFIG_PATH = HERE / "electrical_registry.json"
@@ -92,6 +94,21 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "summary_fields": ["trace_number", "eht_controller_number", "panel_number"],
         "summary_labels": ["Trace #", "EHT Controller #", "Panel #"],
     },
+    "torqueing": {
+        "label": "Torqueing Report",
+        "schema": torqueing_schema,
+        "export_module": export_torqueing_to_pdf,
+        "key_field": "torque_record_number",
+        "summary_fields": ["torque_record_number", "reference_tag_number", "system_number"],
+        "summary_labels": ["Torque Record No.", "Reference Tag #", "System No."],
+        # Unlike the other three Electrical forms, this one has a real
+        # signature stamp (see export_torqueing_to_pdf.py's own
+        # stamp_signature()) - generate_preview_pdf()/run_export() check
+        # for this key generically (hasattr would also work, but an
+        # explicit flag here is easier to grep for and can't be fooled by
+        # an unrelated same-named attribute on some future export module).
+        "supports_signature_stamp": True,
+    },
 }
 
 # Short, distinct prefixes for sheet names - the equipment types' own
@@ -101,6 +118,7 @@ SHEET_NAME_PREFIXES = {
     "eht_removal": "EHT Removal",
     "eht_rtd": "EHT RTD",
     "eht_pre_insulation": "EHT PreIns",
+    "torqueing": "Torqueing",
 }
 
 
@@ -628,7 +646,7 @@ def read_index_rows_with_export_status(zone_name, equip_key):
 
 def run_export(zone_name, equip_key, mode, suffix="", flatten=False,
                 subfolder=None, merge=False, clear_after_selected=True,
-                include_date_in_filename=False):
+                include_date_in_filename=False, include_signature=True):
     """Batch export - the Electrical equivalent of data_access.py's
     run_export(), scoped to what actually applies here:
         'selected' - only rows whose Export checkbox is checked in the app
@@ -636,10 +654,16 @@ def run_export(zone_name, equip_key, mode, suffix="", flatten=False,
         'all'      - every row with the key field filled in.
     There is no 'flagged' mode (Electrical's schemas have no Excel
     "Export to PDF Y/N" gate column - see eht_removal_schema.py's own
-    docstring for why) and no include_signature option (none of the three
-    Electrical forms stamp a signature image - eht_removal/eht_rtd are
-    hand-signed only, eht_pre_insulation's signature is a real typed
-    field like any other).
+    docstring for why).
+
+    include_signature: only meaningful for an equipment type whose
+    ELECTRICAL_EQUIPMENT_TYPES entry sets supports_signature_stamp=True
+    (currently just "torqueing" - see export_torqueing_to_pdf.py's own
+    stamp_signature()); harmless to pass for the other three types, whose
+    export modules' fill_pdf() simply don't accept/use it the same way -
+    eht_removal/eht_rtd are hand-signed only, eht_pre_insulation's
+    signature is a real typed field like any other, neither stamps an
+    image, so this flag has no effect on them.
 
     clear_after_selected: when mode == 'selected' and this is True (the
     default), every row actually written un-checks its own Export box
@@ -689,7 +713,15 @@ def run_export(zone_name, equip_key, mode, suffix="", flatten=False,
             n += 1
         used_names.add(name)
         out_path = out_dir / f"{name}.pdf"
-        export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, values, out_path, flatten=flatten)
+        if etype.get("supports_signature_stamp"):
+            # Only the export modules that actually declare this even
+            # accept the kwarg - eht_removal/eht_rtd/eht_pre_insulation's
+            # own fill_pdf() signatures have no add_signature parameter at
+            # all, so this is passed conditionally, never blindly.
+            export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, values, out_path,
+                                 flatten=flatten, add_signature=include_signature)
+        else:
+            export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, values, out_path, flatten=flatten)
         written.append(out_path)
 
     if merge and written:

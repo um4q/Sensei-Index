@@ -212,9 +212,12 @@ def test_count_all_by_type_and_zone_summary(isolated_app_dir):
     row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
     eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": "29103-EHT-0001"})
 
-    assert eda.count_all_by_type() == {"eht_removal": 1, "eht_rtd": 0, "eht_pre_insulation": 0}
+    assert eda.count_all_by_type() == {
+        "eht_removal": 1, "eht_rtd": 0, "eht_pre_insulation": 0, "torqueing": 0,
+    }
     assert eda.zone_summary("K1B Well Pad") == {
-        "eht_removal": {"total": 1}, "eht_rtd": {"total": 0}, "eht_pre_insulation": {"total": 0},
+        "eht_removal": {"total": 1}, "eht_rtd": {"total": 0},
+        "eht_pre_insulation": {"total": 0}, "torqueing": {"total": 0},
     }
 
 
@@ -490,7 +493,8 @@ def test_zone_summary_zero_fills_every_registry_key_same_as_count_all_by_type(is
     eda.add_zone("K1B Well Pad")
     assert set(eda.zone_summary("K1B Well Pad").keys()) == set(eda.count_all_by_type().keys())
     assert eda.zone_summary("K1B Well Pad") == {
-        "eht_removal": {"total": 0}, "eht_rtd": {"total": 0}, "eht_pre_insulation": {"total": 0},
+        "eht_removal": {"total": 0}, "eht_rtd": {"total": 0},
+        "eht_pre_insulation": {"total": 0}, "torqueing": {"total": 0},
     }
 
 
@@ -702,3 +706,274 @@ def test_run_export_never_touches_a_real_workbook(isolated_app_dir):
     eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="all")
     after = eda.ELECTRICAL_WORKBOOK_PATH.read_bytes()
     assert before == after
+
+
+# --------------------------------------------------------------------------
+# torqueing - the fourth Electrical form (YCQE-E&I-014 Rev.0). Unlike
+# eht_pre_insulation, the original PDF IS a real fillable form (not a
+# scan) - see torqueing_field_map.py's own docstring for how its 138
+# fields were reverse-engineered by row/column position. It's also the
+# only Electrical form with a Yanda signature stamp (the user's own
+# request: "can add signature too as the instrumentation dashboard has
+# it") - export_torqueing_to_pdf.py's stamp_signature() mirrors
+# export_to_pdf.py's mechanism exactly.
+# --------------------------------------------------------------------------
+
+def test_add_zone_creates_torqueing_sheet(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    entry = eda.add_zone("K1B Well Pad")
+    assert "torqueing_sheet" in entry
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry["torqueing_sheet"] in wb.sheetnames
+
+
+def test_add_zone_torqueing_header_row_matches_schema_labels(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    import torqueing_schema
+    entry = eda.add_zone("K1B Well Pad")
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    ws = wb[entry["torqueing_sheet"]]
+    header = [ws.cell(row=3, column=c).value for c in range(1, len(torqueing_schema.LOG_COLUMNS) + 1)]
+    assert header == [f["label"] for f in torqueing_schema.LOG_COLUMNS]
+
+
+def test_torqueing_sheet_name_respects_the_31_char_limit(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    long_name = "A Very Long Zone Name That Would Blow Past The Excel Sheet Name Limit"
+    entry = eda.add_zone(long_name)
+    assert len(entry["torqueing_sheet"]) <= 31
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry["torqueing_sheet"] in wb.sheetnames
+
+
+def test_torqueing_save_and_read_row_round_trips(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {
+        "torque_record_number": "TR-100", "reference_tag_number": "TAG-001",
+        "system_number": "K1B- EHouse", "bolt_row_1_no": "1", "bolt_row_1_tag": "BOLT-1",
+        "bolt_row_2_no": "2",
+    })
+    full = eda.read_full_row("K1B Well Pad", "torqueing", row)
+    assert full["torque_record_number"] == "TR-100"
+    assert full["reference_tag_number"] == "TAG-001"
+    assert full["system_number"] == "K1B- EHouse"
+    assert full["bolt_row_1_no"] == "1"
+    assert full["bolt_row_1_tag"] == "BOLT-1"
+    assert full["bolt_row_2_no"] == "2"
+    assert full["bolt_row_1_grade"] == ""  # untouched field stays blank
+    assert full["bolt_row_15_date"] == ""  # last row, untouched, stays blank
+
+
+def test_torqueing_read_index_rows_only_shows_rows_with_key_filled(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {"reference_tag_number": "TAG-001"})  # no torque_record_number
+    assert eda.read_index_rows("K1B Well Pad", "torqueing") == []
+
+    eda.save_row("K1B Well Pad", "torqueing", row, {"torque_record_number": "TR-100"})
+    rows = eda.read_index_rows("K1B Well Pad", "torqueing")
+    assert len(rows) == 1
+    assert rows[0]["torque_record_number"] == "TR-100"
+
+
+def test_generate_preview_pdf_torqueing_fills_real_fields_across_the_whole_form(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {
+        "torque_record_number": "TR-100", "system_number": "K1B- EHouse",
+        "reference_tag_number": "TAG-001", "torque_wrench_manufacturer": "Snap-On",
+        "bolt_row_1_no": "1", "bolt_row_1_tag": "BOLT-1", "bolt_row_1_grade": "8",
+        "bolt_row_2_no": "2", "bolt_row_2_tag": "BOLT-2",
+        # Row 8: a MIDDLE row (3-14 were previously never touched by any
+        # PDF-fill test), and the size/torque_value/torqued_by/witnessed_by
+        # columns (previously never touched by ANY row) - see
+        # test_torqueing_bolt_table_maps_every_row_and_column_to_the_correct_field
+        # for the exhaustive, formula-derived version of this same check.
+        "bolt_row_8_size": "1/2 in", "bolt_row_8_torque_value": "75",
+        "bolt_row_8_torqued_by": "AB", "bolt_row_8_witnessed_by": "CD",
+        "bolt_row_15_no": "15", "bolt_row_15_date": "2026/09/10",
+        "torque_spec_document_reference": "SPEC-1", "comments_na": "Y",
+        "comments": "all good", "yanda_rep_name": "Dana Eshleyah",
+        "client_rep_name": "John Smith",
+    })
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "torqueing", row)
+    assert out_path.exists()
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["Text131"].get("/V") == "TR-100"
+    assert fields["Dropdown1"].get("/V") == "K1B- EHouse"
+    assert fields["Text134"].get("/V") == "TAG-001"
+    assert fields["Text138"].get("/V") == "Snap-On"
+    assert fields["NO"].get("/V") == "1"
+    assert fields["TAG #"].get("/V") == "BOLT-1"
+    assert fields["GRADE"].get("/V") == "8"
+    assert fields["Text10"].get("/V") == "2"
+    assert fields["Text11"].get("/V") == "BOLT-2"
+    assert fields["Text61"].get("/V") == "1/2 in"   # bolt_row_8_size
+    assert fields["Text62"].get("/V") == "75"        # bolt_row_8_torque_value
+    assert fields["Text63"].get("/V") == "AB"        # bolt_row_8_torqued_by
+    assert fields["Text64"].get("/V") == "CD"        # bolt_row_8_witnessed_by
+    assert fields["Text114"].get("/V") == "15"      # bolt_row_15_no
+    assert fields["Text148"].get("/V") == "2026/09/10"  # bolt_row_15_date
+    assert fields["TORQUE SPECIFICATION DOCUMENT REFERENCE"].get("/V") == "SPEC-1"
+    assert fields["N/A"].get("/V") == "/N/A"
+    assert fields["COMMENTS"].get("/V") == "all good"
+    assert fields["YANDA REPRESENTATIVE"].get("/V") == "Dana Eshleyah"
+    assert fields["CLIENT REPRESENTATIVE"].get("/V") == "John Smith"
+
+
+def test_generate_preview_pdf_torqueing_comments_na_off_by_default(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {"torque_record_number": "TR-100"})
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "torqueing", row)
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["N/A"].get("/V") in (None, "/Off")
+
+
+def test_generate_preview_pdf_torqueing_stamps_yanda_signature_by_default(isolated_app_dir):
+    """The signature stamp is a page-content overlay, not a fillable field
+    (the original PDF has no signature field for either representative) -
+    detected here via the extra merged-in XObject stamp_signature() adds,
+    the same signal a real PDF viewer would show as visible ink."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {"torque_record_number": "TR-100"})
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "torqueing", row)
+    page = PdfReader(str(out_path)).pages[0]
+    xobjects = page.get("/Resources", {}).get("/XObject", {})
+    assert any(str(k).startswith("/FormXob") for k in xobjects.keys())
+
+
+def test_run_export_torqueing_respects_include_signature_toggle(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {"torque_record_number": "TR-100"})
+
+    written_with = eda.run_export("K1B Well Pad", "torqueing", mode="all", include_signature=True)
+    page_with = PdfReader(str(written_with[0])).pages[0]
+    has_stamp = any(str(k).startswith("/FormXob")
+                    for k in page_with.get("/Resources", {}).get("/XObject", {}).keys())
+    assert has_stamp
+
+    written_without = eda.run_export("K1B Well Pad", "torqueing", mode="all",
+                                       include_signature=False, suffix="nosig")
+    page_without = PdfReader(str(written_without[0])).pages[0]
+    has_stamp2 = any(str(k).startswith("/FormXob")
+                      for k in page_without.get("/Resources", {}).get("/XObject", {}).keys())
+    assert not has_stamp2
+
+
+def test_run_export_include_signature_is_harmless_for_forms_without_a_stamp(isolated_app_dir):
+    """include_signature only means something for a type that declares
+    supports_signature_stamp - passing it for eht_removal (whose fill_pdf
+    doesn't even accept the kwarg) must not raise."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
+    eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": "29103-EHT-0001"})
+    written = eda.run_export("K1B Well Pad", "eht_removal", mode="all", include_signature=False)
+    assert len(written) == 1
+
+
+def test_torqueing_field_mapping_fidelity_against_its_own_template():
+    """Every schema field (except comments_na, special-cased through
+    COMMENTS_NA_CHECKBOX) must have a FIELD_MAP entry pointing at a real
+    field on the template, every FIELD_MAP value must be a real field,
+    and together with the N/A checkbox they must account for EVERY field
+    on the template - a from-scratch bijection check, the reverse-
+    engineered-map equivalent of eht_pre_insulation's identity-map check."""
+    import torqueing_schema as schema
+    import torqueing_field_map as fm
+    from export_torqueing_to_pdf import DEFAULT_TEMPLATE
+
+    for field in schema.LOG_COLUMNS:
+        if field["id"] == "comments_na":
+            continue
+        assert field["id"] in fm.FIELD_MAP, f"{field['id']} has no FIELD_MAP entry"
+
+    template_fields = set(PdfReader(str(DEFAULT_TEMPLATE)).get_fields().keys())
+    for schema_id, pdf_field in fm.FIELD_MAP.items():
+        assert pdf_field in template_fields, (
+            f"FIELD_MAP['{schema_id}'] = '{pdf_field}' is not a real field on {DEFAULT_TEMPLATE.name}"
+        )
+    accounted_for = set(fm.FIELD_MAP.values()) | {fm.COMMENTS_NA_CHECKBOX["field"]}
+    assert template_fields == accounted_for, (
+        f"unaccounted template fields: {template_fields - accounted_for}, "
+        f"or map entries with no matching template field: {accounted_for - template_fields}"
+    )
+
+
+def test_torqueing_bolt_table_maps_every_row_and_column_to_the_correct_field():
+    """The bijection test above only checks FIELD_MAP's *value set* against
+    the template's field set - two entries with the same shape (e.g. two
+    rows' "tag" columns, or "torqued_by" swapped with "witnessed_by"
+    within one row) can be transposed and it still passes, because the
+    set of values is unchanged. This test instead re-derives each bolt-
+    table cell's expected PDF field name independently, from the original
+    form's own numbering pattern (not by reading FIELD_MAP), and checks
+    every one of the 120 cells against it individually - so a transposition
+    like that is actually caught.
+
+    The pattern (confirmed both by clustering every widget's own /Rect
+    from reference_material/YCQE-EI-014_Torqueing_Report/
+    torqueing_field_positions_raw.json into rows/columns, and by manual
+    review against the template's real field dictionary when
+    torqueing_field_map.py was first built):
+      - Row 1 uses the original author's own human-readable names.
+      - Rows 2-15, across the 7 columns no/tag/grade/size/torque_value/
+        torqued_by/witnessed_by, are "Text##" and perfectly sequential
+        PER ROW: row r's "no" column is Text{8*r - 6}, and the next 6
+        columns are the next 6 consecutive numbers.
+      - The "date" column is NOT sequential with the rest - the original
+        author added it in a separate editing pass (a real quirk of the
+        source PDF, not a mapping error) - its values are listed
+        explicitly below rather than derived from a formula.
+    """
+    import torqueing_field_map as fm
+
+    row_1_names = ["NO", "TAG #", "GRADE", "SIZE", "VALUE (FT/LB", "BY INITIAL", "BY INITIAL (1)"]
+    columns = ["no", "tag", "grade", "size", "torque_value", "torqued_by", "witnessed_by"]
+    date_by_row = {
+        1: "yyyy/mm/dd", 2: "Text123", 3: "Text124", 4: "Text125", 5: "Text126",
+        6: "Text132", 7: "Text140", 8: "Text141", 9: "Text142", 10: "Text143",
+        11: "Text144", 12: "Text145", 13: "Text146", 14: "Text147", 15: "Text148",
+    }
+
+    checked = 0
+    for row in range(1, 16):
+        for col_index, col_id in enumerate(columns):
+            expected = row_1_names[col_index] if row == 1 else f"Text{8 * row - 6 + col_index}"
+            fid = f"bolt_row_{row}_{col_id}"
+            assert fm.FIELD_MAP[fid] == expected, (
+                f"FIELD_MAP['{fid}'] = {fm.FIELD_MAP[fid]!r}, expected {expected!r} "
+                f"(row {row}, column '{col_id}')"
+            )
+            checked += 1
+        date_fid = f"bolt_row_{row}_date"
+        assert fm.FIELD_MAP[date_fid] == date_by_row[row], (
+            f"FIELD_MAP['{date_fid}'] = {fm.FIELD_MAP[date_fid]!r}, expected {date_by_row[row]!r} (row {row})"
+        )
+        checked += 1
+    assert checked == 120  # all 15 rows x 8 columns, no silent gaps
+
+
+def test_torqueing_template_has_no_baked_in_sample_data(isolated_app_dir):
+    """The original PDF this template came from had real sample values in
+    its 4 header fields (Customer Name/Project Name/Contract#/Location) -
+    confirmed cleared when the checked-in template was built (see
+    torqueing_field_map.py's own docstring re: this exact precaution)."""
+    from export_torqueing_to_pdf import DEFAULT_TEMPLATE
+    fields = PdfReader(str(DEFAULT_TEMPLATE)).get_fields()
+    non_blank = {k: v.get("/V") for k, v in fields.items()
+                 if v.get("/V") and str(v.get("/V")).strip() not in ("", " ", "  ")}
+    # The N/A checkbox's own /Off default state is not "sample data".
+    non_blank.pop("N/A", None)
+    assert non_blank == {}

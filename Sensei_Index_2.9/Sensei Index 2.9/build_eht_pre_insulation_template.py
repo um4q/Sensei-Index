@@ -54,6 +54,7 @@ from pathlib import Path
 
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+from pypdf import PdfReader, PdfWriter
 
 from eht_pre_insulation_field_positions import all_fields, PAGE_H_PX, DPI
 
@@ -88,7 +89,11 @@ def build():
     c = canvas.Canvas(str(OUT_PATH), pagesize=letter)
     c.setTitle("EHT & RTD Pre-Insulation Installation Report - YCQE-EHT-004 Rev.0")
     c.drawImage(str(BG_IMAGE), 0, 0, width=PAGE_W, height=PAGE_H)
-    c.acroForm.needAppearances = True
+    # NOTE: `c.acroForm.needAppearances = True` (an earlier version of this
+    # line) is a NO-OP - reportlab's AcroForm object has no such real
+    # property; it silently sets an unused Python attribute and never
+    # writes /NeedAppearances into the PDF at all. Set it for real below,
+    # via pypdf, after reportlab has finished writing the file.
 
     count = 0
     for field_id, x0, y0, x1, y1 in all_fields():
@@ -104,6 +109,20 @@ def build():
 
     c.showPage()
     c.save()
+
+    # Actually set /NeedAppearances true (see note above) - matters most
+    # for whoever opens this blank template directly in a PDF viewer
+    # (rather than through the app's own fill_pdf(), which already sets
+    # this correctly via writer.set_need_appearances_writer()): without
+    # it, a strict viewer may not (re)generate a field's on-screen
+    # appearance reliably.
+    reader = PdfReader(str(OUT_PATH))
+    writer = PdfWriter()
+    writer.append(reader)
+    writer.set_need_appearances_writer(True)
+    with open(OUT_PATH, "wb") as fh:
+        writer.write(fh)
+
     print(f"Wrote {OUT_PATH} with {count} fields")
 
 

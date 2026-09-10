@@ -176,7 +176,7 @@ def test_main_window_add_zone_flow_and_sidebar_tree(qtbot, isolated_app_dir, mon
     assert win.tree.topLevelItemCount() == 2
     zone_item = win.tree.topLevelItem(1)
     assert zone_item.text(0) == "K1B Well Pad"
-    assert zone_item.childCount() == 3  # eht_removal + eht_rtd + eht_pre_insulation
+    assert zone_item.childCount() == 4  # eht_removal + eht_rtd + eht_pre_insulation + torqueing
 
 
 def test_instrumentation_only_shortcuts_are_gated_while_electrical_is_active(
@@ -445,3 +445,144 @@ def test_electrical_index_page_open_export_reloads_after_dialog_closes(
     row_of_tr001 = next(r for r in range(page.table.rowCount()) if page.table.item(r, 0).text() == "TR-001")
     checkbox = page.table.cellWidget(row_of_tr001, export_col).findChild(gui_app.QCheckBox)
     assert checkbox.isChecked() is False
+
+
+# --------------------------------------------------------------------------
+# torqueing - the fourth Electrical form. Also the only one whose
+# ElectricalExportDialog shows an "Include signature" checkbox.
+# --------------------------------------------------------------------------
+
+def test_electrical_dashboard_shows_torqueing_totals(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {"torque_record_number": "TR-100"})
+
+    page = gui_app.ElectricalDashboardPage(fake_main_window)
+    qtbot.addWidget(page)
+    totals_by_title = {}
+    for card in page.findChildren(gui_app.StatCard):
+        title_label = next(w for w in card.findChildren(gui_app.QLabel) if w.objectName() == "StatLabel")
+        number_label = card.findChild(gui_app.QLabel, "StatNumber")
+        totals_by_title[title_label.text()] = number_label.text()
+    assert totals_by_title["Torqueing Report"] == "1"
+
+
+def test_electrical_index_page_lists_saved_torqueing_rows(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {"torque_record_number": "TR-100", "reference_tag_number": "TAG-1"})
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "torqueing")
+    qtbot.addWidget(page)
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "TR-100"
+    assert page.table.item(0, 0).data(gui_app.Qt.UserRole) == row
+
+
+def test_electrical_edit_dialog_has_a_widget_for_every_torqueing_field(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    import torqueing_schema
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    dlg = gui_app.ElectricalEditDialog(None, "K1B Well Pad", "torqueing", row, is_new=True)
+    qtbot.addWidget(dlg)
+    assert set(dlg.widgets.keys()) == {f["id"] for f in torqueing_schema.LOG_COLUMNS}
+    # the System No. dropdown is a real choice field, not a plain line edit
+    assert isinstance(dlg.widgets["system_number"], gui_app.QComboBox)
+
+
+def test_electrical_edit_dialog_preserves_a_system_number_not_in_the_choice_list(
+        qtbot, isolated_app_dir, fake_main_window):
+    """Regression test: a stored system_number that isn't byte-for-byte one
+    of the fixed SYSTEM_NUMBER_CHOICES (a legacy value, an import, or just
+    a stored value predating a choice-list change) must survive opening
+    and saving the row unchanged - not get silently blanked because the
+    combo couldn't find it and fell back to an unselected state."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {
+        "torque_record_number": "TR-100", "system_number": "K1B-EHouse-LEGACY-VALUE",
+    })
+
+    dlg = gui_app.ElectricalEditDialog(None, "K1B Well Pad", "torqueing", row, is_new=False)
+    qtbot.addWidget(dlg)
+    combo = dlg.widgets["system_number"]
+    assert combo.currentText() == "K1B-EHouse-LEGACY-VALUE"
+    assert dlg.is_dirty() is False  # opening the dialog alone must not read as a change
+
+    dlg.save()
+    full = eda.read_full_row("K1B Well Pad", "torqueing", row)
+    assert full["system_number"] == "K1B-EHouse-LEGACY-VALUE"
+
+
+def test_electrical_index_page_add_new_torqueing_via_real_dialog(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "torqueing")
+    qtbot.addWidget(page)
+
+    row_num = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    dlg = gui_app.ElectricalEditDialog(page, "K1B Well Pad", "torqueing", row_num, is_new=True)
+    qtbot.addWidget(dlg)
+    dlg.widgets["torque_record_number"].setText("TR-999")
+    dlg.save()
+    assert dlg.result() == gui_app.QDialog.Accepted
+
+    page.reload()
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "TR-999"
+
+
+def test_export_electrical_pdf_flow_torqueing_writes_and_opens_file(
+        qtbot, isolated_app_dir, fake_main_window, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    opened = []
+    monkeypatch.setattr(gui_app.da, "open_file", lambda p: opened.append(p))
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {"torque_record_number": "TR-100"})
+
+    widget = gui_app.QWidget()
+    qtbot.addWidget(widget)
+    gui_app.export_electrical_pdf_flow(widget, "K1B Well Pad", "torqueing", row)
+    assert len(opened) == 1
+    assert PdfReader(str(opened[0])).get_fields()["Text131"].get("/V") == "TR-100"
+
+
+def test_electrical_export_dialog_shows_signature_checkbox_only_for_torqueing(
+        qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+
+    dlg_torqueing = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "torqueing")
+    qtbot.addWidget(dlg_torqueing)
+    assert dlg_torqueing.signature_check is not None
+    assert dlg_torqueing.signature_check.isChecked() is True
+
+    dlg_removal = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "eht_removal")
+    qtbot.addWidget(dlg_removal)
+    assert dlg_removal.signature_check is None
+
+
+def test_electrical_export_dialog_torqueing_signature_checkbox_controls_the_stamp(
+        qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", row, {"torque_record_number": "TR-100"})
+
+    dlg = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "torqueing")
+    qtbot.addWidget(dlg)
+    dlg.mode_group.button(1).setChecked(True)  # "all" mode
+    dlg.signature_check.setChecked(False)
+    dlg._run()
+    assert dlg.result() == gui_app.QDialog.Accepted
+
+    out_path = eda.ELECTRICAL_OUTPUT_DIR / "TR-100.pdf"
+    page = PdfReader(str(out_path)).pages[0]
+    has_stamp = any(str(k).startswith("/FormXob")
+                     for k in page.get("/Resources", {}).get("/XObject", {}).keys())
+    assert not has_stamp
