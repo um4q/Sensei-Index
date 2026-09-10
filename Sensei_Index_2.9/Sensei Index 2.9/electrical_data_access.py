@@ -260,21 +260,58 @@ def get_sheet_name(zone_name, equip_key):
     KeyError for this exact case, and remove_zone() already had to code
     around it defensively (entry.get(...) instead of a hard lookup) -
     confirming the missing-key case is a real, reachable possibility that
-    now heals instead of failing."""
+    now heals instead of failing.
+
+    Also self-heals the column-level version of the same problem: a sheet
+    that already exists but was built BEFORE some field was added to its
+    schema (e.g. yanda_rep_name added to a form after some zone's sheet
+    already existed) has no column for it in its header row at all - every
+    caller above resolves columns via load_column_map(), which can only
+    find a column that's actually there, so a field missing from the
+    header can never be saved or read back no matter how many times it's
+    retyped. See _ensure_sheet_has_every_schema_column() below."""
     cfg = load_config()
     for z in cfg["zones"]:
         if z["name"] == zone_name:
             key = f"{equip_key}_sheet"
+            etype = ELECTRICAL_EQUIPMENT_TYPES[equip_key]
             if key not in z:
-                etype = ELECTRICAL_EQUIPMENT_TYPES[equip_key]
                 with _mutating_workbook() as wb:
                     sheet_name = _sheet_name_for_zone(equip_key, zone_name, wb)
                     _build_new_sheet(wb, sheet_name, etype["schema"].LOG_COLUMNS)
                 z[key] = sheet_name
                 save_config(cfg)
                 return sheet_name
-            return z[key]
+            sheet_name = z[key]
+            _ensure_sheet_has_every_schema_column(sheet_name, etype)
+            return sheet_name
     raise KeyError(f"Zone '{zone_name}' is not in {ELECTRICAL_CONFIG_PATH.name}")
+
+
+def _ensure_sheet_has_every_schema_column(sheet_name, etype):
+    """The column-level equivalent of get_sheet_name()'s own missing-SHEET
+    healing above. Backfills any schema field whose label isn't already
+    somewhere in the header row onto the END of that row (new columns
+    only - existing columns/positions/data are never touched), so
+    load_column_map() can find it from here on. A cheap read-only check
+    (cached workbook, no save) in the common case where nothing's
+    missing; only opens _mutating_workbook() - and so only writes to
+    disk - when there's an actual gap to backfill."""
+    header_row = etype["export_module"].HEADER_ROW
+    wb = _get_cached_workbook(data_only=False)
+    if sheet_name not in wb.sheetnames:
+        return  # get_sheet_name just resolved this name - shouldn't happen
+    ws = wb[sheet_name]
+    existing_labels = {ws.cell(row=header_row, column=c).value for c in range(1, ws.max_column + 1)}
+    missing = [f for f in etype["schema"].LOG_COLUMNS if f["label"] not in existing_labels]
+    if not missing:
+        return
+    with _mutating_workbook() as wb:
+        ws = wb[sheet_name]
+        col = ws.max_column + 1
+        for field in missing:
+            ws.cell(row=header_row, column=col, value=field["label"])
+            col += 1
 
 
 def _sheet_name_for_zone(equip_key, zone_name, wb):

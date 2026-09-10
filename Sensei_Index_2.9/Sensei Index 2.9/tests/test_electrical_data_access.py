@@ -485,6 +485,76 @@ def test_get_sheet_name_backfill_header_row_matches_schema_labels(isolated_app_d
     assert header == [f["label"] for f in eht_pre_insulation_schema.LOG_COLUMNS]
 
 
+def test_get_sheet_name_backfills_a_column_missing_from_an_existing_sheets_header(isolated_app_dir):
+    """The column-level counterpart to the missing-SHEET backfill above: a
+    sheet that already exists (created before some field was added to its
+    schema - the real-world case being yanda_rep_name on a zone whose
+    torqueing/eht_pre_insulation sheet predates it) has no column for that
+    field at all. Every caller resolves columns via load_column_map(),
+    which can only find a column that's actually there - so before this
+    fix, that field could never be saved or read back no matter how many
+    times it was retyped, with no error to say why."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    sheet_name = eda.get_sheet_name("K1B Well Pad", "torqueing")
+
+    # Write a real row on the fully-working sheet first, THEN simulate a
+    # sheet built before yanda_rep_name existed in the schema by blanking
+    # just its header cell (the column stays present but unlabeled, same
+    # as load_column_map() would see for a column that was simply never
+    # there in an older build) - this pre-existing row/data must survive
+    # the backfill untouched.
+    existing_row = eda.find_first_blank_row("K1B Well Pad", "torqueing")
+    eda.save_row("K1B Well Pad", "torqueing", existing_row,
+                 {"torque_record_number": "TR-PREEXISTING", "customer_name": "ACME Corp"})
+    with eda._mutating_workbook() as wb:
+        ws = wb[sheet_name]
+        for c in range(1, ws.max_column + 1):
+            if ws.cell(row=3, column=c).value == "Yanda Representative - Name":
+                ws.cell(row=3, column=c).value = None
+
+    row = eda.find_first_blank_row("K1B Well Pad", "torqueing")  # triggers the backfill
+    assert row != existing_row
+    eda.save_row("K1B Well Pad", "torqueing", row,
+                 {"torque_record_number": "TR-NEW", "yanda_rep_name": "Dana Eshleyah"})
+    assert eda.read_full_row("K1B Well Pad", "torqueing", row)["yanda_rep_name"] == "Dana Eshleyah"
+
+    # Pre-existing data in unrelated columns/rows must be untouched.
+    preexisting = eda.read_full_row("K1B Well Pad", "torqueing", existing_row)
+    assert preexisting["torque_record_number"] == "TR-PREEXISTING"
+    assert preexisting["customer_name"] == "ACME Corp"
+
+    # The backfilled column must be PERSISTED to disk, not just patched in memory.
+    wb2 = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    ws2 = wb2[sheet_name]
+    header2 = {ws2.cell(row=3, column=c).value for c in range(1, ws2.max_column + 1)}
+    assert "Yanda Representative - Name" in header2
+
+
+def test_get_sheet_name_backfill_is_idempotent_and_never_duplicates_a_column(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    import torqueing_schema
+    eda.add_zone("K1B Well Pad")
+    sheet_name = eda.get_sheet_name("K1B Well Pad", "torqueing")
+    with eda._mutating_workbook() as wb:
+        ws = wb[sheet_name]
+        for c in range(1, ws.max_column + 1):
+            if ws.cell(row=3, column=c).value == "Yanda Representative - Name":
+                ws.cell(row=3, column=c).value = None
+
+    eda.get_sheet_name("K1B Well Pad", "torqueing")  # first call backfills
+    eda.get_sheet_name("K1B Well Pad", "torqueing")  # second call: nothing left to do
+
+    wb2 = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    ws2 = wb2[sheet_name]
+    header2 = [ws2.cell(row=3, column=c).value for c in range(1, ws2.max_column + 1)]
+    assert header2.count("Yanda Representative - Name") == 1
+    # every OTHER label is still present exactly once too - a real backfill,
+    # not a rebuild that could have reordered or dropped something.
+    for field in torqueing_schema.LOG_COLUMNS:
+        assert header2.count(field["label"]) == 1
+
+
 def test_zone_summary_zero_fills_every_registry_key_same_as_count_all_by_type(isolated_app_dir):
     """Both functions must share the same 'always has every registry key'
     contract (found by an adversarial review of Phase B: zone_summary()
