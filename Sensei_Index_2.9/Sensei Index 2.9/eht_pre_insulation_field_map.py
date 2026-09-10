@@ -28,6 +28,15 @@ fillable text fields on this template, not hand-signed-only - a
 deliberate choice (see eht_pre_insulation_schema.py's docstring) made
 because a real digital field keeps the export fully self-contained,
 consistent with how every other field on this form works.
+
+yanda_rep_signature's own typed value is what export_eht_pre_insulation_to_pdf.py's
+fill_pdf() actually fills by default now though: the same automatic
+Yanda QA Representative signature-image stamp Torqueing has is overlaid
+on this exact cell, and that field's typed value (if any) is skipped
+whenever the stamp is applied so the two never render on top of each
+other - see that module's stamp_signature()/fill_pdf() for the details.
+client_rep_signature is untouched by any of this - still a plain typed
+field, same as every other field on this form.
 """
 
 FIELD_MAP = {

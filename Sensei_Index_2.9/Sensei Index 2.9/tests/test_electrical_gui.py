@@ -552,7 +552,7 @@ def test_export_electrical_pdf_flow_torqueing_writes_and_opens_file(
     assert PdfReader(str(opened[0])).get_fields()["Text131"].get("/V") == "TR-100"
 
 
-def test_electrical_export_dialog_shows_signature_checkbox_only_for_torqueing(
+def test_electrical_export_dialog_shows_signature_checkbox_only_for_types_that_support_it(
         qtbot, isolated_app_dir, fake_main_window):
     tmp_path, da = isolated_app_dir
     eda.add_zone("K1B Well Pad")
@@ -562,9 +562,18 @@ def test_electrical_export_dialog_shows_signature_checkbox_only_for_torqueing(
     assert dlg_torqueing.signature_check is not None
     assert dlg_torqueing.signature_check.isChecked() is True
 
+    dlg_pre_insulation = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(dlg_pre_insulation)
+    assert dlg_pre_insulation.signature_check is not None
+    assert dlg_pre_insulation.signature_check.isChecked() is True
+
     dlg_removal = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "eht_removal")
     qtbot.addWidget(dlg_removal)
     assert dlg_removal.signature_check is None
+
+    dlg_rtd = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "eht_rtd")
+    qtbot.addWidget(dlg_rtd)
+    assert dlg_rtd.signature_check is None
 
 
 def test_electrical_export_dialog_torqueing_signature_checkbox_controls_the_stamp(
@@ -586,3 +595,38 @@ def test_electrical_export_dialog_torqueing_signature_checkbox_controls_the_stam
     has_stamp = any(str(k).startswith("/FormXob")
                      for k in page.get("/Resources", {}).get("/XObject", {}).keys())
     assert not has_stamp
+
+
+def test_electrical_export_dialog_eht_pre_insulation_signature_checkbox_controls_the_stamp(
+        qtbot, isolated_app_dir, fake_main_window, monkeypatch):
+    """Unlike Torqueing's equivalent test, this doesn't inspect the written
+    PDF's own XObjects for a "was it stamped" signal: eht_pre_insulation's
+    reportlab-built template produces a "/FormXob"-prefixed XObject from
+    pypdf's own appearance-stream generation even with no stamp at all
+    (confirmed in test_electrical_data_access.py's own stamp-detection
+    test), so a bare presence/absence check isn't a valid signal for this
+    particular template. Spying on run_export()'s own include_signature
+    kwarg instead checks the actual thing this test cares about - that the
+    checkbox's state reaches run_export() correctly - without depending on
+    any PDF-library internals."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001"})
+
+    seen_include_signature = []
+    real_run_export = gui_app.eda.run_export
+
+    def spy_run_export(*args, **kwargs):
+        seen_include_signature.append(kwargs.get("include_signature"))
+        return real_run_export(*args, **kwargs)
+
+    monkeypatch.setattr(gui_app.eda, "run_export", spy_run_export)
+
+    dlg = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(dlg)
+    dlg.mode_group.button(1).setChecked(True)  # "all" mode
+    dlg.signature_check.setChecked(False)
+    dlg._run()
+    assert dlg.result() == gui_app.QDialog.Accepted
+    assert seen_include_signature == [False]

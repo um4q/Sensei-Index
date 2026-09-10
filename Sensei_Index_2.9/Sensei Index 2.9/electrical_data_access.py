@@ -93,6 +93,13 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "key_field": "trace_number",
         "summary_fields": ["trace_number", "eht_controller_number", "panel_number"],
         "summary_labels": ["Trace #", "EHT Controller #", "Panel #"],
+        # Same Yanda QA Representative signature stamp Torqueing has (see
+        # export_eht_pre_insulation_to_pdf.py's own stamp_signature()) -
+        # generate_preview_pdf()/run_export() check for this key
+        # generically (hasattr would also work, but an explicit flag here
+        # is easier to grep for and can't be fooled by an unrelated
+        # same-named attribute on some future export module).
+        "supports_signature_stamp": True,
     },
     "torqueing": {
         "label": "Torqueing Report",
@@ -101,12 +108,6 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "key_field": "torque_record_number",
         "summary_fields": ["torque_record_number", "reference_tag_number", "system_number"],
         "summary_labels": ["Torque Record No.", "Reference Tag #", "System No."],
-        # Unlike the other three Electrical forms, this one has a real
-        # signature stamp (see export_torqueing_to_pdf.py's own
-        # stamp_signature()) - generate_preview_pdf()/run_export() check
-        # for this key generically (hasattr would also work, but an
-        # explicit flag here is easier to grep for and can't be fooled by
-        # an unrelated same-named attribute on some future export module).
         "supports_signature_stamp": True,
     },
 }
@@ -695,12 +696,11 @@ def run_export(zone_name, equip_key, mode, suffix="", flatten=False,
 
     include_signature: only meaningful for an equipment type whose
     ELECTRICAL_EQUIPMENT_TYPES entry sets supports_signature_stamp=True
-    (currently just "torqueing" - see export_torqueing_to_pdf.py's own
-    stamp_signature()); harmless to pass for the other three types, whose
-    export modules' fill_pdf() simply don't accept/use it the same way -
-    eht_removal/eht_rtd are hand-signed only, eht_pre_insulation's
-    signature is a real typed field like any other, neither stamps an
-    image, so this flag has no effect on them.
+    (currently eht_pre_insulation and torqueing - see each one's own
+    export module's stamp_signature()); harmless to pass for eht_removal/
+    eht_rtd too, whose export modules' fill_pdf() simply don't accept the
+    kwarg at all - both are hand-signed only, with no signature field or
+    stamp of any kind.
 
     clear_after_selected: when mode == 'selected' and this is True (the
     default), every row actually written un-checks its own Export box

@@ -381,7 +381,85 @@ def test_generate_preview_pdf_eht_pre_insulation_fills_real_fields(isolated_app_
     assert fields["megger_500_reading"].get("/V") == "5000"
     assert fields["megger_500_result"].get("/V") == "Passed"
     assert fields["comments"].get("/V") == "line1\nline2"
+    # yanda_rep_signature's own typed value is superseded by the automatic
+    # signature image stamp (generate_preview_pdf() always stamps by
+    # default) - see test_generate_preview_pdf_eht_pre_insulation_stamps_yanda_signature_by_default
+    # and test_eht_pre_insulation_yanda_rep_signature_typed_value_still_fills_when_stamp_is_off below.
+    assert fields["yanda_rep_signature"].get("/V") in (None, "")
+
+
+def _xobject_keys(pdf_path):
+    return set(PdfReader(str(pdf_path)).pages[0].get("/Resources", {}).get("/XObject", {}).keys())
+
+
+def test_generate_preview_pdf_eht_pre_insulation_stamps_yanda_signature_by_default(isolated_app_dir):
+    """The signature stamp is a page-content overlay, not a fillable field
+    value - it shows up as an extra merged-in XObject, the same signal
+    Torqueing's own equivalent test uses. Unlike Torqueing's template
+    though, this one already produces a "/FormXob"-prefixed XObject from
+    pypdf's own appearance-stream generation for an ordinary filled text
+    field (confirmed empirically - this template is reportlab-built, not
+    a scanned original) - so "any FormXob key exists" isn't a valid
+    signal here on its own. Comparing against an add_signature=False fill
+    of the exact same values isolates the stamp's own XObject from that
+    baseline noise instead."""
+    from export_eht_pre_insulation_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001"})
+
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "eht_pre_insulation", row)
+    with_stamp_keys = _xobject_keys(out_path)
+
+    baseline_path = eda.ELECTRICAL_TEMP_DIR / "xobject_baseline_no_stamp.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"trace_number": "TR-PI-001"}, baseline_path, add_signature=False)
+    baseline_keys = _xobject_keys(baseline_path)
+
+    assert with_stamp_keys > baseline_keys
+    assert len(with_stamp_keys) == len(baseline_keys) + 1
+
+
+def test_eht_pre_insulation_yanda_rep_signature_typed_value_still_fills_when_stamp_is_off(isolated_app_dir):
+    """add_signature=False (not reachable through generate_preview_pdf(),
+    which always stamps - see run_export()'s own include_signature toggle
+    for the reachable path) restores the pre-stamp behavior: the typed
+    value fills the field normally."""
+    from export_eht_pre_insulation_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {
+        "trace_number": "TR-PI-001", "yanda_rep_signature": "J. Doe",
+    })
+    full = eda.read_full_row("K1B Well Pad", "eht_pre_insulation", row)
+    out_path = eda.ELECTRICAL_TEMP_DIR / "no_stamp_typed_value_check.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"yanda_rep_signature": full["yanda_rep_signature"]}, out_path, add_signature=False)
+
+    fields = PdfReader(str(out_path)).get_fields()
     assert fields["yanda_rep_signature"].get("/V") == "J. Doe"
+
+
+def test_run_export_eht_pre_insulation_respects_include_signature_toggle(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
+    eda.save_row("K1B Well Pad", "eht_pre_insulation", row, {"trace_number": "TR-PI-001"})
+
+    written_with = eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="all", include_signature=True)
+    written_without = eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="all",
+                                       include_signature=False, suffix="nosig")
+
+    # Same input values both times, so any XObject the template itself
+    # produces from ordinary field-filling is identical between the two -
+    # the stamp is the only thing that can make the "with" output have
+    # MORE XObjects than the "without" one (see the dedicated stamp-
+    # detection test above for why a bare "any FormXob key" check isn't
+    # a valid signal on its own for this particular template).
+    with_keys = _xobject_keys(written_with[0])
+    without_keys = _xobject_keys(written_without[0])
+    assert with_keys > without_keys
+    assert len(with_keys) == len(without_keys) + 1
 
 
 def test_eht_pre_insulation_field_mapping_fidelity_against_its_own_template():
@@ -607,18 +685,22 @@ def test_eht_pre_insulation_export_fills_every_hand_typed_field_with_a_distinct_
     eda.add_zone("K1B Well Pad")
     row = eda.find_first_blank_row("K1B Well Pad", "eht_pre_insulation")
 
+    # yanda_rep_signature is deliberately NOT in this list: its typed value
+    # is superseded by the automatic signature stamp whenever add_signature
+    # is True (generate_preview_pdf()'s default) - see the dedicated
+    # add_signature=False check for it right below instead.
     hand_typed_ids = [
         "trace_number", "eht_controller_number", "trace_part_number", "panel_number",
         "rtds_number", "circuit_number", "trace_line_number", "rev",
         "test_equip_model", "test_equip_serial", "cal_due_date",
         "megger_500_reading", "megger_500_result", "megger_1000_reading", "megger_1000_result",
         "megger_2500_reading", "megger_2500_result", "comments",
-        "yanda_rep_name", "yanda_rep_date", "yanda_rep_signature",
+        "yanda_rep_name", "yanda_rep_date",
         "client_rep_name", "client_rep_date", "client_rep_signature",
     ]
     # Every hand-typed (non-checklist-loop) schema id gets a value that
     # encodes its own id, so a swap between any two fields is unmistakable.
-    values = {fid: f"VAL::{fid}" for fid in hand_typed_ids}
+    values = {fid: f"VAL::{fid}" for fid in hand_typed_ids + ["yanda_rep_signature"]}
     eda.save_row("K1B Well Pad", "eht_pre_insulation", row, values)
 
     out_path = eda.generate_preview_pdf("K1B Well Pad", "eht_pre_insulation", row)
@@ -628,6 +710,22 @@ def test_eht_pre_insulation_export_fills_every_hand_typed_field_with_a_distinct_
             f"'{fid}' did not land on the PDF's own '{fid}' field with its own value - "
             f"possible FIELD_MAP transposition"
         )
+
+    # yanda_rep_signature's own FIELD_MAP entry, checked the same
+    # transposition-proof way, but with the stamp turned off (bypassing
+    # generate_preview_pdf(), which doesn't expose add_signature) so its
+    # typed value actually lands instead of being suppressed.
+    import export_eht_pre_insulation_to_pdf as export_mod
+    full_row = eda.read_full_row("K1B Well Pad", "eht_pre_insulation", row)
+    import eht_pre_insulation_field_map as fm
+    pdf_values = {fm.FIELD_MAP[fid]: v for fid, v in full_row.items() if v}
+    no_stamp_path = eda.ELECTRICAL_TEMP_DIR / "no_stamp_transposition_check.pdf"
+    export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, pdf_values, no_stamp_path, add_signature=False)
+    no_stamp_fields = PdfReader(str(no_stamp_path)).get_fields()
+    assert no_stamp_fields["yanda_rep_signature"].get("/V") == "VAL::yanda_rep_signature", (
+        "'yanda_rep_signature' did not land on the PDF's own 'yanda_rep_signature' field "
+        "with its own value - possible FIELD_MAP transposition"
+    )
 
 
 def test_export_eht_pre_insulation_cli_main_writes_a_pdf(isolated_app_dir, tmp_path, capsys):
