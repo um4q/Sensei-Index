@@ -584,3 +584,121 @@ def test_export_eht_pre_insulation_cli_main_writes_a_pdf(isolated_app_dir, tmp_p
     out_files = list(output_dir.glob("*.pdf"))
     assert len(out_files) == 1
     assert PdfReader(str(out_files[0])).get_fields()["trace_number"].get("/V") == "TR-CLI-001"
+
+
+# --------------------------------------------------------------------------
+# Mass/batch export - the user's own request: "I WANT IT LIKE THE
+# INSTRUMENTATION DASH BOARD SAME FEATURES AND EVERYTHING ESPECIALLY MASS
+# EXPORT." Electrical's run_export()/electrical_status.json mirror
+# data_access.py's own run_export()/equipment_status.json, scoped to what
+# actually applies (no 'flagged' mode, no signature option - see
+# run_export()'s own docstring).
+# --------------------------------------------------------------------------
+
+def _three_rows(zone_name="K1B Well Pad"):
+    eda.add_zone(zone_name)
+    tags = ["TR-001", "TR-002", "TR-003"]
+    for tag in tags:
+        row = eda.find_first_blank_row(zone_name, "eht_pre_insulation")
+        eda.save_row(zone_name, "eht_pre_insulation", row, {"trace_number": tag})
+    return tags
+
+
+def test_get_and_set_electrical_status_round_trip(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001") == {"export": False}
+    eda.set_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001", export=True)
+    assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001") == {"export": True}
+    # untouched rows stay at the default
+    assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-002") == {"export": False}
+
+
+def test_bulk_set_electrical_status_writes_the_file_once_for_many_keys(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    tags = _three_rows()
+    keys = [("K1B Well Pad", "eht_pre_insulation", t) for t in tags]
+    eda.bulk_set_electrical_status(keys, export=True)
+    for t in tags:
+        assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", t) == {"export": True}
+
+
+def test_read_index_rows_with_export_status_merges_the_flag_per_row(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    eda.set_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-002", export=True)
+    rows = eda.read_index_rows_with_export_status("K1B Well Pad", "eht_pre_insulation")
+    by_tag = {r["trace_number"]: r["export"] for r in rows}
+    assert by_tag == {"TR-001": False, "TR-002": True, "TR-003": False}
+
+
+def test_run_export_all_mode_writes_every_row_regardless_of_export_flag(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    written = eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="all")
+    names = {p.stem for p in written}
+    assert names == {"TR-001", "TR-002", "TR-003"}
+    for p in written:
+        assert p.exists()
+
+
+def test_run_export_selected_mode_only_writes_checked_rows(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    eda.set_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001", export=True)
+    eda.set_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-003", export=True)
+    written = eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="selected")
+    assert {p.stem for p in written} == {"TR-001", "TR-003"}
+
+
+def test_run_export_selected_mode_clears_the_export_flag_afterward_by_default(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    eda.set_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001", export=True)
+    eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="selected")
+    assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001") == {"export": False}
+
+
+def test_run_export_selected_mode_can_keep_the_export_flag_when_asked(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    eda.set_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001", export=True)
+    eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="selected", clear_after_selected=False)
+    assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001") == {"export": True}
+
+
+def test_run_export_returns_empty_list_when_nothing_matches(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()  # none flagged for export
+    assert eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="selected") == []
+
+
+def test_run_export_merge_produces_one_combined_pdf_covering_every_written_row(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    written = eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="all", merge=True)
+    assert written[-1].name.startswith("Combined_Export_")
+    merged = PdfReader(str(written[-1]))
+    assert len(merged.pages) == 3  # one page per exported row
+
+
+def test_run_export_respects_suffix_subfolder_and_date_options(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    written = eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="all",
+                              suffix="DEV", subfolder="myrun", include_date_in_filename=True)
+    import datetime
+    today = datetime.date.today().isoformat()
+    for p in written:
+        assert p.parent.name == "myrun"
+        assert "DEV" in p.name
+        assert today in p.name
+
+
+def test_run_export_never_touches_a_real_workbook(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    before = eda.ELECTRICAL_WORKBOOK_PATH.read_bytes()
+    eda.run_export("K1B Well Pad", "eht_pre_insulation", mode="all")
+    after = eda.ELECTRICAL_WORKBOOK_PATH.read_bytes()
+    assert before == after

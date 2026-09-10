@@ -316,3 +316,132 @@ def test_export_electrical_pdf_flow_eht_pre_insulation_writes_and_opens_file(
     gui_app.export_electrical_pdf_flow(widget, "K1B Well Pad", "eht_pre_insulation", row)
     assert len(opened) == 1
     assert PdfReader(str(opened[0])).get_fields()["trace_number"].get("/V") == "TR-PI-001"
+
+
+# --------------------------------------------------------------------------
+# Mass/batch export GUI - the per-row Export checkbox column,
+# "Queue All Shown"/"Clear Queue" buttons, and ElectricalExportDialog.
+# --------------------------------------------------------------------------
+
+def _three_rows(zone_name="K1B Well Pad"):
+    eda.add_zone(zone_name)
+    tags = ["TR-001", "TR-002", "TR-003"]
+    for tag in tags:
+        row = eda.find_first_blank_row(zone_name, "eht_pre_insulation")
+        eda.save_row(zone_name, "eht_pre_insulation", row, {"trace_number": tag})
+    return tags
+
+
+def test_electrical_index_page_shows_export_column_with_checkboxes(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(page)
+    export_col = page.table.columnCount() - 1
+    assert page.table.horizontalHeaderItem(export_col).text() == "Export"
+    assert page.table.rowCount() == 3
+    for r in range(3):
+        checkbox = page.table.cellWidget(r, export_col).findChild(gui_app.QCheckBox)
+        assert checkbox is not None
+        assert checkbox.isChecked() is False
+
+
+def test_electrical_index_page_export_checkbox_toggle_persists(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(page)
+    export_col = page.table.columnCount() - 1
+    checkbox = page.table.cellWidget(0, export_col).findChild(gui_app.QCheckBox)
+    checkbox.setChecked(True)
+    assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001") == {"export": True}
+
+    # reload() must reflect the toggle back into the table
+    page.reload()
+    checkbox2 = page.table.cellWidget(0, export_col).findChild(gui_app.QCheckBox)
+    assert checkbox2.isChecked() is True
+
+
+def test_electrical_index_page_queue_all_shown_and_clear_queue(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(page)
+
+    page.queue_all_shown_for_export()
+    for tag in ("TR-001", "TR-002", "TR-003"):
+        assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", tag) == {"export": True}
+
+    page.clear_export_queue_shown()
+    for tag in ("TR-001", "TR-002", "TR-003"):
+        assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", tag) == {"export": False}
+
+
+def test_electrical_export_dialog_selected_mode_writes_files_and_clears_checkboxes(
+        qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    eda.set_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001", export=True)
+
+    dlg = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(dlg)
+    dlg._run()
+    assert dlg.result() == gui_app.QDialog.Accepted
+
+    out_dir = eda.ELECTRICAL_OUTPUT_DIR
+    assert (out_dir / "TR-001.pdf").exists()
+    assert not (out_dir / "TR-002.pdf").exists()
+    assert eda.get_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001") == {"export": False}
+
+
+def test_electrical_export_dialog_all_mode_writes_every_row(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+
+    dlg = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(dlg)
+    dlg.mode_group.button(1).setChecked(True)  # "all" mode
+    dlg._run()
+    assert dlg.result() == gui_app.QDialog.Accepted
+
+    out_dir = eda.ELECTRICAL_OUTPUT_DIR
+    for tag in ("TR-001", "TR-002", "TR-003"):
+        assert (out_dir / f"{tag}.pdf").exists()
+
+
+def test_electrical_export_dialog_nothing_selected_does_not_close(qtbot, isolated_app_dir, fake_main_window):
+    """mode defaults to 'selected' with nothing checked - Run Export should
+    report nothing exported and leave the dialog open, not silently accept."""
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    dlg = gui_app.ElectricalExportDialog(None, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(dlg)
+    dlg._run()
+    assert dlg.result() != gui_app.QDialog.Accepted
+
+
+def test_electrical_index_page_open_export_reloads_after_dialog_closes(
+        qtbot, isolated_app_dir, fake_main_window, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    _three_rows()
+    eda.set_electrical_status("K1B Well Pad", "eht_pre_insulation", "TR-001", export=True)
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_pre_insulation")
+    qtbot.addWidget(page)
+
+    # Stub exec() to run the export immediately rather than blocking on a
+    # real modal event loop, mirroring how other dialog-opening flows in
+    # this suite are tested offscreen.
+    def fake_exec(self):
+        self._run()
+        return gui_app.QDialog.Accepted
+
+    monkeypatch.setattr(gui_app.ElectricalExportDialog, "exec", fake_exec)
+    page.open_export()
+
+    out_dir = eda.ELECTRICAL_OUTPUT_DIR
+    assert (out_dir / "TR-001.pdf").exists()
+    # reload() picked up the cleared checkbox
+    export_col = page.table.columnCount() - 1
+    row_of_tr001 = next(r for r in range(page.table.rowCount()) if page.table.item(r, 0).text() == "TR-001")
+    checkbox = page.table.cellWidget(row_of_tr001, export_col).findChild(gui_app.QCheckBox)
+    assert checkbox.isChecked() is False

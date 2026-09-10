@@ -96,6 +96,10 @@ def isolated_app_dir(tmp_path, monkeypatch):
                          tmp_path / "electrical_registry.json", raising=False)
     monkeypatch.setattr(eda, "ELECTRICAL_TEMP_DIR",
                          tmp_path / "electrical_temp_previews", raising=False)
+    monkeypatch.setattr(eda, "ELECTRICAL_STATUS_PATH",
+                         tmp_path / "electrical_status.json", raising=False)
+    monkeypatch.setattr(eda, "ELECTRICAL_OUTPUT_DIR",
+                         tmp_path / "output_pdfs", raising=False)
     eda.invalidate_workbook_cache()
 
     yield tmp_path, da

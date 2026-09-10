@@ -5573,11 +5573,141 @@ class ElectricalEditDialog(QDialog):
         self.accept()
 
 
+class ElectricalExportDialog(QDialog):
+    """The Electrical equivalent of ExportDialog - same "which rows? /
+    filename suffix / flatten / merge / output folder" shape, trimmed to
+    what actually applies here: no 'flagged' mode (no Excel Y/N gate
+    column on any Electrical schema) and no signature checkbox (none of
+    the three Electrical forms stamp a signature image)."""
+
+    def __init__(self, parent, zone_name, equip_key):
+        super().__init__(parent)
+        self.zone_name = zone_name
+        self.equip_key = equip_key
+        self.etype = eda.ELECTRICAL_EQUIPMENT_TYPES[equip_key]
+        self.setWindowTitle(f"Export {self.etype['label']}s – Zone: {zone_name}")
+        self.resize(480, 460)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+
+        which_label = QLabel("Which rows?")
+        which_label.setStyleSheet("font-weight: 700;")
+        layout.addWidget(which_label)
+
+        checked_count = sum(1 for r in eda.read_index_rows_with_export_status(zone_name, equip_key)
+                             if r.get("export"))
+        self.mode_group = QButtonGroup(self)
+        selected_radio = QRadioButton(f"Only rows checked in the Export column ({checked_count} checked)")
+        selected_radio.setChecked(True)
+        all_radio = QRadioButton(f'Every row with a {self.etype["summary_labels"][0]} filled in')
+        self.mode_group.addButton(selected_radio, 0)
+        self.mode_group.addButton(all_radio, 1)
+        layout.addWidget(selected_radio)
+        if checked_count == 0:
+            hint = QLabel("Nothing's checked yet - tick the Export column on the rows you "
+                           "want, back in the Index table, or use “Queue All Shown for "
+                           "Export” for a quick start.")
+            hint.setObjectName("FieldLabel")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+        layout.addWidget(all_radio)
+
+        layout.addSpacing(4)
+        self.clear_after_check = QCheckBox("Uncheck those rows' Export boxes once exported")
+        self.clear_after_check.setChecked(True)
+        self.clear_after_check.setToolTip("Only applies to the 'checked in the Export column' mode above")
+        layout.addWidget(self.clear_after_check)
+
+        layout.addSpacing(10)
+        suffix_label = QLabel("Filename suffix")
+        suffix_label.setStyleSheet("font-weight: 700;")
+        layout.addWidget(suffix_label)
+        self.suffix_edit = QLineEdit()
+        self.suffix_edit.setPlaceholderText('e.g. "DEV" - leave blank for just the tag on its own')
+        layout.addWidget(self.suffix_edit)
+
+        layout.addSpacing(10)
+        opts_row = QHBoxLayout()
+        self.flatten_check = QCheckBox("Flatten")
+        opts_row.addWidget(self.flatten_check)
+        opts_row.addStretch()
+        layout.addLayout(opts_row)
+
+        self.merge_check = QCheckBox("Also combine everything into one merged PDF")
+        layout.addWidget(self.merge_check)
+
+        layout.addSpacing(10)
+        folder_label = QLabel("Output folder")
+        folder_label.setStyleSheet("font-weight: 700;")
+        layout.addWidget(folder_label)
+        folder_hint = QLabel("Files always land inside output_pdfs/ next to the workbook. "
+                              "Optionally put this run into its own subfolder there.")
+        folder_hint.setObjectName("FieldLabel")
+        folder_hint.setWordWrap(True)
+        layout.addWidget(folder_hint)
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel("output_pdfs/"))
+        self.subfolder_edit = QLineEdit()
+        folder_row.addWidget(self.subfolder_edit, stretch=1)
+        dated_btn = make_button("Use dated folder", "Link")
+        dated_btn.clicked.connect(self._fill_dated_folder)
+        folder_row.addWidget(dated_btn)
+        layout.addLayout(folder_row)
+
+        self.filename_date_check = QCheckBox("Include today's date in each filename")
+        layout.addWidget(self.filename_date_check)
+
+        layout.addStretch()
+        outer.addWidget(body, stretch=1)
+
+        footer = QFrame()
+        footer.setObjectName("Card")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.addStretch()
+        cancel_btn = make_button("Cancel", "Ghost")
+        cancel_btn.clicked.connect(self.reject)
+        run_btn = make_button("Run Export", "Success")
+        run_btn.clicked.connect(self._run)
+        footer_layout.addWidget(cancel_btn)
+        footer_layout.addWidget(run_btn)
+        outer.addWidget(footer)
+
+    def _fill_dated_folder(self):
+        self.subfolder_edit.setText(f"{datetime.date.today().isoformat()}_export")
+
+    def _run(self):
+        mode = {0: "selected", 1: "all"}[self.mode_group.checkedId()]
+        try:
+            written = eda.run_export(
+                self.zone_name, self.equip_key, mode=mode,
+                suffix=self.suffix_edit.text(), flatten=self.flatten_check.isChecked(),
+                subfolder=self.subfolder_edit.text().strip() or None,
+                merge=self.merge_check.isChecked(),
+                clear_after_selected=self.clear_after_check.isChecked(),
+                include_date_in_filename=self.filename_date_check.isChecked())
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        if not written:
+            QMessageBox.information(self, "Nothing exported", "No rows matched - nothing was exported.")
+            return
+        folder = eda.ELECTRICAL_OUTPUT_DIR / (self.subfolder_edit.text().strip() or "")
+        show_toast(self, f"Wrote {len(written)} file(s) to {folder.resolve()}", duration_ms=5000)
+        self.accept()
+
+
 class ElectricalIndexPage(QWidget):
     """The Electrical equivalent of IndexPage - deliberately simpler (a
     plain sortable table, no frozen columns/chip filters/saved view state/
     mass-edit/undo-redo integration - see this section's module-level
-    docstring for the v1 scope decision)."""
+    docstring for the v1 scope decision). Mass export IS included (a
+    per-row Export checkbox column + Export... dialog), mirroring
+    Instrumentation's own export queue."""
 
     def __init__(self, main_window, zone_name, equip_key):
         super().__init__()
@@ -5609,14 +5739,35 @@ class ElectricalIndexPage(QWidget):
         pdf_btn = make_button("View / Export PDF", "Ghost")
         pdf_btn.clicked.connect(self.export_pdf_selected)
         header_row.addWidget(pdf_btn)
+        export_btn = make_button("Export...", "Ghost")
+        export_btn.setToolTip("Turn many rows into PDFs at once")
+        export_btn.clicked.connect(self.open_export)
+        header_row.addWidget(export_btn)
         remove_btn = make_button("Remove", "Ghost")
         remove_btn.clicked.connect(self.remove_selected)
         header_row.addWidget(remove_btn)
         layout.addLayout(header_row)
 
+        # Bulk export-queue actions - the checkbox in each row (see reload())
+        # handles one row at a time; these two act on every row the table
+        # is currently showing, same "queue tray" convention as
+        # Instrumentation's own IndexPage.
+        queue_row = QHBoxLayout()
+        queue_label = QLabel("Export queue:")
+        queue_label.setObjectName("FieldLabel")
+        queue_btn = make_button("Queue All Shown for Export", "Ghost")
+        queue_btn.clicked.connect(self.queue_all_shown_for_export)
+        clear_queue_btn = make_button("Clear Export Queue (Shown)", "Ghost")
+        clear_queue_btn.clicked.connect(self.clear_export_queue_shown)
+        queue_row.addWidget(queue_label)
+        queue_row.addWidget(queue_btn)
+        queue_row.addWidget(clear_queue_btn)
+        queue_row.addStretch()
+        layout.addLayout(queue_row)
+
         self.table = QTableWidget()
-        self.table.setColumnCount(len(self.etype["summary_fields"]))
-        self.table.setHorizontalHeaderLabels(self.etype["summary_labels"])
+        self.table.setColumnCount(len(self.etype["summary_fields"]) + 1)
+        self.table.setHorizontalHeaderLabels(list(self.etype["summary_labels"]) + ["Export"])
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
@@ -5628,9 +5779,11 @@ class ElectricalIndexPage(QWidget):
 
     def reload(self):
         try:
-            rows = eda.read_index_rows(self.zone_name, self.equip_key)
+            rows = eda.read_index_rows_with_export_status(self.zone_name, self.equip_key)
         except KeyError:
             rows = []
+        self._entry_by_row = {entry["row"]: entry for entry in rows}
+        export_col = len(self.etype["summary_fields"])
         self.table.setRowCount(len(rows))
         for r, entry in enumerate(rows):
             for c, fid in enumerate(self.etype["summary_fields"]):
@@ -5638,7 +5791,80 @@ class ElectricalIndexPage(QWidget):
                 if c == 0:
                     item.setData(Qt.UserRole, entry["row"])
                 self.table.setItem(r, c, item)
+            key_value = entry.get(self.etype["key_field"], "")
+            self.table.setItem(r, export_col, QTableWidgetItem(""))  # keeps row height consistent
+            self.table.setCellWidget(r, export_col, self._build_export_checkbox(
+                entry["row"], key_value, bool(entry.get("export"))))
         self.table.resizeColumnsToContents()
+
+    def _build_export_checkbox(self, row_num, key_value, checked):
+        box = QCheckBox()
+        box.setToolTip("Export - click to queue/unqueue this row only")
+        box.setChecked(checked)
+        box.toggled.connect(
+            lambda is_checked, rn=row_num, kv=key_value, b=box:
+                self._on_export_checkbox_toggled(rn, kv, b, is_checked))
+        wrapper = QWidget()
+        wlayout = QHBoxLayout(wrapper)
+        wlayout.setContentsMargins(0, 0, 0, 0)
+        wlayout.setAlignment(Qt.AlignCenter)
+        wlayout.addWidget(box)
+        return wrapper
+
+    def _on_export_checkbox_toggled(self, row_num, key_value, checkbox, checked):
+        entry = self._entry_by_row.get(row_num)
+        previous = bool(entry.get("export")) if entry else (not checked)
+        if previous == checked:
+            return
+        try:
+            eda.set_electrical_status(self.zone_name, self.equip_key, key_value, export=checked)
+        except Exception as exc:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(previous)
+            checkbox.blockSignals(False)
+            QMessageBox.critical(self, "Couldn't save status", str(exc))
+            return
+        if entry is not None:
+            entry["export"] = checked
+
+    def visible_row_entries(self):
+        """Every row currently shown in the table (there's no search/filter
+        on this page yet, so today that's simply all of them) - kept as
+        its own method so queue_all_shown_for_export()/clear_export_queue_shown()
+        read the same way Instrumentation's IndexPage does, and so a future
+        filter only needs to change this one method."""
+        return list(self._entry_by_row.values())
+
+    def open_export(self):
+        ElectricalExportDialog(self, self.zone_name, self.equip_key).exec()
+        self.reload()  # a "selected" export run may have cleared checkboxes
+
+    def queue_all_shown_for_export(self):
+        shown = self.visible_row_entries()
+        if not shown:
+            QMessageBox.information(self, "Nothing to queue",
+                                     "Nothing shown to add to the export queue.")
+            return
+        keys = [(self.zone_name, self.equip_key, e.get(self.etype["key_field"], "")) for e in shown]
+        try:
+            eda.bulk_set_electrical_status(keys, export=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't save status", str(exc))
+            return
+        self.reload()
+        self.main_window.statusBar().showMessage(f"Queued {len(shown)} row(s) for export", 3000)
+
+    def clear_export_queue_shown(self):
+        shown = self.visible_row_entries()
+        if not shown:
+            return
+        keys = [(self.zone_name, self.equip_key, e.get(self.etype["key_field"], "")) for e in shown]
+        try:
+            eda.bulk_set_electrical_status(keys, export=False)
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't save status", str(exc))
+            return
+        self.reload()
 
     def selected_row_num(self):
         items = self.table.selectedItems()

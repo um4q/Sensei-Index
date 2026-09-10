@@ -19,19 +19,24 @@ the mutating choke point, every read/save function) is its own, so nothing
 here can ever put Equipment_Inspection_Tracker.xlsx or its sidecars at
 risk, and vice versa.
 
-v1 scope, deliberately: core CRUD (add/edit/view rows, add/remove zones)
-and single-row PDF export, mirroring the ORIGINAL Transmitter/Valve system
+v1 scope, deliberately: core CRUD (add/edit/view rows, add/remove zones),
+single-row and mass/batch PDF export (an Export checkbox queue per row,
+mirroring data_access.py's own "selected"/"all" batch export - see
+run_export() below), mirroring the ORIGINAL Transmitter/Valve system
 (pre-Phase-10) rather than every v2.1 refinement Instrumentation has since
 grown (master-list reconciliation, global search integration, activity
-log, automatic backups, cleaned-copy export). Those can be added later the
-same way they were added for Instrumentation, if wanted.
+log, Installed/Submitted/Accepted status tracking, automatic backups,
+cleaned-copy export). Those can be added later the same way they were
+added for Instrumentation, if wanted.
 """
 import datetime
 import os
+import re
 from contextlib import contextmanager
 from pathlib import Path
 
 import openpyxl
+from pypdf import PdfReader, PdfWriter
 
 from data_access import HERE, write_json_atomic, read_json_with_recovery, open_file  # noqa: F401
 
@@ -45,6 +50,15 @@ import export_eht_pre_insulation_to_pdf
 ELECTRICAL_WORKBOOK_PATH = HERE / "Electrical_Inspection_Tracker.xlsx"
 ELECTRICAL_CONFIG_PATH = HERE / "electrical_registry.json"
 ELECTRICAL_TEMP_DIR = HERE / "electrical_temp_previews"
+ELECTRICAL_STATUS_PATH = HERE / "electrical_status.json"
+# A dedicated constant, NOT computed inline as `HERE / "output_pdfs"` inside
+# run_export() - `HERE` itself is imported BY VALUE from data_access.py, so
+# isolated_app_dir's `monkeypatch.setattr(da, "HERE", tmp_path)` does not
+# (and cannot) change what this module sees for a bare `HERE` reference.
+# Every path that tests need to isolate has to be its own patchable
+# module-level name here, same reasoning as ELECTRICAL_WORKBOOK_PATH/
+# ELECTRICAL_CONFIG_PATH/ELECTRICAL_TEMP_DIR/ELECTRICAL_STATUS_PATH above.
+ELECTRICAL_OUTPUT_DIR = HERE / "output_pdfs"
 
 # ---------------------------------------------------------------------------
 # Equipment type registry - the Electrical equivalent of data_access.py's
@@ -538,3 +552,164 @@ def open_sheet(zone_name, equip_key):
             raise KeyError(f"Workbook has no sheet named '{sheet_name}'")
         wb.active = wb.sheetnames.index(sheet_name)
     open_file(ELECTRICAL_WORKBOOK_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Export status (the row-level Export checkbox) + mass/batch export.
+#
+# Same philosophy as data_access.py's equipment_status.json: kept OUTSIDE
+# the Excel file, in its own JSON store keyed by zone + equipment type +
+# the row's key-field value, so ticking a row's Export box never requires
+# touching the Log sheet itself. Electrical only tracks "export" here (no
+# Installed/Submitted/Accepted - that's an Instrumentation-specific
+# workflow with no established Electrical equivalent yet - see this
+# module's own top docstring).
+# ---------------------------------------------------------------------------
+DEFAULT_ELECTRICAL_STATUS = {"export": False}
+
+
+def _load_electrical_status_store():
+    return read_json_with_recovery(ELECTRICAL_STATUS_PATH, dict)
+
+
+def _save_electrical_status_store(store):
+    write_json_atomic(ELECTRICAL_STATUS_PATH, store)
+
+
+def _electrical_status_key(zone_name, equip_key, key_value):
+    return f"{zone_name}|{equip_key}|{key_value}"
+
+
+def _normalized_electrical_status(raw):
+    merged = dict(DEFAULT_ELECTRICAL_STATUS)
+    if raw:
+        merged.update(raw)
+    return merged
+
+
+def get_electrical_status(zone_name, equip_key, key_value):
+    store = _load_electrical_status_store()
+    return _normalized_electrical_status(store.get(_electrical_status_key(zone_name, equip_key, key_value)))
+
+
+def set_electrical_status(zone_name, equip_key, key_value, **fields):
+    store = _load_electrical_status_store()
+    k = _electrical_status_key(zone_name, equip_key, key_value)
+    current = _normalized_electrical_status(store.get(k))
+    current.update(fields)
+    store[k] = current
+    _save_electrical_status_store(store)
+
+
+def bulk_set_electrical_status(keys, **fields):
+    """keys: an iterable of (zone_name, equip_key, key_value) tuples - one
+    read + one write of the status file regardless of how many keys."""
+    store = _load_electrical_status_store()
+    for zone_name, equip_key, key_value in keys:
+        k = _electrical_status_key(zone_name, equip_key, key_value)
+        current = _normalized_electrical_status(store.get(k))
+        current.update(fields)
+        store[k] = current
+    _save_electrical_status_store(store)
+
+
+def read_index_rows_with_export_status(zone_name, equip_key):
+    """read_index_rows()'s rows, each with an 'export' key added - the
+    Index page's per-row Export checkbox column reads this."""
+    etype = ELECTRICAL_EQUIPMENT_TYPES[equip_key]
+    rows = read_index_rows(zone_name, equip_key)
+    store = _load_electrical_status_store()
+    for entry in rows:
+        key_val = entry.get(etype["key_field"], "")
+        status = _normalized_electrical_status(store.get(_electrical_status_key(zone_name, equip_key, key_val)))
+        entry["export"] = status["export"]
+    return rows
+
+
+def run_export(zone_name, equip_key, mode, suffix="", flatten=False,
+                subfolder=None, merge=False, clear_after_selected=True,
+                include_date_in_filename=False):
+    """Batch export - the Electrical equivalent of data_access.py's
+    run_export(), scoped to what actually applies here:
+        'selected' - only rows whose Export checkbox is checked in the app
+                     (the DEFAULT mode - see ElectricalExportDialog).
+        'all'      - every row with the key field filled in.
+    There is no 'flagged' mode (Electrical's schemas have no Excel
+    "Export to PDF Y/N" gate column - see eht_removal_schema.py's own
+    docstring for why) and no include_signature option (none of the three
+    Electrical forms stamp a signature image - eht_removal/eht_rtd are
+    hand-signed only, eht_pre_insulation's signature is a real typed
+    field like any other).
+
+    clear_after_selected: when mode == 'selected' and this is True (the
+    default), every row actually written un-checks its own Export box
+    afterward - same "empties as it's used" convention as Instrumentation's
+    export queue.
+
+    include_date_in_filename: appends today's date to every output
+    filename, e.g. "TR-001 2026-09-10.pdf".
+
+    Returns the list of Paths written (the merged PDF, if any, is last)."""
+    etype = ELECTRICAL_EQUIPMENT_TYPES[equip_key]
+    export_mod = etype["export_module"]
+    sheet_name = get_sheet_name(zone_name, equip_key)
+
+    out_dir = ELECTRICAL_OUTPUT_DIR
+    if subfolder:
+        safe_sub = re.sub(r'[<>:"/\\|?*]', "_", subfolder).strip()
+        if safe_sub:
+            out_dir = out_dir / safe_sub
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    wb = _get_cached_workbook(data_only=True)
+    ws = wb[sheet_name]
+    field_to_col = export_mod.load_column_map(ws)
+    key_col = field_to_col.get(etype["key_field"])
+
+    if mode == "selected":
+        rows = [r["row"] for r in read_index_rows_with_export_status(zone_name, equip_key) if r.get("export")]
+    else:
+        rows = [r["row"] for r in read_index_rows(zone_name, equip_key)]
+    if not rows:
+        return []
+
+    filename_date = f" {datetime.date.today().isoformat()}" if include_date_in_filename else ""
+    written = []
+    used_names = set()
+    for row_num in rows:
+        values = export_mod.build_values_for_row(ws, field_to_col, row_num)
+        key_val = export_mod.cell_to_str(ws.cell(row=row_num, column=key_col).value) if key_col else ""
+        base_name = export_mod.sanitize(key_val, f"Row{row_num}")
+        base_name = f"{base_name} {suffix}" if suffix else base_name
+        base_name = f"{base_name}{filename_date}"
+        name = base_name
+        n = 2
+        while name in used_names:
+            name = f"{base_name} ({n})"
+            n += 1
+        used_names.add(name)
+        out_path = out_dir / f"{name}.pdf"
+        export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, values, out_path, flatten=flatten)
+        written.append(out_path)
+
+    if merge and written:
+        merged_writer = PdfWriter()
+        for p in written:
+            merged_writer.append(PdfReader(str(p)))
+        merged_writer.set_need_appearances_writer(True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        merged_path = out_dir / f"Combined_Export_{stamp}.pdf"
+        with open(merged_path, "wb") as fh:
+            merged_writer.write(fh)
+        written.append(merged_path)
+
+    if mode == "selected" and clear_after_selected:
+        keys = []
+        for row_num in rows:
+            key_val = export_mod.cell_to_str(ws.cell(row=row_num, column=key_col).value) if key_col else ""
+            if key_val:
+                keys.append((zone_name, equip_key, key_val))
+        if keys:
+            bulk_set_electrical_status(keys, export=False)
+
+    return written
