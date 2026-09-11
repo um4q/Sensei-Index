@@ -9,8 +9,6 @@ inspection kit. Used by:
 
 CHOICE_TYPE = "choice"
 TEXT_TYPE = "text"
-INITIAL_OR_NA_TYPE = "initial_or_na"   # special: goes into a Yes-initials
-                                        # widget, or an NA-initials widget
 
 YES_NO = ["Y", "N"]
 
@@ -108,8 +106,16 @@ FUNCTIONAL_VERIFICATION_ITEMS = [
     (7, "Verify Solenoid Trip and Valve Strokes to Fail Position"),
     (8, "Verify Positioner is Returned to IN SERVICE"),
 ]
+# Two independent columns per item, not one combined "initials, or N/A"
+# column - the real PDF has two separate widgets here (Yes/N-A, see
+# valve_field_map.py's own FIELD_MAP comment), and the combined column used
+# to silently misfile anything that wasn't spelled exactly "N/A"/"NA" (e.g.
+# "LO" for a locked-out valve) into the Yes widget instead of the N-A one.
+# Same "<item>_yes"/"<item>_na" split eht_removal_schema.py's own 46-item
+# checklist already uses, for the same reason.
 for num, text in FUNCTIONAL_VERIFICATION_ITEMS:
-    _add(f"fv_{num}", f"{num}. {text} (initials, or N/A)", "functional", INITIAL_OR_NA_TYPE)
+    _add(f"fv_{num}_yes", f"{num}. {text} - Yes", "functional")
+    _add(f"fv_{num}_na", f"{num}. {text} - N/A", "functional")
 
 _add("valve_stem_type", "Valve is Sliding Stem / Type", "functional", CHOICE_TYPE,
      ["Sliding Stem", "Rotary", "Quarter Turn", "Throttle", "Snap Acting"])

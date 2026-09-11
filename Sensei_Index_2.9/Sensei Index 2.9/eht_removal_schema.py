@@ -15,15 +15,17 @@ Each field:
   ftype    - 'text' | 'multiline' | 'choice'
   choices  - list of allowed values, only for ftype == 'choice'
 
-Unlike transmitter/valve, this form's 46 checklist items (Full EHT Removal,
-Partial EHT Removal, Re-Installation, QA/QC Final Walk Down) are NOT modeled
-as valve's single-id "initial_or_na" type: every one of the 92 Yes-Initial /
-N-A-Initial cells on the real PDF is a plain, independent text box (verified
-against the PDF's own AcroForm - /Tx, never /Btn), not a shared widget pair
-a single value gets routed between. So each checklist item is two ordinary
-text fields, "<item>_yes" and "<item>_na" - whoever's filling it in writes
-their initials into whichever one applies and leaves the other blank,
-exactly as the paper form works.
+This form's 46 checklist items (Full EHT Removal, Partial EHT Removal,
+Re-Installation, QA/QC Final Walk Down) are each modeled as TWO ordinary
+text fields, "<item>_yes" and "<item>_na" - every one of the 92
+Yes-Initial/N-A-Initial cells on the real PDF is a plain, independent
+text box (verified against the PDF's own AcroForm - /Tx, never /Btn),
+not a shared widget pair a single value gets routed between. Whoever's
+filling it in writes their initials into whichever one applies and
+leaves the other blank, exactly as the paper form works. valve_schema.py's
+own fv_1..fv_8 items use this same "<item>_yes"/"<item>_na" split now too
+(they didn't originally - see valve_field_map.py's own FIELD_MAP comment
+for why that changed).
 
 No CONTROL_FIELD ("Export to PDF Y/N") gate column, unlike transmitter/
 valve - Electrical v1 only exports one row to PDF at a time (from the row's

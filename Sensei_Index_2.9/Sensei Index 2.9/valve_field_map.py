@@ -52,6 +52,25 @@ FIELD_MAP = {
     "qc_rep_name": "Text51",
     "qc_date": "QCRepDate",
     "commissioning_rep_name": "Text52",
+
+    # ------------------------------------- Functional Verification Yes/N-A --
+    # Each item is TWO independent widgets on the real PDF (verified against
+    # its own AcroForm - both /Ch, each with the same real /Opt choice list
+    # ['LO', 'N/A', '  ', 'FS']), not a single value routed between them by
+    # this app - same "<item>_yes"/"<item>_na" pattern eht_removal_field_map.py's
+    # own CHECKLIST_FIELD_MAP already uses for its 46-item checklist, and for
+    # the same reason (verified independent widgets, not a shared pair).
+    # Whatever's typed in Excel goes straight through as-is - "LO" (locked
+    # out), "N/A", initials, or anything else - no more inferring which
+    # widget a value belongs in from its text.
+    "fv_1_yes": "Dropdown1", "fv_1_na": "Dropdown3",
+    "fv_2_yes": "Dropdown2", "fv_2_na": "Dropdown4",
+    "fv_3_yes": "Dropdown5", "fv_3_na": "Dropdown6",
+    "fv_4_yes": "Dropdown10", "fv_4_na": "Dropdown7",
+    "fv_5_yes": "Dropdown11", "fv_5_na": "Dropdown8",
+    "fv_6_yes": "Dropdown12", "fv_6_na": "Dropdown9",
+    "fv_7_yes": "Dropdown15", "fv_7_na": "Dropdown13",
+    "fv_8_yes": "Dropdown16", "fv_8_na": "Dropdown14",
 }
 
 # ---------------------------------------------------------- checkbox groups
@@ -112,21 +131,6 @@ YES_NO_CHECKBOXES = {
 
 CHECKBOX_ON = "/Yes"
 CHECKBOX_OFF = "/Off"
-
-# ------------------------------------- Functional Verification Yes/NA pairs
-# Each item has a Yes-initials widget and a separate NA-initials widget.
-# If the log value is "N/A" (any case), it goes in the NA widget; any other
-# non-empty text (initials) goes in the Yes widget.
-FV_YES_NA_FIELDS = {
-    "fv_1": {"yes": "Dropdown1", "na": "Dropdown3"},
-    "fv_2": {"yes": "Dropdown2", "na": "Dropdown4"},
-    "fv_3": {"yes": "Dropdown5", "na": "Dropdown6"},
-    "fv_4": {"yes": "Dropdown10", "na": "Dropdown7"},
-    "fv_5": {"yes": "Dropdown11", "na": "Dropdown8"},
-    "fv_6": {"yes": "Dropdown12", "na": "Dropdown9"},
-    "fv_7": {"yes": "Dropdown15", "na": "Dropdown13"},
-    "fv_8": {"yes": "Dropdown16", "na": "Dropdown14"},
-}
 
 # ------------------------------------------------- Travel Indication table
 TRAVEL_FIELD_MAP = {

@@ -59,10 +59,10 @@ CHECKBOX_OFF = "/Off"
 
 # ---------------------------------------- 46-item checklist Yes/N-A columns
 # Every checklist item on this form is TWO independent text boxes (someone's
-# initials go in one or the other) - not a shared widget pair the way
-# valve's fv_1..fv_8 initial_or_na fields are, so this is a plain id -> pdf
-# field name map, same shape as FIELD_MAP, just kept separate for clarity
-# since there are 92 of them.
+# initials go in one or the other) - same "<item>_yes"/"<item>_na" split
+# valve_field_map.py's own fv_1..fv_8 entries now use too. Kept as a plain
+# id -> pdf field name map, same shape as FIELD_MAP, just kept separate for
+# clarity since there are 92 of them.
 CHECKLIST_FIELD_MAP = {
     # Full EHT Removal (11 items)
     "full_removal_item_1_yes": "Text8", "full_removal_item_1_na": "Text9",

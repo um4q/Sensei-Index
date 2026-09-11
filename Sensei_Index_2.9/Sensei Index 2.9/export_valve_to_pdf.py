@@ -37,7 +37,7 @@ import io
 
 from valve_schema import LOG_COLUMNS
 from valve_field_map import (
-    FIELD_MAP, CHECKBOX_GROUPS, YES_NO_CHECKBOXES, FV_YES_NA_FIELDS,
+    FIELD_MAP, CHECKBOX_GROUPS, YES_NO_CHECKBOXES,
     TRAVEL_UNIT_CHECKBOXES, TRAVEL_UNIT_VALUE_FIELDS, COMMENTS_LINE_FIELDS,
     CHECKBOX_ON, CHECKBOX_OFF,
 )
@@ -181,15 +181,6 @@ def build_values_for_row(ws, field_to_col, row_num):
             unit_raw = cell_to_str(ws.cell(row=row_num, column=unit_col).value) if unit_col else ""
             target = TRAVEL_UNIT_VALUE_FIELDS.get(unit_raw, TRAVEL_UNIT_VALUE_FIELDS["Inch"])
             values[target] = raw
-            continue
-
-        if field["ftype"] == "initial_or_na":
-            pair = FV_YES_NA_FIELDS.get(fid)
-            if pair:
-                if raw.upper() in ("N/A", "NA"):
-                    values[pair["na"]] = "N/A"
-                else:
-                    values[pair["yes"]] = raw
             continue
 
         if fid == "comments":
