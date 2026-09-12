@@ -40,6 +40,146 @@ def test_electrical_dashboard_shows_zone_cards_and_totals(qtbot, isolated_app_di
     assert any(t == "1" for t in labels)  # the StatCard total
 
 
+# ------------------------------------------------------- QOL prompt Phase A.10
+# The top-level StatCards used to pass a hardcoded {} breakdown, so every
+# one of them always showed "BY SYSTEM / No data yet" - the wrong section
+# label (Electrical has zones, not systems) on a placeholder that could
+# never go away. Now it's a real per-zone breakdown, relabeled "BY ZONE".
+
+def test_electrical_dashboard_top_stat_cards_show_real_by_zone_breakdown(
+        qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    eda.add_zone("K2A Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
+    eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": "29103-EHT-0001"})
+    row2 = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
+    eda.save_row("K1B Well Pad", "eht_removal", row2, {"trace_tag": "29103-EHT-0002"})
+
+    page = gui_app.ElectricalDashboardPage(fake_main_window)
+    qtbot.addWidget(page)
+
+    labels = [w.text() for w in page.findChildren(gui_app.QLabel)]
+    assert "BY SYSTEM" not in labels
+    assert "No data yet" not in labels
+    assert labels.count("BY ZONE") >= 1
+
+    cards_by_title = {}
+    for card in page.findChildren(gui_app.StatCard):
+        title_label = next(w for w in card.findChildren(gui_app.QLabel) if w.objectName() == "StatLabel")
+        cards_by_title[title_label.text()] = card
+    removal_card = cards_by_title["EHT Removal & Reinstatement"]
+
+    def _breakdown(card):
+        result = {}
+        card_layout = card.layout()
+        for i in range(card_layout.count()):
+            sub_layout = card_layout.itemAt(i).layout()
+            if sub_layout is None or sub_layout.count() < 2:
+                continue
+            name_widget = sub_layout.itemAt(0).widget()
+            value_widget = sub_layout.itemAt(sub_layout.count() - 1).widget()
+            if name_widget is not None and value_widget is not None:
+                result[name_widget.text()] = value_widget.text()
+        return result
+
+    assert _breakdown(removal_card) == {"K1B Well Pad": "2", "K2A Well Pad": "0"}
+
+
+# ------------------------------------------------------- QOL prompt Phase A.10
+# rename_zone_flow / MainWindow._handle_zone_renamed - a typo'd zone name
+# used to be a dead end short of destructive remove/re-add.
+
+def test_rename_zone_flow_renames_and_returns_new_name(qtbot, isolated_app_dir, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    monkeypatch.setattr(gui_app.QInputDialog, "getText",
+                         staticmethod(lambda *a, **k: ("K1B Well Pad (Fixed)", True)))
+
+    result = gui_app.rename_zone_flow(None, "K1B Well Pad")
+
+    assert result == "K1B Well Pad (Fixed)"
+    assert eda.list_zones() == ["K1B Well Pad (Fixed)"]
+
+
+def test_rename_zone_flow_cancelled_dialog_does_nothing(qtbot, isolated_app_dir, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    monkeypatch.setattr(gui_app.QInputDialog, "getText",
+                         staticmethod(lambda *a, **k: ("whatever", False)))
+
+    result = gui_app.rename_zone_flow(None, "K1B Well Pad")
+
+    assert result is None
+    assert eda.list_zones() == ["K1B Well Pad"]
+
+
+def test_rename_zone_flow_blank_or_unchanged_name_returns_none(qtbot, isolated_app_dir, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    monkeypatch.setattr(gui_app.QInputDialog, "getText",
+                         staticmethod(lambda *a, **k: ("K1B Well Pad", True)))
+
+    assert gui_app.rename_zone_flow(None, "K1B Well Pad") is None
+    assert eda.list_zones() == ["K1B Well Pad"]
+
+
+def test_rename_zone_flow_reports_collision_and_returns_none(qtbot, isolated_app_dir, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    eda.add_zone("K2A Well Pad")
+    monkeypatch.setattr(gui_app.QInputDialog, "getText",
+                         staticmethod(lambda *a, **k: ("K2A Well Pad", True)))
+    critical_calls = []
+    monkeypatch.setattr(gui_app.QMessageBox, "critical",
+                         staticmethod(lambda *a, **k: critical_calls.append(a)))
+
+    result = gui_app.rename_zone_flow(None, "K1B Well Pad")
+
+    assert result is None
+    assert len(critical_calls) == 1
+    assert set(eda.list_zones()) == {"K1B Well Pad", "K2A Well Pad"}
+
+
+def test_handle_zone_renamed_renavigates_the_open_index_page_to_the_new_name(
+        qtbot, isolated_app_dir):
+    """The generic refresh_sidebar_and_dashboard() would otherwise treat
+    the open page's now-stale zone_name as 'this zone was removed' and
+    bounce to the dashboard - _handle_zone_renamed follows the rename to
+    the SAME equipment type under the new name instead."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    win = gui_app.MainWindow()
+    qtbot.addWidget(win)
+    win._switch_domain("electrical")
+    win.show_electrical_index("K1B Well Pad", "eht_removal")
+
+    eda.set_zone_name("K1B Well Pad", "K1B Well Pad (Renamed)")
+    win._handle_zone_renamed("K1B Well Pad", "K1B Well Pad (Renamed)")
+
+    page = win.current_dynamic_page
+    assert isinstance(page, gui_app.ElectricalIndexPage)
+    assert page.zone_name == "K1B Well Pad (Renamed)"
+    assert page.equip_key == "eht_removal"
+
+
+def test_handle_zone_renamed_leaves_other_pages_alone(qtbot, isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    eda.add_zone("K2A Well Pad")
+    win = gui_app.MainWindow()
+    qtbot.addWidget(win)
+    win._switch_domain("electrical")
+    win.show_electrical_index("K2A Well Pad", "eht_removal")
+
+    # a different zone got renamed elsewhere - the page on screen must be untouched
+    win._handle_zone_renamed("K1B Well Pad", "K1B Well Pad (Renamed)")
+
+    page = win.current_dynamic_page
+    assert isinstance(page, gui_app.ElectricalIndexPage)
+    assert page.zone_name == "K2A Well Pad"
+
+
 def test_electrical_index_page_lists_saved_rows(qtbot, isolated_app_dir, fake_main_window):
     tmp_path, da = isolated_app_dir
     eda.add_zone("K1B Well Pad")
@@ -126,6 +266,170 @@ def test_electrical_index_page_remove_selected(qtbot, isolated_app_dir, fake_mai
     assert eda.read_index_rows("K1B Well Pad", "eht_removal") == []
 
 
+def test_electrical_remove_confirmation_no_longer_claims_it_cant_be_undone(qtbot, isolated_app_dir, fake_main_window, monkeypatch):
+    """QOL prompt Phase A.2: the confirmation text used to say 'This can't
+    be undone' - now that it genuinely can, the dialog shouldn't lie."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
+    eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": "29103-EHT-0001"})
+
+    seen = {}
+
+    def fake_question(*a, **k):
+        seen["text"] = a[2] if len(a) > 2 else k.get("text", "")
+        return gui_app.QMessageBox.Yes
+
+    monkeypatch.setattr(gui_app.QMessageBox, "question", staticmethod(fake_question))
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_removal")
+    qtbot.addWidget(page)
+    page.table.selectRow(0)
+    page.remove_selected()
+    assert "can't be undone" not in seen["text"].lower()
+    assert "ctrl+z" in seen["text"].lower()
+
+
+# ------------------------------------------------- QOL prompt Phase A.2 -----
+# Electrical add/edit/remove now push onto the same main_window.undo_stack
+# Instrumentation uses. ElectricalEditDialog itself is monkeypatched to a
+# lightweight fake (same technique as the Backups-dialog dispatch test)
+# so these exercise ElectricalIndexPage's own add_new/edit_selected/
+# remove_selected undo-recording code directly, without driving a real
+# modal dialog.
+
+def test_electrical_add_new_pushes_undo_and_undo_removes_the_row(qtbot, isolated_app_dir, fake_main_window, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_removal")
+    qtbot.addWidget(page)
+
+    class _FakeDialog:
+        def __init__(self, parent, zone_name, equip_key, row_num, is_new, prefill=None):
+            self.zone_name, self.equip_key, self.row_num = zone_name, equip_key, row_num
+
+        def exec(self):
+            eda.save_row(self.zone_name, self.equip_key, self.row_num, {"trace_tag": "29103-EHT-0099"})
+            return gui_app.QDialog.Accepted
+
+    monkeypatch.setattr(gui_app, "ElectricalEditDialog", _FakeDialog)
+    assert not fake_main_window.undo_stack.can_undo()
+    page.add_new()
+
+    assert len(eda.read_index_rows("K1B Well Pad", "eht_removal")) == 1
+    assert fake_main_window.undo_stack.can_undo()
+    desc = fake_main_window.undo_stack.undo()
+    assert "add row" in desc
+    assert eda.read_index_rows("K1B Well Pad", "eht_removal") == []
+
+    assert fake_main_window.undo_stack.can_redo()
+    fake_main_window.undo_stack.redo()
+    rows = eda.read_index_rows("K1B Well Pad", "eht_removal")
+    assert len(rows) == 1 and rows[0]["trace_tag"] == "29103-EHT-0099"
+
+
+def test_electrical_edit_pushes_undo_and_undo_restores_previous_values(qtbot, isolated_app_dir, fake_main_window, monkeypatch):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
+    eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": "29103-EHT-0001", "area": "29103"})
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_removal")
+    qtbot.addWidget(page)
+    page.table.selectRow(0)
+
+    class _FakeDialog:
+        def __init__(self, parent, zone_name, equip_key, row_num, is_new, prefill=None):
+            self.zone_name, self.equip_key, self.row_num = zone_name, equip_key, row_num
+
+        def exec(self):
+            eda.save_row(self.zone_name, self.equip_key, self.row_num, {"area": "CHANGED"})
+            return gui_app.QDialog.Accepted
+
+    monkeypatch.setattr(gui_app, "ElectricalEditDialog", _FakeDialog)
+    page.edit_selected()
+
+    assert eda.read_full_row("K1B Well Pad", "eht_removal", row)["area"] == "CHANGED"
+    desc = fake_main_window.undo_stack.undo()
+    assert "edit row" in desc
+    assert eda.read_full_row("K1B Well Pad", "eht_removal", row)["area"] == "29103"
+
+    fake_main_window.undo_stack.redo()
+    assert eda.read_full_row("K1B Well Pad", "eht_removal", row)["area"] == "CHANGED"
+
+
+def test_electrical_remove_pushes_undo_and_undo_restores_row_and_export_status(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
+    eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": "29103-EHT-0001"})
+    eda.set_electrical_status("K1B Well Pad", "eht_removal", "29103-EHT-0001", export=True)
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_removal")
+    qtbot.addWidget(page)
+    page.table.selectRow(0)
+    page.remove_selected()
+    assert eda.read_index_rows("K1B Well Pad", "eht_removal") == []
+
+    desc = fake_main_window.undo_stack.undo()
+    assert "remove 1 row" in desc
+    rows = eda.read_index_rows("K1B Well Pad", "eht_removal")
+    assert len(rows) == 1 and rows[0]["trace_tag"] == "29103-EHT-0001"
+    assert eda.get_electrical_status("K1B Well Pad", "eht_removal", "29103-EHT-0001")["export"] is True
+
+    fake_main_window.undo_stack.redo()
+    assert eda.read_index_rows("K1B Well Pad", "eht_removal") == []
+
+
+def test_electrical_index_page_allows_multi_row_select_and_remove(qtbot, isolated_app_dir, fake_main_window):
+    """QOL prompt Phase A.4: the table used to be SingleSelection even
+    though eda.delete_rows() already accepted any number of rows."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    for tag in ("29103-EHT-0001", "29103-EHT-0002", "29103-EHT-0003"):
+        row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
+        eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": tag})
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "eht_removal")
+    qtbot.addWidget(page)
+    assert page.table.selectionMode() == gui_app.QTableWidget.ExtendedSelection
+
+    page.table.selectRow(0)
+    page.table.selectionModel().select(
+        page.table.model().index(1, 0),
+        gui_app.QItemSelectionModel.Select | gui_app.QItemSelectionModel.Rows)
+    assert len(page.selected_row_nums()) == 2
+
+    page.remove_selected()
+    assert len(eda.read_index_rows("K1B Well Pad", "eht_removal")) == 1
+
+    desc = fake_main_window.undo_stack.undo()
+    assert "remove 2 row" in desc
+    assert len(eda.read_index_rows("K1B Well Pad", "eht_removal")) == 3
+
+
+def test_refresh_current_view_reloads_a_visible_electrical_index_page(qtbot, isolated_app_dir):
+    """The bug this guards against: refresh_current_view() (what every
+    undo/redo closure calls) used to only recognize IndexPage, so an
+    Electrical page on screen during an undo/redo silently kept showing
+    stale data until manually navigated away and back."""
+    tmp_path, da = isolated_app_dir
+    win = gui_app.MainWindow()
+    qtbot.addWidget(win)
+    win._switch_domain("electrical")
+    eda.add_zone("K1B Well Pad")
+    win.show_electrical_index("K1B Well Pad", "eht_removal")
+    page = win.current_dynamic_page
+    assert isinstance(page, gui_app.ElectricalIndexPage)
+
+    eda.save_row("K1B Well Pad", "eht_removal",
+                  eda.find_first_blank_row("K1B Well Pad", "eht_removal"), {"trace_tag": "29103-EHT-0001"})
+    assert page.table.rowCount() == 0  # not yet reloaded
+
+    win.refresh_current_view()
+    assert page.table.rowCount() == 1
+
+
 def test_export_electrical_pdf_flow_writes_and_opens_file(qtbot, isolated_app_dir, fake_main_window, monkeypatch):
     tmp_path, da = isolated_app_dir
     opened = []
@@ -162,6 +466,23 @@ def test_main_window_domain_switch_shows_correct_pages(qtbot, isolated_app_dir, 
     assert not win.add_zone_btn.isVisible()
 
 
+def test_backups_button_stays_visible_in_electrical_domain(qtbot, isolated_app_dir):
+    """QOL prompt Phase A.1: unlike the other Instrumentation-only footer
+    buttons, 'Backups...' must stay visible (and useful - see
+    test_open_backups_dialog_dispatches_by_active_domain) while the
+    Electrical domain is active, since Electrical now has its own
+    backups too."""
+    tmp_path, da = isolated_app_dir
+    win = gui_app.MainWindow()
+    qtbot.addWidget(win)
+    win.show()  # isVisible() below reflects the real ancestor chain, not just the widget's own flag
+    drive_btn = next(b for b in win.findChildren(gui_app.QPushButton) if "Backups" in b.text())
+    assert drive_btn not in win._instrumentation_only_footer_buttons
+
+    win._switch_domain("electrical")
+    assert drive_btn.isVisible()
+
+
 def test_main_window_add_zone_flow_and_sidebar_tree(qtbot, isolated_app_dir, monkeypatch):
     tmp_path, da = isolated_app_dir
     monkeypatch.setattr(gui_app.QInputDialog, "getText",
@@ -177,6 +498,38 @@ def test_main_window_add_zone_flow_and_sidebar_tree(qtbot, isolated_app_dir, mon
     zone_item = win.tree.topLevelItem(1)
     assert zone_item.text(0) == "K1B Well Pad"
     assert zone_item.childCount() == 4  # eht_removal + eht_rtd + eht_pre_insulation + torqueing
+
+
+# ------------------------------------------------------- QOL prompt Phase A.10
+# setToolTip(0, text) on series/zone sidebar items - mirrors the tooltip
+# already set on "By System" leaves, so a long name isn't silently
+# truncated with no way to read it.
+
+def test_zone_sidebar_item_has_a_tooltip_matching_its_full_name(qtbot, isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    long_name = "A Very Long Zone Name That The Sidebar Column Would Truncate"
+    eda.add_zone(long_name)
+    win = gui_app.MainWindow()
+    qtbot.addWidget(win)
+    win._switch_domain("electrical")
+
+    zone_item = win.tree.topLevelItem(1)  # 0 is Dashboard
+    assert zone_item.text(0) == long_name
+    assert zone_item.toolTip(0) == long_name
+
+
+def test_series_sidebar_item_has_a_tooltip_matching_its_display_label(qtbot, isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    da.set_series_name(100, "A Very Long Custom Series Name The Sidebar Would Truncate")
+    win = gui_app.MainWindow()
+    qtbot.addWidget(win)
+
+    series_item = next(
+        win.tree.topLevelItem(i) for i in range(win.tree.topLevelItemCount())
+        if win.tree.topLevelItem(i).data(0, win.NAV_ROLE) == ("series", 100)
+    )
+    assert series_item.text(0) == "A Very Long Custom Series Name The Sidebar Would Truncate"
+    assert series_item.toolTip(0) == series_item.text(0)
 
 
 def test_instrumentation_only_shortcuts_are_gated_while_electrical_is_active(

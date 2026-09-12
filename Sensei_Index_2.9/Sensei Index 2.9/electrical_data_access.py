@@ -32,13 +32,16 @@ added for Instrumentation, if wanted.
 import datetime
 import os
 import re
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
 import openpyxl
 from pypdf import PdfReader, PdfWriter
 
-from data_access import HERE, write_json_atomic, read_json_with_recovery, open_file  # noqa: F401
+from data_access import (  # noqa: F401
+    HERE, write_json_atomic, read_json_with_recovery, open_file, get_setting,
+)
 
 import eht_removal_schema
 import eht_rtd_schema
@@ -61,6 +64,10 @@ ELECTRICAL_STATUS_PATH = HERE / "electrical_status.json"
 # module-level name here, same reasoning as ELECTRICAL_WORKBOOK_PATH/
 # ELECTRICAL_CONFIG_PATH/ELECTRICAL_TEMP_DIR/ELECTRICAL_STATUS_PATH above.
 ELECTRICAL_OUTPUT_DIR = HERE / "output_pdfs"
+# QOL prompt Phase A.1 - own backups dir, own constant (same "HERE is
+# imported BY VALUE, so a bare HERE-derived path can't be retroactively
+# test-isolated" reasoning as every path constant above).
+ELECTRICAL_BACKUPS_DIR = HERE / "electrical_backups"
 
 # ---------------------------------------------------------------------------
 # Equipment type registry - the Electrical equivalent of data_access.py's
@@ -217,6 +224,14 @@ def invalidate_workbook_cache():
 
 @contextmanager
 def _mutating_workbook():
+    """QOL prompt Phase A.1: also the choke point for automatic backups,
+    same shape/reasoning as data_access.py's identical docstring - a
+    snapshot of the CURRENT on-disk Electrical workbook is taken here,
+    before this block's write, whenever the last one is older than the
+    shared backup_interval_minutes setting (or there isn't one yet).
+    Never blocks the actual mutation: a backup failure is warned to
+    console and swallowed."""
+    _backup_workbook_if_due()
     wb = _get_cached_workbook(data_only=False)
     try:
         yield wb
@@ -225,6 +240,119 @@ def _mutating_workbook():
         raise
     else:
         _save_workbook_and_refresh_cache(wb)
+
+
+# ---------------------------------------------------------------------------
+# QOL prompt Phase A.1 - automatic Electrical workbook backups. Direct
+# mirror of data_access.py's identically-named functions (same collision-
+# safe timestamped naming, same prune-to-backup_keep behavior), scoped to
+# ELECTRICAL_WORKBOOK_PATH/ELECTRICAL_BACKUPS_DIR instead. Deliberately
+# SHARES the same backup_interval_minutes/backup_keep settings keys with
+# Instrumentation (one cadence for both workbooks) rather than inventing
+# electrical_backup_interval_minutes/electrical_backup_keep - simpler for
+# a user to reason about ("how often does the app back things up") and
+# nothing about those two keys' names or Settings-dialog wording is
+# Instrumentation-specific.
+# ---------------------------------------------------------------------------
+ELECTRICAL_BACKUP_NAME_PREFIX = "Electrical_Inspection_Tracker."
+ELECTRICAL_BACKUP_NAME_SUFFIX = ".xlsx"
+
+
+def _list_backup_paths():
+    """Oldest first (by mtime) - [] if the folder doesn't exist yet."""
+    if not ELECTRICAL_BACKUPS_DIR.exists():
+        return []
+    paths = [p for p in ELECTRICAL_BACKUPS_DIR.glob(
+        f"{ELECTRICAL_BACKUP_NAME_PREFIX}*{ELECTRICAL_BACKUP_NAME_SUFFIX}") if p.is_file()]
+    return sorted(paths, key=lambda p: p.stat().st_mtime)
+
+
+def _write_backup_snapshot():
+    """Copies the CURRENT on-disk workbook into electrical_backups/,
+    timestamped to the second. Collision-safe (two backups in the same
+    second get a '-2', '-3', ... suffix) so nothing is ever silently
+    overwritten."""
+    ELECTRICAL_BACKUPS_DIR.mkdir(exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = ELECTRICAL_BACKUPS_DIR / f"{ELECTRICAL_BACKUP_NAME_PREFIX}{stamp}{ELECTRICAL_BACKUP_NAME_SUFFIX}"
+    n = 2
+    while dest.exists():
+        dest = ELECTRICAL_BACKUPS_DIR / f"{ELECTRICAL_BACKUP_NAME_PREFIX}{stamp}-{n}{ELECTRICAL_BACKUP_NAME_SUFFIX}"
+        n += 1
+    shutil.copy2(ELECTRICAL_WORKBOOK_PATH, dest)
+    return dest
+
+
+def _prune_backups():
+    keep = get_setting("backup_keep")
+    if not keep or keep <= 0:
+        return
+    existing = _list_backup_paths()  # oldest first
+    for old in existing[:-keep]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def _backup_workbook_if_due():
+    if not ELECTRICAL_WORKBOOK_PATH.exists():
+        return  # nothing to back up yet (a brand-new install)
+    try:
+        interval_minutes = get_setting("backup_interval_minutes")
+        if interval_minutes is None:
+            interval_minutes = 30  # `or 30` would also override an explicit 0 ("always back up")
+        existing = _list_backup_paths()
+        if existing:
+            newest = existing[-1]
+            age_minutes = (datetime.datetime.now().timestamp() - newest.stat().st_mtime) / 60
+            if age_minutes < interval_minutes:
+                return
+        _write_backup_snapshot()
+        _prune_backups()
+    except OSError as exc:
+        print(f"WARNING: automatic Electrical workbook backup failed (continuing without backing up): {exc}")
+
+
+def list_backups():
+    """[{'path', 'name', 'mtime', 'size'}, ...], NEWEST first - the
+    Backups dialog's list."""
+    result = []
+    for p in reversed(_list_backup_paths()):
+        try:
+            stat = p.stat()
+        except OSError:
+            continue
+        result.append({"path": p, "name": p.name, "mtime": stat.st_mtime, "size": stat.st_size})
+    return result
+
+
+def backup_now():
+    """The Backups dialog's 'Back up now' button - always writes a fresh
+    snapshot regardless of backup_interval_minutes, then prunes to
+    backup_keep same as the automatic path."""
+    if not ELECTRICAL_WORKBOOK_PATH.exists():
+        raise FileNotFoundError("No workbook to back up yet.")
+    dest = _write_backup_snapshot()
+    _prune_backups()
+    return dest
+
+
+def restore_backup(backup_path):
+    """Copies the chosen snapshot over the live workbook - AFTER taking
+    ONE MORE safety snapshot of whatever's currently live, so restoring
+    is itself undoable (by restoring that safety snapshot by hand).
+    Returns the safety snapshot's path (None if there was no live
+    workbook to protect - a restore onto a fresh install)."""
+    backup_path = Path(backup_path)
+    if not backup_path.exists():
+        raise FileNotFoundError(f"Backup not found: {backup_path}")
+    safety_snapshot = None
+    if ELECTRICAL_WORKBOOK_PATH.exists():
+        safety_snapshot = _write_backup_snapshot()
+    shutil.copy2(backup_path, ELECTRICAL_WORKBOOK_PATH)
+    invalidate_workbook_cache()
+    return safety_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +507,36 @@ def add_zone(zone_name):
     cfg["zones"].append(new_entry)
     save_config(cfg)
     return new_entry
+
+
+def set_zone_name(zone_name, new_name):
+    """QOL prompt Phase A.10 - renames a zone (previously a typo'd zone name
+    was a dead end short of destructive remove/re-add). Genuinely different
+    from data_access.py's set_series_name(): a series has a stable numeric
+    identity with a separate, optional display-name overlay, so renaming it
+    never touches anything that identity is used as a key for. A zone has
+    no such separate id - its `name` field IS the key every other function
+    in this module looks it up by (read_index_rows(zone_name, ...),
+    save_row(zone_name, ...), etc.) - so this really does change the zone's
+    identity going forward. That's still safe: the zone's sheets were
+    already created and their names fixed at zone-creation time, stored
+    independently under `<equip_key>_sheet` (see get_sheet_name) and never
+    derived from the zone name again after that, so this only ever touches
+    the JSON registry, never the workbook. Callers that hold onto the old
+    name (e.g. a currently-open ElectricalIndexPage) are the caller's
+    responsibility to refresh - see rename_zone_flow in gui_app.py."""
+    zone_name = (zone_name or "").strip()
+    new_name = (new_name or "").strip()
+    if not new_name:
+        raise ValueError("Zone name can't be blank.")
+    cfg = load_config()
+    entry = next((z for z in cfg["zones"] if z["name"] == zone_name), None)
+    if entry is None:
+        raise KeyError(f"Zone '{zone_name}' is not in {ELECTRICAL_CONFIG_PATH.name}")
+    if new_name != zone_name and any(z["name"] == new_name for z in cfg["zones"]):
+        raise ValueError(f"Zone '{new_name}' already exists.")
+    entry["name"] = new_name
+    save_config(cfg)
 
 
 def _archived_sheet_name(original_name, wb):

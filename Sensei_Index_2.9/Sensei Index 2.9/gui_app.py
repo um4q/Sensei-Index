@@ -114,7 +114,7 @@ class StatCard(QFrame):
     breakdown list underneath - the Main Menu's answer to 'you only show
     the total.'"""
 
-    def __init__(self, title, total, breakdown, parent=None):
+    def __init__(self, title, total, breakdown, parent=None, breakdown_label="BY SYSTEM"):
         super().__init__(parent)
         self.setObjectName("Card")
         layout = QVBoxLayout(self)
@@ -133,7 +133,7 @@ class StatCard(QFrame):
         line.setStyleSheet("color: palette(mid);")
         layout.addWidget(line)
 
-        by_system_label = QLabel("BY SYSTEM")
+        by_system_label = QLabel(breakdown_label)
         by_system_label.setObjectName("SectionLabel")
         layout.addWidget(by_system_label)
 
@@ -627,6 +627,28 @@ def remove_series_flow(parent_widget, series_number):
         QMessageBox.critical(parent_widget, "Couldn't remove series", str(exc))
 
 
+def rename_zone_flow(parent_widget, zone_name):
+    """QOL prompt Phase A.10 - the zone equivalent of rename_series_flow,
+    though not a pure mirror: see eda.set_zone_name's docstring for why a
+    zone rename genuinely changes its identity rather than just an overlay
+    display name. Returns the new name on success (so a caller displaying
+    the just-renamed zone can re-navigate to it), or None if the dialog
+    was cancelled, the new name was blank/unchanged, or the rename failed."""
+    text, ok = QInputDialog.getText(
+        parent_widget, f'Rename "{zone_name}"', "New zone name:", text=zone_name)
+    if not ok:
+        return None
+    new_name = (text or "").strip()
+    if not new_name or new_name == zone_name:
+        return None
+    try:
+        eda.set_zone_name(zone_name, new_name)
+    except Exception as exc:
+        QMessageBox.critical(parent_widget, "Couldn't rename zone", str(exc))
+        return None
+    return new_name
+
+
 def remove_zone_flow(parent_widget, zone_name):
     warned = QMessageBox.warning(
         parent_widget, "Remove zone",
@@ -878,8 +900,12 @@ class MainWindow(QMainWindow):
         # results (da.search_index()) are entirely Instrumentation rows,
         # and navigating to one from the Electrical domain used to leave
         # active_domain desynced from the page actually on screen.
+        # drive_btn is deliberately NOT in this list (QOL prompt Phase A.1) -
+        # electrical_data_access.py now has its own backup snapshots, and
+        # open_backups_dialog() below dispatches to the right one by
+        # active_domain, so the button stays visible and useful in both.
         self._instrumentation_only_footer_buttons = [
-            search_btn, add_series_btn, wizard_btn, datasheet_btn, master_list_btn, drive_btn,
+            search_btn, add_series_btn, wizard_btn, datasheet_btn, master_list_btn,
         ]
 
         settings_btn = make_button("\u2699  Settings", "SidebarFooterButton")
@@ -915,7 +941,9 @@ class MainWindow(QMainWindow):
         self.tree.addTopLevelItem(coverage_item)
 
         for series_number in da.list_series():
-            series_item = QTreeWidgetItem([da.series_display_label(series_number)])
+            series_label = da.series_display_label(series_number)
+            series_item = QTreeWidgetItem([series_label])
+            series_item.setToolTip(0, series_label)  # a long custom name can be truncated by the sidebar's width
             series_item.setData(0, self.NAV_ROLE, ("series", series_number))
             self.tree.addTopLevelItem(series_item)
 
@@ -952,6 +980,7 @@ class MainWindow(QMainWindow):
 
         for zone_name in eda.list_zones():
             zone_item = QTreeWidgetItem([zone_name])
+            zone_item.setToolTip(0, zone_name)  # a long zone name can be truncated by the sidebar's width
             zone_item.setData(0, self.NAV_ROLE, ("zone", zone_name))
             self.tree.addTopLevelItem(zone_item)
 
@@ -1009,12 +1038,29 @@ class MainWindow(QMainWindow):
         elif nav and nav[0] == "zone":
             zone_name = nav[1]
             menu = QMenu(self)
+            rename_action = menu.addAction("Rename...")
             remove_action = menu.addAction("Remove...")
             chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
-            if chosen == remove_action:
+            if chosen == rename_action:
+                new_name = rename_zone_flow(self, zone_name)
+                if new_name:
+                    self._handle_zone_renamed(zone_name, new_name)
+                self.refresh_sidebar_and_dashboard()
+            elif chosen == remove_action:
                 remove_zone_flow(self, zone_name)
                 self.refresh_sidebar_and_dashboard()
         # else: no context menu (not Dashboard, types, systems, ...)
+
+    def _handle_zone_renamed(self, old_name, new_name):
+        """After a successful zone rename: if the page currently on screen
+        was showing the OLD zone name, re-navigate to the SAME equip_key
+        under the new name (its self.zone_name is now stale) instead of
+        letting refresh_sidebar_and_dashboard()'s "zone no longer exists"
+        check treat this indistinguishably from a removal and bounce to
+        the dashboard."""
+        current = self.current_dynamic_page
+        if isinstance(current, ElectricalIndexPage) and current.zone_name == old_name:
+            self.show_electrical_index(new_name, current.equip_key)
 
     def refresh_sidebar_and_dashboard(self):
         """Call after anything that changes counts (save, add/remove/rename
@@ -1045,9 +1091,17 @@ class MainWindow(QMainWindow):
         page may have since been navigated away from and deleted, and
         calling a method on a deleted Qt widget raises. The underlying
         data is already updated either way; this only makes sure a
-        currently-visible table doesn't show stale checkboxes."""
-        page = self._active_index_page()
-        if page is not None:
+        currently-visible table doesn't show stale checkboxes.
+
+        Deliberately checks (IndexPage, ElectricalIndexPage) directly
+        rather than going through _active_index_page() (which only
+        recognizes IndexPage - see that method's own docstring/the
+        keyboard-shortcut handlers right below it, several of which
+        assume IndexPage-only attributes like search_edit that
+        ElectricalIndexPage doesn't have yet): both page types implement
+        a no-argument reload(), which is all this needs."""
+        page = self.current_dynamic_page
+        if isinstance(page, (IndexPage, ElectricalIndexPage)):
             page.reload()
         self.refresh_sidebar_and_dashboard()
 
@@ -1164,8 +1218,16 @@ class MainWindow(QMainWindow):
         """Sensei Index 2.1, Phase 16.1 - what used to be the 'Connect to
         Drive' placeholder now does a real job: local snapshot backups,
         not cloud sync (that's still not built - this button was never
-        promising it, only labeled for a future update it never got)."""
-        BackupsDialog(self).exec()
+        promising it, only labeled for a future update it never got).
+
+        QOL prompt Phase A.1: dispatches to whichever domain is active -
+        Electrical has its own, separately-scoped backup snapshots
+        (electrical_data_access.py), never mixed with Instrumentation's."""
+        if self.active_domain == "electrical":
+            BackupsDialog(self, backend=eda, backups_dir=eda.ELECTRICAL_BACKUPS_DIR,
+                          workbook_label="Electrical").exec()
+        else:
+            BackupsDialog(self).exec()
 
     def open_populating_wizard(self):
         if self.active_domain == "electrical":
@@ -3883,23 +3945,35 @@ class BackupsDialog(QDialog):
     snapshots already happen in the background (_mutating_workbook's
     entry, via da._backup_workbook_if_due); this dialog is for the
     manual/visible side of it: see what's there, force one now, open the
-    folder, or restore an older one."""
+    folder, or restore an older one.
 
-    def __init__(self, parent):
+    QOL prompt Phase A.1: generalized to also drive Electrical's backups
+    (electrical_data_access.py has its own, separately-scoped mirror of
+    every da.* function this dialog calls) via the backend/backups_dir/
+    workbook_label params - defaults are unchanged so every pre-existing
+    Instrumentation call site (`BackupsDialog(self)`) behaves exactly as
+    before."""
+
+    def __init__(self, parent, backend=None, backups_dir=None, workbook_label="Instrumentation"):
         super().__init__(parent)
-        self.setWindowTitle("Backups")
+        self.backend = backend or da
+        self.backups_dir = backups_dir if backups_dir is not None else da.BACKUPS_DIR
+        title = "Backups" if self.backend is da else f"Backups – {workbook_label}"
+        self.setWindowTitle(title)
         self.resize(640, 440)
 
         layout = QVBoxLayout(self)
-        header = QLabel("Backups")
+        header = QLabel(title)
         header.setObjectName("PageTitle")
         layout.addWidget(header)
 
-        settings = da.load_settings()
+        settings = da.load_settings()  # shared settings store - see electrical_data_access.py's own
+                                        # backup functions' docstring for why the cadence is shared
         info = QLabel(
             f"Automatic snapshots every {settings.get('backup_interval_minutes', 30)} minute(s) "
             f"of activity, keeping the newest {settings.get('backup_keep', 20)}. Adjust either in "
-            f"app_settings.json (backup_interval_minutes / backup_keep).")
+            f"app_settings.json (backup_interval_minutes / backup_keep) - shared across both "
+            f"workbooks.")
         info.setObjectName("FieldLabel")
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -3937,7 +4011,7 @@ class BackupsDialog(QDialog):
         self._reload()
 
     def _reload(self):
-        self._backups = da.list_backups()
+        self._backups = self.backend.list_backups()
         self.table.setRowCount(len(self._backups))
         for r, b in enumerate(self._backups):
             when = datetime.datetime.fromtimestamp(b["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
@@ -3952,7 +4026,7 @@ class BackupsDialog(QDialog):
 
     def _backup_now(self):
         try:
-            da.backup_now()
+            self.backend.backup_now()
         except Exception as exc:
             QMessageBox.critical(self, "Couldn't back up", str(exc))
             return
@@ -3960,9 +4034,9 @@ class BackupsDialog(QDialog):
         show_toast(self, "Backed up")
 
     def _open_folder(self):
-        da.BACKUPS_DIR.mkdir(exist_ok=True)
+        self.backups_dir.mkdir(exist_ok=True)
         try:
-            da.open_file(da.BACKUPS_DIR)
+            da.open_file(self.backups_dir)
         except Exception as exc:
             QMessageBox.critical(self, "Couldn't open folder", str(exc))
 
@@ -3982,7 +4056,7 @@ class BackupsDialog(QDialog):
             return
 
         try:
-            safety = da.restore_backup(backup["path"])
+            safety = self.backend.restore_backup(backup["path"])
         except Exception as exc:
             QMessageBox.critical(self, "Couldn't restore", str(exc))
             return
@@ -5733,10 +5807,13 @@ class ElectricalExportDialog(QDialog):
 class ElectricalIndexPage(QWidget):
     """The Electrical equivalent of IndexPage - deliberately simpler (a
     plain sortable table, no frozen columns/chip filters/saved view state/
-    mass-edit/undo-redo integration - see this section's module-level
-    docstring for the v1 scope decision). Mass export IS included (a
-    per-row Export checkbox column + Export... dialog), mirroring
-    Instrumentation's own export queue."""
+    mass-edit - see this section's module-level docstring for the v1
+    scope decision). Mass export IS included (a per-row Export checkbox
+    column + Export... dialog), mirroring Instrumentation's own export
+    queue. Undo/redo (QOL prompt Phase A.2) IS wired in too - every
+    add/edit/remove pushes onto the same main_window.undo_stack
+    Instrumentation uses, same before/after-snapshot shape as
+    IndexPage's own _record_add_undo/_record_edit_undo/_record_remove_undo."""
 
     def __init__(self, main_window, zone_name, equip_key):
         super().__init__()
@@ -5799,7 +5876,10 @@ class ElectricalIndexPage(QWidget):
         self.table.setHorizontalHeaderLabels(list(self.etype["summary_labels"]) + ["Export"])
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        # QOL prompt Phase A.4: was SingleSelection - eda.delete_rows()
+        # already accepts any number of row numbers (it always has), the
+        # GUI just never let you select more than one to pass it.
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemDoubleClicked.connect(lambda _item: self.edit_selected())
         layout.addWidget(self.table, stretch=1)
@@ -5896,29 +5976,83 @@ class ElectricalIndexPage(QWidget):
         self.reload()
 
     def selected_row_num(self):
-        items = self.table.selectedItems()
-        if not items:
+        """For actions that only make sense on exactly one row (Edit,
+        View / Export PDF)."""
+        sel = self.table.selectionModel().selectedRows()
+        if not sel:
             return None
-        first_col_item = self.table.item(items[0].row(), 0)
-        return first_col_item.data(Qt.UserRole) if first_col_item else None
+        if len(sel) > 1:
+            QMessageBox.information(self, "Select one row",
+                                     "This action works on a single row - select just one.")
+            return None
+        item = self.table.item(sel[0].row(), 0)
+        return item.data(Qt.UserRole) if item else None
+
+    def selected_row_nums(self):
+        """For actions that work on any number of rows (Remove)."""
+        sel = self.table.selectionModel().selectedRows()
+        return [self.table.item(idx.row(), 0).data(Qt.UserRole) for idx in sel]
 
     def add_new(self):
         row_num = eda.find_first_blank_row(self.zone_name, self.equip_key)
         dlg = ElectricalEditDialog(self, self.zone_name, self.equip_key, row_num, is_new=True)
         if dlg.exec() == QDialog.Accepted:
+            self._record_add_undo(row_num)
             self.reload()
             self.main_window.refresh_sidebar_and_dashboard()
             self.main_window.statusBar().showMessage(f"Added row {row_num}", 3000)
+
+    def _record_add_undo(self, row_num):
+        mw, zn, ek = self.main_window, self.zone_name, self.equip_key
+        try:
+            values = eda.read_full_row(zn, ek, row_num)
+        except Exception:
+            values = None
+
+        def do_undo():
+            eda.delete_rows(zn, ek, [row_num])
+            mw.refresh_current_view()
+
+        def do_redo():
+            if values is not None:
+                eda.save_row(zn, ek, row_num, values)
+            mw.refresh_current_view()
+
+        mw.undo_stack.push(f"add row {row_num}", do_undo, do_redo)
 
     def edit_selected(self):
         row_num = self.selected_row_num()
         if row_num is None:
             return
+        try:
+            before_values = eda.read_full_row(self.zone_name, self.equip_key, row_num)
+        except Exception:
+            before_values = None
         dlg = ElectricalEditDialog(self, self.zone_name, self.equip_key, row_num, is_new=False)
         if dlg.exec() == QDialog.Accepted:
+            try:
+                after_values = eda.read_full_row(self.zone_name, self.equip_key, row_num)
+            except Exception:
+                after_values = None
+            self._record_edit_undo(row_num, before_values, after_values)
             self.reload()
             self.main_window.refresh_sidebar_and_dashboard()
             self.main_window.statusBar().showMessage(f"Saved row {row_num}", 3000)
+
+    def _record_edit_undo(self, row_num, before_values, after_values):
+        mw, zn, ek = self.main_window, self.zone_name, self.equip_key
+
+        def do_undo():
+            if before_values is not None:
+                eda.save_row(zn, ek, row_num, before_values)
+            mw.refresh_current_view()
+
+        def do_redo():
+            if after_values is not None:
+                eda.save_row(zn, ek, row_num, after_values)
+            mw.refresh_current_view()
+
+        mw.undo_stack.push(f"edit row {row_num}", do_undo, do_redo)
 
     def export_pdf_selected(self):
         row_num = self.selected_row_num()
@@ -5927,19 +6061,67 @@ class ElectricalIndexPage(QWidget):
         export_electrical_pdf_flow(self, self.zone_name, self.equip_key, row_num)
 
     def remove_selected(self):
-        row_num = self.selected_row_num()
-        if row_num is None:
+        """QOL prompt Phase A.4: any number of selected rows, not just one -
+        eda.delete_rows() already accepted a list, only the GUI's
+        SingleSelection mode ever stopped more than one being passed."""
+        row_nums = self.selected_row_nums()
+        if not row_nums:
+            QMessageBox.information(self, "Select rows", "Select one or more rows first.")
             return
-        reply = QMessageBox.question(self, "Remove row", f"Clear row {row_num}? This can't be undone.")
+        preview = ", ".join(str(rn) for rn in row_nums[:5])
+        if len(row_nums) > 5:
+            preview += f", +{len(row_nums) - 5} more"
+        reply = QMessageBox.question(
+            self, "Remove rows",
+            f"Remove {len(row_nums)} row(s)? ({preview})\n\nThis clears their data from the "
+            "workbook. Press Ctrl+Z right after if this was a mistake.")
         if reply != QMessageBox.Yes:
             return
+
+        # Capture full state (row values + export-queue status) for undo,
+        # before anything is cleared - delete_rows() below also drops the
+        # status entry, same reasoning as IndexPage's own remove_selected.
+        snapshots = []
+        for rn in row_nums:
+            try:
+                values = eda.read_full_row(self.zone_name, self.equip_key, rn)
+            except Exception:
+                values = None
+            key_val = values.get(self.etype["key_field"]) if values else None
+            status = eda.get_electrical_status(self.zone_name, self.equip_key, key_val) if key_val else None
+            snapshots.append((rn, values, status))
+
         try:
-            eda.delete_rows(self.zone_name, self.equip_key, [row_num])
+            eda.delete_rows(self.zone_name, self.equip_key, row_nums)
         except Exception as exc:
-            QMessageBox.critical(self, "Couldn't remove row", str(exc))
+            QMessageBox.critical(self, "Couldn't remove rows", str(exc))
             return
+        self._record_remove_undo(snapshots)
         self.reload()
         self.main_window.refresh_sidebar_and_dashboard()
+
+    def _record_remove_undo(self, snapshots):
+        mw, zn, ek = self.main_window, self.zone_name, self.equip_key
+        key_field = self.etype["key_field"]
+
+        def do_undo():
+            for rn, values, status in snapshots:
+                if values is None:
+                    continue
+                eda.save_row(zn, ek, rn, values)
+                key_val = values.get(key_field)
+                if key_val and status:
+                    eda.set_electrical_status(zn, ek, key_val, **status)
+            mw.refresh_current_view()
+
+        def do_redo():
+            rns = [rn for rn, values, _ in snapshots if values is not None]
+            if rns:
+                eda.delete_rows(zn, ek, rns)
+            mw.refresh_current_view()
+
+        n = len(snapshots)
+        mw.undo_stack.push(f"remove {n} row{'s' if n != 1 else ''}", do_undo, do_redo)
 
 
 class ElectricalDashboardPage(QWidget):
@@ -5971,11 +6153,21 @@ class ElectricalDashboardPage(QWidget):
         inner = QWidget()
         inner_layout = QVBoxLayout(inner)
 
+        # Computed once, up front, so both the top StatCards' "BY ZONE"
+        # breakdown and the "BY ZONE" cards section below read from the
+        # same numbers instead of querying the workbook twice.
+        zone_names = eda.list_zones()
+        zone_summaries = {zone_name: eda.zone_summary(zone_name) for zone_name in zone_names}
+
         cards_row = QHBoxLayout()
         cards_row.setSpacing(16)
         totals = eda.count_all_by_type()
         for equip_key, etype in eda.ELECTRICAL_EQUIPMENT_TYPES.items():
-            card = StatCard(etype["label"], totals.get(equip_key, 0), {})
+            breakdown = {
+                zone_name: zone_summaries[zone_name].get(equip_key, {}).get("total", 0)
+                for zone_name in zone_names
+            }
+            card = StatCard(etype["label"], totals.get(equip_key, 0), breakdown, breakdown_label="BY ZONE")
             cards_row.addWidget(card)
         cards_row.addStretch()
         inner_layout.addLayout(cards_row)
@@ -5984,7 +6176,6 @@ class ElectricalDashboardPage(QWidget):
         zones_label.setObjectName("SectionLabel")
         inner_layout.addWidget(zones_label, alignment=Qt.AlignLeft)
 
-        zone_names = eda.list_zones()
         if not zone_names:
             none_label = QLabel("No zones yet - add one from the sidebar (\"+ Add New Zone\").")
             none_label.setObjectName("StatLabel")
@@ -6006,8 +6197,7 @@ class ElectricalDashboardPage(QWidget):
             by_zone_row = QHBoxLayout()
             by_zone_row.setSpacing(16)
             for zone_name in zone_names:
-                summary = eda.zone_summary(zone_name)
-                by_zone_row.addWidget(self._build_zone_card(zone_name, summary))
+                by_zone_row.addWidget(self._build_zone_card(zone_name, zone_summaries[zone_name]))
             by_zone_row.addStretch()
             inner_layout.addLayout(by_zone_row)
 

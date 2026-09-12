@@ -100,6 +100,8 @@ def isolated_app_dir(tmp_path, monkeypatch):
                          tmp_path / "electrical_status.json", raising=False)
     monkeypatch.setattr(eda, "ELECTRICAL_OUTPUT_DIR",
                          tmp_path / "output_pdfs", raising=False)
+    monkeypatch.setattr(eda, "ELECTRICAL_BACKUPS_DIR",
+                         tmp_path / "electrical_backups", raising=False)
     eda.invalidate_workbook_cache()
 
     yield tmp_path, da

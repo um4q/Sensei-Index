@@ -92,6 +92,65 @@ def test_remove_zone_raises_for_unknown_zone(isolated_app_dir):
         eda.remove_zone("Nonexistent")
 
 
+# --------------------------------------------------------------- QOL A.10
+# set_zone_name - a typo'd zone name used to be a dead end short of
+# destructive remove/re-add.
+
+def test_set_zone_name_renames_the_zone(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    eda.set_zone_name("K1B Well Pad", "K1B Well Pad (Renamed)")
+    assert eda.list_zones() == ["K1B Well Pad (Renamed)"]
+
+
+def test_set_zone_name_preserves_the_zones_existing_sheets_and_data(isolated_app_dir):
+    """The rename must never touch the workbook - the sheet names were
+    fixed at zone-creation time and are looked up by the stored
+    <equip_key>_sheet key, not re-derived from the (now different) zone
+    name."""
+    tmp_path, da = isolated_app_dir
+    entry = eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "eht_removal")
+    eda.save_row("K1B Well Pad", "eht_removal", row, {"trace_tag": "29103-EHT-0001"})
+
+    eda.set_zone_name("K1B Well Pad", "K1B Well Pad (Renamed)")
+
+    rows = eda.read_index_rows("K1B Well Pad (Renamed)", "eht_removal")
+    assert any(r["trace_tag"] == "29103-EHT-0001" for r in rows)
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry["eht_removal_sheet"] in wb.sheetnames  # unchanged, never renamed
+
+
+def test_set_zone_name_rejects_blank_new_name(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    with pytest.raises(ValueError):
+        eda.set_zone_name("K1B Well Pad", "   ")
+    assert eda.list_zones() == ["K1B Well Pad"]  # untouched
+
+
+def test_set_zone_name_rejects_collision_with_another_zone(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    eda.add_zone("K2A Well Pad")
+    with pytest.raises(ValueError):
+        eda.set_zone_name("K1B Well Pad", "K2A Well Pad")
+    assert set(eda.list_zones()) == {"K1B Well Pad", "K2A Well Pad"}
+
+
+def test_set_zone_name_raises_for_unknown_zone(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    with pytest.raises(KeyError):
+        eda.set_zone_name("Nonexistent", "New Name")
+
+
+def test_set_zone_name_to_its_own_current_name_is_a_no_op(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    eda.set_zone_name("K1B Well Pad", "K1B Well Pad")  # renaming to itself: not a collision
+    assert eda.list_zones() == ["K1B Well Pad"]
+
+
 def test_remove_only_zone_does_not_crash_on_zero_visible_sheets(isolated_app_dir):
     """openpyxl refuses to save a workbook with zero visible sheets - if
     the zone being removed is the only one, archiving (hiding) both its
