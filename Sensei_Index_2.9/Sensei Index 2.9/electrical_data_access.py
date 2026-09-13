@@ -30,6 +30,7 @@ cleaned-copy export). Those can be added later the same way they were
 added for Instrumentation, if wanted.
 """
 import datetime
+import json
 import os
 import re
 import shutil
@@ -74,6 +75,15 @@ ELECTRICAL_OUTPUT_DIR = HERE / "output_pdfs"
 # imported BY VALUE, so a bare HERE-derived path can't be retroactively
 # test-isolated" reasoning as every path constant above).
 ELECTRICAL_BACKUPS_DIR = HERE / "electrical_backups"
+# QOL prompt Phase A.8 - own activity log file, same reasoning again. A
+# separate file (not data_access.py's shared activity_log.jsonl) so the two
+# domains' logs can never mix - matches every other Electrical store here
+# being its own file rather than a shared one with Instrumentation.
+ELECTRICAL_ACTIVITY_LOG_PATH = HERE / "electrical_activity_log.jsonl"
+# QOL prompt Phase A.3/A.9 - own per-page view-state store (sort/chip/
+# column-widths), same shape as data_access.py's ui_state.json, own file
+# for the same domain-independence reason.
+ELECTRICAL_UI_STATE_PATH = HERE / "electrical_ui_state.json"
 
 # ---------------------------------------------------------------------------
 # Equipment type registry - the Electrical equivalent of data_access.py's
@@ -90,6 +100,15 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "key_field": "trace_tag",
         "summary_fields": ["trace_tag", "area", "system_no"],
         "summary_labels": ["Trace Tag #", "Area", "System No."],
+        # QOL prompt Phase A.6 - only the unambiguous, single (non-repeating-
+        # table-row) calendar-date fields each form actually has are listed
+        # here, same selectivity EQUIPMENT_TYPES itself already uses (e.g.
+        # valve's own date_fields don't cover every date-ish field on that
+        # form either) - a per-row date inside a flattened repeating table
+        # (e.g. transformer_test's test_equip_N_calibrated_on) is left as a
+        # plain text field, same as every other column in that table.
+        "date_fields": ["yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
     },
     "eht_rtd": {
         "label": "EHT & RTD Installation Inspection",
@@ -98,6 +117,10 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "key_field": "trace_number",
         "summary_fields": ["trace_number", "controller_number", "panel_number"],
         "summary_labels": ["Trace #", "Controller #", "Panel #"],
+        "date_fields": ["post_ins_calibration_due_date", "final_signoff_yanda_date",
+                         "final_signoff_client_date"],
+        "date_labels": ["Post-Ins Cal. Due Date", "Post-Ins Yanda Sign-Off Date",
+                         "Post-Ins Client Sign-Off Date"],
     },
     "eht_pre_insulation": {
         "label": "EHT & RTD Pre-Insulation Installation",
@@ -113,6 +136,8 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         # is easier to grep for and can't be fooled by an unrelated
         # same-named attribute on some future export module).
         "supports_signature_stamp": True,
+        "date_fields": ["cal_due_date", "yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Cal. Due Date", "Yanda Rep. Date", "Client Rep. Date"],
     },
     "torqueing": {
         "label": "Torqueing Report",
@@ -122,6 +147,8 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "summary_fields": ["torque_record_number", "reference_tag_number", "system_number"],
         "summary_labels": ["Torque Record No.", "Reference Tag #", "System No."],
         "supports_signature_stamp": True,
+        "date_fields": ["calibration_date", "yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Calibration Date", "Yanda Rep. Date", "Client Rep. Date"],
     },
     "transformer_test": {
         "label": "Transformer Test Record",
@@ -131,6 +158,8 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "summary_fields": ["tag", "make", "serial_number"],
         "summary_labels": ["Tag", "Make", "Serial Number"],
         "supports_signature_stamp": True,
+        "date_fields": ["yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
     },
     "small_power_cable": {
         "label": "Small Power and Control Cable ITR",
@@ -140,6 +169,8 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "summary_fields": ["cable_tag_number", "cable_type", "location"],
         "summary_labels": ["Cable Tag Number", "Cable Type", "Location"],
         "supports_signature_stamp": True,
+        "date_fields": ["yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
     },
     "general_equip_install": {
         "label": "General Electrical Equipment Installation & Test",
@@ -149,7 +180,23 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "summary_fields": ["tag_number", "manufacturer", "location"],
         "summary_labels": ["Tag #", "Manufacturer", "Location"],
         "supports_signature_stamp": True,
+        "date_fields": ["cal_due", "yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Cal. Due", "Yanda Rep. Date", "Client Rep. Date"],
     },
+}
+
+# QOL prompt Phase A.7 - duplicate-value advisory (mirrors data_access.py's
+# own SERIAL_FIELD_BY_KIND). Only 2 of the 7 Electrical forms have a genuine
+# secondary serial-style field distinct from their own key field (every
+# other form's key field - trace tag/number, torque record #, cable tag #
+# - already IS the one identifying value, and is already hard-blocked for
+# duplicates by find_duplicate_row) - same "not every kind has one" shape
+# Instrumentation's own SERIAL_FIELD_BY_KIND already has (it only covers
+# transmitter/valve, its only 2 kinds, so "some kinds don't get this check"
+# is an established pattern, not a gap unique to Electrical).
+ELECTRICAL_SERIAL_FIELD_BY_KIND = {
+    "transformer_test": "serial_number",
+    "general_equip_install": "serial_number",
 }
 
 # Short, distinct prefixes for sheet names - the equipment types' own
@@ -389,6 +436,180 @@ def restore_backup(backup_path):
     shutil.copy2(backup_path, ELECTRICAL_WORKBOOK_PATH)
     invalidate_workbook_cache()
     return safety_snapshot
+
+
+# ---------------------------------------------------------------------------
+# QOL prompt Phase A.8 - Activity log. Direct mirror of data_access.py's
+# log_activity()/read_activity_log() (same entry shape, same append-only
+# .jsonl format, same never-raises-on-write-failure/never-crashes-on-a-
+# corrupt-line guarantees, same rotate-at-~5MB-keep-one-prior-generation
+# behavior) - own file (ELECTRICAL_ACTIVITY_LOG_PATH), scoped to Electrical
+# only, and "series" is "zone" here since that's this domain's own grouping
+# concept. Hooked at this module's own mutating choke points (save_row,
+# delete_rows, set_electrical_status/bulk_set_electrical_status) - never
+# per-widget - so every caller (ElectricalEditDialog, the Index page's
+# per-row Export checkbox) gets logged automatically.
+# ---------------------------------------------------------------------------
+ELECTRICAL_ACTIVITY_LOG_ROTATE_BYTES = 5 * 1024 * 1024  # ~5MB
+ELECTRICAL_ACTIVITY_LOG_FIELD_TRUNCATE = 200
+
+
+def _truncate_for_electrical_log(value):
+    text = "" if value is None else str(value)
+    return text if len(text) <= ELECTRICAL_ACTIVITY_LOG_FIELD_TRUNCATE \
+        else text[:ELECTRICAL_ACTIVITY_LOG_FIELD_TRUNCATE] + "…"
+
+
+def _rotate_electrical_activity_log_if_needed():
+    try:
+        if (ELECTRICAL_ACTIVITY_LOG_PATH.exists()
+                and ELECTRICAL_ACTIVITY_LOG_PATH.stat().st_size > ELECTRICAL_ACTIVITY_LOG_ROTATE_BYTES):
+            rotated = ELECTRICAL_ACTIVITY_LOG_PATH.with_name("electrical_activity_log.1.jsonl")
+            if rotated.exists():
+                rotated.unlink()  # keep exactly one prior generation
+            ELECTRICAL_ACTIVITY_LOG_PATH.rename(rotated)
+    except OSError as exc:
+        print(f"WARNING: electrical_activity_log.jsonl rotation failed (continuing without rotating): {exc}")
+
+
+def log_electrical_activity(action, zone=None, equip_key=None, row=None, key_value=None,
+                             fields=None, source="app", note=None, ts=None):
+    """Appends one event. fields: {field_id: {'old': ..., 'new': ...}} -
+    each value truncated to ELECTRICAL_ACTIVITY_LOG_FIELD_TRUNCATE chars.
+    Writing history NEVER raises - a disk-full/permissions failure here is
+    warned to console and swallowed; history must never block a save."""
+    entry = {
+        "ts": ts or datetime.datetime.now().isoformat(timespec="seconds"),
+        "action": action, "zone": zone, "equip_key": equip_key,
+        "row": row, "key_value": key_value,
+        "fields": {
+            fid: {"old": _truncate_for_electrical_log(diff.get("old")),
+                  "new": _truncate_for_electrical_log(diff.get("new"))}
+            for fid, diff in (fields or {}).items()
+        },
+        "source": source, "note": note,
+    }
+    try:
+        _rotate_electrical_activity_log_if_needed()
+        with open(ELECTRICAL_ACTIVITY_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError as exc:
+        print(f"WARNING: couldn't write to electrical_activity_log.jsonl (continuing without logging): {exc}")
+
+
+def read_electrical_activity_log(limit=None, zone=None, equip_key=None, row=None):
+    """Newest-first. Tolerates a corrupt/truncated line (skips it, never
+    crashes) and a missing file (returns [])."""
+    if not ELECTRICAL_ACTIVITY_LOG_PATH.exists():
+        return []
+    entries = []
+    try:
+        with open(ELECTRICAL_ACTIVITY_LOG_PATH, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if zone is not None and entry.get("zone") != zone:
+                    continue
+                if equip_key is not None and entry.get("equip_key") != equip_key:
+                    continue
+                if row is not None and entry.get("row") != row:
+                    continue
+                entries.append(entry)
+    except OSError:
+        return []
+    entries.reverse()
+    return entries[:limit] if limit is not None else entries
+
+
+# ---------------------------------------------------------------------------
+# QOL prompt Phase A.7 - duplicate-serial advisory. Mirrors data_access.py's
+# find_rows_with_duplicate_serial() - advisory only (never blocks a save),
+# scoped to whichever equip_key(s) ELECTRICAL_SERIAL_FIELD_BY_KIND actually
+# defines a secondary serial-style field for. Checks across every zone, the
+# same "duplicate anywhere in the whole tracker is worth a look" scope
+# find_rows_with_duplicate_serial() itself uses.
+# ---------------------------------------------------------------------------
+def find_rows_with_duplicate_serial(equip_key, serial_value, exclude_zone_row=None):
+    """Every {'zone', 'row', 'key_value'} across ALL registered zones whose
+    ELECTRICAL_SERIAL_FIELD_BY_KIND field matches serial_value (case/space-
+    insensitive). exclude_zone_row: (zone_name, row_num) of the row being
+    saved, so it never flags itself."""
+    field = ELECTRICAL_SERIAL_FIELD_BY_KIND.get(equip_key)
+    if not field:
+        return []
+    target = re.sub(r"\s+", "", str(serial_value or "")).casefold()
+    if not target:
+        return []
+
+    etype = ELECTRICAL_EQUIPMENT_TYPES[equip_key]
+    export_mod = etype["export_module"]
+    key_field = etype["key_field"]
+    matches = []
+    for zone_name in list_zones():
+        try:
+            sheet_name = get_sheet_name(zone_name, equip_key)
+        except KeyError:
+            continue
+        wb = _get_cached_workbook(data_only=False)
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        field_to_col = export_mod.load_column_map(ws)
+        serial_col = field_to_col.get(field)
+        key_col = field_to_col.get(key_field)
+        if not serial_col or not key_col:
+            continue
+        for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
+            if exclude_zone_row == (zone_name, r):
+                continue
+            raw_serial = export_mod.cell_to_str(ws.cell(row=r, column=serial_col).value)
+            if re.sub(r"\s+", "", raw_serial).casefold() != target:
+                continue
+            key_val = export_mod.cell_to_str(ws.cell(row=r, column=key_col).value)
+            if key_val:
+                matches.append({"zone": zone_name, "row": r, "key_value": key_val})
+    return matches
+
+
+# ---------------------------------------------------------------------------
+# QOL prompt Phase A.3/A.9 - per-page view state (sort/chip/column widths),
+# same shape as data_access.py's get_page_view_state()/set_page_view_state(),
+# own file (ELECTRICAL_UI_STATE_PATH), keyed by zone instead of series.
+# ---------------------------------------------------------------------------
+def _electrical_ui_state_page_key(zone_name, equip_key):
+    return f"{zone_name}:{equip_key}"
+
+
+def load_electrical_ui_state():
+    return read_json_with_recovery(ELECTRICAL_UI_STATE_PATH, dict)
+
+
+def save_electrical_ui_state(data):
+    write_json_atomic(ELECTRICAL_UI_STATE_PATH, data)
+
+
+def get_electrical_page_view_state(zone_name, equip_key):
+    """{} if this page has never saved any view state - callers apply
+    whatever keys are present and fall back to their own defaults for
+    whatever's missing, never crash on a partial or absent entry."""
+    state = load_electrical_ui_state()
+    return state.get(_electrical_ui_state_page_key(zone_name, equip_key), {})
+
+
+def set_electrical_page_view_state(zone_name, equip_key, **fields):
+    """Merges fields into this page's saved state and writes the whole
+    store back atomically."""
+    state = load_electrical_ui_state()
+    key = _electrical_ui_state_page_key(zone_name, equip_key)
+    page_state = dict(state.get(key, {}))
+    page_state.update(fields)
+    state[key] = page_state
+    save_electrical_ui_state(state)
 
 
 # ---------------------------------------------------------------------------
