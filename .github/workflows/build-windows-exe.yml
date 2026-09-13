@@ -116,13 +116,13 @@ jobs:
         shell: bash
         run: |
           set -e
-          git config user.name "sensei-exe-bot"
-          git config user.email "actions@users.noreply.github.com"
           rm -rf /tmp/exe-delivery
           mkdir -p /tmp/exe-delivery
           cp "dist/Sensei Index 2.95.exe" /tmp/exe-delivery/
           cd /tmp/exe-delivery
           git init -q
+          git config user.name "sensei-exe-bot"
+          git config user.email "actions@users.noreply.github.com"
           git checkout -q -b exe-delivery
           git add "Sensei Index 2.95.exe"
           git commit -q -m "Sensei Index 2.95.exe built from ${{ github.sha }}"
