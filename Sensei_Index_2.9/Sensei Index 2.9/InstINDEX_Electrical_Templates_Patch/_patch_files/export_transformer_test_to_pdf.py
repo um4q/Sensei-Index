@@ -44,12 +44,21 @@ SHEET_NAME = "Transformer Test Log"
 # text field (yanda_rep_signature) - see fill_pdf() below for why that
 # field's own typed value is skipped whenever the stamp is applied, so the
 # two never render on top of each other.
+#
+# REVISION 6 fix: this cell's own real row height is only 11.5pt
+# (SIGNOFF_SIGNATURE_Y in transformer_test_field_positions.py, converted
+# to PDF points) - the shared default size (87 wide, ~17.1 tall) used on
+# every other form's own signature cell is TALLER than this specific row,
+# so the stamp was bleeding out both above (into the Date row) and below
+# (past the table's own bottom border, into the page margin) - exactly
+# what the reported screenshot showed. Sized down here, specifically for
+# this form's own real cell, to comfortably fit inside that 11.5pt row.
 SIGNATURE_IMAGE = HERE / "assets" / "yanda_qa_signature_transparent.png"
 SIGNATURE_PAGE_INDEX = 0
-SIGNATURE_X = 92
-SIGNATURE_Y = 106
-SIGNATURE_W = 87
-SIGNATURE_H = 87 * (90 / 458)  # preserve the source image's aspect ratio
+SIGNATURE_X = 93
+SIGNATURE_Y = 108.7
+SIGNATURE_W = 51
+SIGNATURE_H = 51 * (90 / 458)  # preserve the source image's aspect ratio
 
 
 def sanitize(text, fallback):
