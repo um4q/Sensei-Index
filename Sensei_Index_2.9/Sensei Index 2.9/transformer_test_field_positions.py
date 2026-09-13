@@ -85,13 +85,52 @@ DPI = 300
 # real fields, not baked.
 PROJECT_X = (350.0, 1081.0)
 LOCATION_X = (1260.0, 1960.0)
-CONTRACT_NO_X = (2105.0, 2367.5)
+# x0 measured directly off a 4x zoomed gridline crop: "Contract #:"'s own
+# colon ends at x=2100, the handwritten value's "C" begins at x=2103 - a
+# genuinely tight 3px gap on this sample, not a wide label-inset margin
+# like every other field on this form gets (an earlier attempt at x0=2133,
+# reasoned from a coarser per-row scan that mistook parts of the
+# overlapping value for label, missed the value's own left edge entirely).
+# y1 widened past PART1_ROW_Y's own row line (589.5) because this field's
+# handwritten value has a descender that dips to y=600 - well short of
+# where "PART 2 - Transformer Nameplate Data" header text starts (y=648),
+# so this is still safe.
+CONTRACT_NO_X = (2101.0, 2367.5)
+CONTRACT_NO_Y = (527.0, 610.0)
 PART1_ROW_Y = (527.0, 589.5)
 
 # ------------------------------------------------- PART 2 - Nameplate Data
-TAG_X = (260.0, 907.0)
-TRANSFORMER_TYPE_DRY_X = (1256.0, 1310.0)
-TRANSFORMER_TYPE_WET_X = (1355.0, 1415.0)
+# REVISION 4 (rectangle-whiteout label-safety fix): switching the actual
+# background image from ink-color whiteout back to clean rectangle
+# whiteout (see build_transformer_test_template.py's own REVISION 4 note)
+# exposed that several of these rects, though fine as mere AcroForm-field
+# placements, actually overlapped their own printed label once used to
+# draw a real white rectangle - confirmed by direct pixel measurement
+# against the clean source render, not visual guessing. tag/
+# transformer_type_dry/transformer_type_wet/rating_kva/temperature_rise
+# below are corrected; everything else in this file was verified clean at
+# rectangle-whiteout precision and left as-is.
+TAG_X = (285.0, 907.0)  # was 260.0 - overlapped "Tag:"
+# transformer_type_dry/wet: previously sat ON the "Dry"/"Wet" WORDS
+# themselves, not the checkbox glyph before each word - harmless for an
+# invisible AcroForm field, but fatal once whited as a rectangle (it erased
+# "Dry"/"Wet" outright). The checkbox glyph's own printed border is also too
+# thin/small to reliably survive whiteout-then-ink-cleanup at this box's
+# ~40x43px size (the checkmark ink inside touches the border on a hand-
+# filled sample), so build_transformer_test_template.py's own background
+# rebuild step whites out the FULL glyph (TRANSFORMER_TYPE_*_GLYPH_BOX
+# below) and draws a fresh, clean border back in - see that script's own
+# docstring. These two X-tuples are the field's own INTERIOR only (inside
+# the fresh border), so typed input never renders on top of it.
+TRANSFORMER_TYPE_DRY_X = (1231.0, 1264.0)
+TRANSFORMER_TYPE_WET_X = (1361.0, 1394.0)
+TRANSFORMER_TYPE_CHECKBOX_Y = (655.0, 690.0)  # narrower than ROW_TAG_Y - just the glyph's own interior
+# Full outer glyph bounds (border included), measured by pixel-scanning the
+# clean source render for each box's own horizontal top/bottom border runs -
+# used only by the background-rebuild script to whiteout+redraw the glyph,
+# never for AcroForm field placement (see TRANSFORMER_TYPE_*_X above for that).
+TRANSFORMER_TYPE_DRY_GLYPH_BOX = (1227.0, 651.0, 1268.0, 694.0)
+TRANSFORMER_TYPE_WET_GLYPH_BOX = (1357.0, 651.0, 1398.0, 694.0)
 SYSTEM_X = (2130.0, 2368.0)
 ROW_TAG_Y = (649.5, 708.5)
 
@@ -107,8 +146,8 @@ ROW_VOLTAGE_Y = (767.5, 827.0)
 
 PRIMARY_FLA_X = (450.0, 721.0)
 SECONDARY_FLA_X = (1010.0, 1271.5)
-RATING_KVA_X = (1560.0, 1819.0)
-TEMPERATURE_RISE_X = (2130.0, 2369.0)
+RATING_KVA_X = (1568.0, 1819.0)  # was 1560.0 - clipped "(KVA):"
+TEMPERATURE_RISE_X = (2142.0, 2369.0)  # was 2130.0 - clipped "Rise:"
 ROW_FLA_Y = (827.0, 886.5)
 
 PRIMARY_CONNECTION_X = (610.0, 1272.0)
@@ -122,8 +161,8 @@ ROW_TAP_Y = (945.5, 1005.5)
 
 NAMEPLATE_FIELDS = [
     ("tag", TAG_X, ROW_TAG_Y),
-    ("transformer_type_dry", TRANSFORMER_TYPE_DRY_X, ROW_TAG_Y),
-    ("transformer_type_wet", TRANSFORMER_TYPE_WET_X, ROW_TAG_Y),
+    ("transformer_type_dry", TRANSFORMER_TYPE_DRY_X, TRANSFORMER_TYPE_CHECKBOX_Y),
+    ("transformer_type_wet", TRANSFORMER_TYPE_WET_X, TRANSFORMER_TYPE_CHECKBOX_Y),
     ("system", SYSTEM_X, ROW_TAG_Y),
     ("make", MAKE_X, ROW_MAKE_Y),
     ("model", MODEL_X, ROW_MAKE_Y),
@@ -212,17 +251,15 @@ REMARKS_BOX = ("remarks", (185.0, 2377.0), (2441.0, 2566.5))
 EXTRA_CLEANUP_PATCHES = []
 
 # This form's pen for Project/Location/Contract#/Serial Number happens to
-# be near-black (not the blue ink used everywhere else on this page) -
-# see REVISION 3 above. Measured empirically (iteratively widened until
-# no handwriting fragment remained, narrowed until no label glyph was
-# clipped) rather than off a single label-end reading, since the
-# automatic ink-color pass can't help with these four.
-MANUAL_BLACK_INK_PATCHES = [
-    (350.0, 527.0, 1081.0, 589.5),     # project
-    (1260.0, 527.0, 1960.0, 589.5),    # location
-    (2105.0, 527.0, 2367.5, 589.5),    # contract_no
-    (1900.0, 708.5, 2368.5, 767.5),    # serial_number
-]
+# be near-black (not the blue ink used everywhere else on this page). Under
+# REVISION 3 (page-wide ink-COLOR whiteout) this mattered a lot - color
+# detection can't tell black ink from black print, so these four needed a
+# hand-measured rectangle patch applied on top. REVISION 4 (back to
+# rectangle whiteout for every field, see build_transformer_test_template.py)
+# whites out every field's own rect uniformly regardless of ink color, so
+# these four are no longer special-cased - MANUAL_BLACK_INK_PATCHES is
+# retired (removed, not left as dead code) and all_fields() below is the
+# only source of truth for what gets whited.
 
 # ------------------------------------------------------------------- PART 7 Sign-off
 # "Name:"/"Date:"/"Signature:" labels are printed on each line, to the
@@ -248,7 +285,7 @@ SIGNOFF_FIELDS = [
 def all_fields():
     yield ("project", PROJECT_X[0], PART1_ROW_Y[0], PROJECT_X[1], PART1_ROW_Y[1])
     yield ("location", LOCATION_X[0], PART1_ROW_Y[0], LOCATION_X[1], PART1_ROW_Y[1])
-    yield ("contract_no", CONTRACT_NO_X[0], PART1_ROW_Y[0], CONTRACT_NO_X[1], PART1_ROW_Y[1])
+    yield ("contract_no", CONTRACT_NO_X[0], CONTRACT_NO_Y[0], CONTRACT_NO_X[1], CONTRACT_NO_Y[1])
     for fid, (x0, x1), (y0, y1) in NAMEPLATE_FIELDS:
         yield fid, x0, y0, x1, y1
     for fid, (x0, x1), (y0, y1) in TEST_EQUIP_FIELDS:

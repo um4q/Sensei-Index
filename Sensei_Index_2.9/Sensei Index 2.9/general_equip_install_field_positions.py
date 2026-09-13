@@ -52,13 +52,24 @@ LOCATION_X = (2005.0, 2430.0)
 LOCATION_Y = (432.0, 495.0)
 
 ROW_TAG_Y = (505.0, 560.0)
-TAG_NUMBER_X = (355.0, 690.0)
+# REVISION 2 (rectangle-whiteout width fix): tag_number/serial_number were
+# both measured far too narrow - a direct pixel/gridline check against the
+# clean source showed the real sample's handwritten values ("29152-
+# DCSFFJB-001", "5478101") both run right up to their column's own
+# vertical divider, not stopping ~300px short of it the way the original
+# rects did. Rectangle whiteout (unlike the old page-wide ink-color pass)
+# only ever clears what its own rect covers, so a too-narrow rect here
+# left the value's own tail end fully visible on the built template -
+# found by direct visual audit, not by the original halo-check pass
+# (which evidently never caught this one). Widened to each column's real
+# divider position (~995 / ~610), measured off a gridline crop.
+TAG_NUMBER_X = (355.0, 850.0)
 MANUFACTURER_X = (1130.0, 1400.0)
 MODEL_NUMBER_X = (1610.0, 1900.0)
 SYSTEM_NUMBER_X = (2160.0, 2500.0)
 
 ROW_SERIAL_Y = (562.0, 618.0)
-SERIAL_NUMBER_X = (270.0, 445.0)
+SERIAL_NUMBER_X = (270.0, 610.0)
 VOLTAGE_X = (595.0, 745.0)
 FREQ_X = (810.0, 995.0)
 PHASE_X = (1090.0, 1195.0)
