@@ -497,7 +497,7 @@ def test_main_window_add_zone_flow_and_sidebar_tree(qtbot, isolated_app_dir, mon
     assert win.tree.topLevelItemCount() == 2
     zone_item = win.tree.topLevelItem(1)
     assert zone_item.text(0) == "K1B Well Pad"
-    assert zone_item.childCount() == 6  # eht_removal + eht_rtd + eht_pre_insulation + torqueing + transformer_test + small_power_cable
+    assert zone_item.childCount() == 7  # eht_removal + eht_rtd + eht_pre_insulation + torqueing + transformer_test + small_power_cable + general_equip_install
 
 
 # ------------------------------------------------------- QOL prompt Phase A.10
@@ -1059,3 +1059,40 @@ def test_electrical_index_page_lists_saved_small_power_cable_rows(qtbot, isolate
     qtbot.addWidget(page)
     assert page.table.rowCount() == 1
     assert page.table.item(0, 0).text() == "29152-XY-0203"  # summary_fields[0] = cable_tag_number
+
+
+# --------------------------------------------------------------------------
+# General Electrical Equipment Installation & Test Report (YCQE-E&I-013
+# Rev.0) - the seventh Electrical form. Light smoke test only - see the
+# transformer_test equivalent above for why.
+
+def test_electrical_dashboard_shows_general_equip_install_totals(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {"tag_number": "29152-DCSFFJB-001"})
+
+    page = gui_app.ElectricalDashboardPage(fake_main_window)
+    qtbot.addWidget(page)
+
+    totals_by_title = {}
+    for card in page.findChildren(gui_app.StatCard):
+        title_label = next(w for w in card.findChildren(gui_app.QLabel) if w.objectName() == "StatLabel")
+        number_label = card.findChild(gui_app.QLabel, "StatNumber")
+        totals_by_title[title_label.text()] = number_label.text()
+
+    assert totals_by_title["General Electrical Equipment Installation & Test"] == "1"
+
+
+def test_electrical_index_page_lists_saved_general_equip_install_rows(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {
+        "tag_number": "29152-DCSFFJB-001", "manufacturer": "Hammond",
+    })
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "general_equip_install")
+    qtbot.addWidget(page)
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "29152-DCSFFJB-001"  # summary_fields[0] = tag_number

@@ -273,12 +273,13 @@ def test_count_all_by_type_and_zone_summary(isolated_app_dir):
 
     assert eda.count_all_by_type() == {
         "eht_removal": 1, "eht_rtd": 0, "eht_pre_insulation": 0, "torqueing": 0,
-        "transformer_test": 0, "small_power_cable": 0,
+        "transformer_test": 0, "small_power_cable": 0, "general_equip_install": 0,
     }
     assert eda.zone_summary("K1B Well Pad") == {
         "eht_removal": {"total": 1}, "eht_rtd": {"total": 0},
         "eht_pre_insulation": {"total": 0}, "torqueing": {"total": 0},
         "transformer_test": {"total": 0}, "small_power_cable": {"total": 0},
+        "general_equip_install": {"total": 0},
     }
 
 
@@ -705,6 +706,7 @@ def test_zone_summary_zero_fills_every_registry_key_same_as_count_all_by_type(is
         "eht_removal": {"total": 0}, "eht_rtd": {"total": 0},
         "eht_pre_insulation": {"total": 0}, "torqueing": {"total": 0},
         "transformer_test": {"total": 0}, "small_power_cable": {"total": 0},
+        "general_equip_install": {"total": 0},
     }
 
 
@@ -1572,3 +1574,212 @@ def test_small_power_cable_template_has_no_baked_in_sample_data():
     non_blank = {k: v.get("/V") for k, v in fields.items()
                  if v.get("/V") and str(v.get("/V")).strip() not in ("", " ", "  ")}
     assert non_blank == {}
+
+
+# ===========================================================================
+# General Electrical Equipment Installation & Test Report (YCQE-E&I-013
+# Rev.0) - the Electrical side's seventh form, and the third and most
+# complex of three new forms from the user's second uploaded scan bundle
+# (spcc_itrs.pdf). Same "no original fillable PDF, only a hand-filled
+# scan" situation as every other from-scratch Electrical form - see
+# general_equip_install_field_positions.py's own docstring for the build
+# methodology and the several measurement corrections it took to get
+# right (a misjudged header-row boundary erased "YES INITIAL" outright on
+# a first pass, caught by a quantitative dark-pixel check, not by eye).
+# ===========================================================================
+
+def test_add_zone_creates_general_equip_install_sheet(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    entry = eda.add_zone("K1B Well Pad")
+    assert "general_equip_install_sheet" in entry
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry["general_equip_install_sheet"] in wb.sheetnames
+
+
+def test_add_zone_general_equip_install_header_row_matches_schema_labels(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    import general_equip_install_schema
+    entry = eda.add_zone("K1B Well Pad")
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    ws = wb[entry["general_equip_install_sheet"]]
+    header = [ws.cell(row=3, column=c).value for c in range(1, len(general_equip_install_schema.LOG_COLUMNS) + 1)]
+    assert header == [f["label"] for f in general_equip_install_schema.LOG_COLUMNS]
+
+
+def test_general_equip_install_save_and_read_row_round_trips(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {
+        "tag_number": "29152-DCSFFJB-001", "manufacturer": "Hammond",
+        "model_number": "PS242010RL", "task_1_yes": "HB",
+        "torqueing_row_1_cond_id": "System bond",
+    })
+    full = eda.read_full_row("K1B Well Pad", "general_equip_install", row)
+    assert full["tag_number"] == "29152-DCSFFJB-001"
+    assert full["manufacturer"] == "Hammond"
+    assert full["model_number"] == "PS242010RL"
+    assert full["task_1_yes"] == "HB"
+    assert full["torqueing_row_1_cond_id"] == "System bond"
+    assert full["task_2_yes"] == ""  # untouched field stays blank
+
+
+def test_general_equip_install_read_index_rows_only_shows_rows_with_key_filled(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {"manufacturer": "Hammond"})  # no tag
+    assert eda.read_index_rows("K1B Well Pad", "general_equip_install") == []
+
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {"tag_number": "29152-DCSFFJB-001"})
+    rows = eda.read_index_rows("K1B Well Pad", "general_equip_install")
+    assert len(rows) == 1
+    assert rows[0]["tag_number"] == "29152-DCSFFJB-001"
+
+
+def test_generate_preview_pdf_general_equip_install_fills_real_fields(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {
+        "tag_number": "29152-DCSFFJB-001", "manufacturer": "Hammond",
+        "location": "K1B Well Pad",
+        "task_1_yes": "HB", "task_9_na": "NA",
+        "torqueing_row_1_cond_id": "System bond",
+        "torqueing_row_1_torque_marked": "X",
+        "equipment_resistance_testing_notes": "line1\nline2",
+        "comments": "test comments",
+        "yanda_rep_signature": "J. Doe",
+    })
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "general_equip_install", row)
+    assert out_path.exists()
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["tag_number"].get("/V") == "29152-DCSFFJB-001"
+    assert fields["manufacturer"].get("/V") == "Hammond"
+    assert fields["location"].get("/V") == "K1B Well Pad"
+    assert fields["task_1_yes"].get("/V") == "HB"
+    assert fields["task_9_na"].get("/V") == "NA"
+    assert fields["torqueing_row_1_cond_id"].get("/V") == "System bond"
+    assert fields["torqueing_row_1_torque_marked"].get("/V") == "X"
+    assert fields["equipment_resistance_testing_notes"].get("/V") == "line1\nline2"
+    assert fields["comments"].get("/V") == "test comments"
+    # yanda_rep_signature's own typed value is superseded by the automatic
+    # signature image stamp (generate_preview_pdf() always stamps by
+    # default) - see the dedicated stamp tests below.
+    assert fields["yanda_rep_signature"].get("/V") in (None, "")
+
+
+def test_generate_preview_pdf_general_equip_install_stamps_yanda_signature_by_default(isolated_app_dir):
+    """Same XObject-diff signal as every other from-scratch form's own
+    equivalent test."""
+    from export_general_equip_install_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {"tag_number": "29152-DCSFFJB-001"})
+
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "general_equip_install", row)
+    with_stamp_keys = _xobject_keys(out_path)
+
+    baseline_path = eda.ELECTRICAL_TEMP_DIR / "ge_xobject_baseline_no_stamp.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"tag_number": "29152-DCSFFJB-001"}, baseline_path, add_signature=False)
+    baseline_keys = _xobject_keys(baseline_path)
+
+    assert with_stamp_keys > baseline_keys
+    assert len(with_stamp_keys) == len(baseline_keys) + 1
+
+
+def test_general_equip_install_yanda_rep_signature_typed_value_still_fills_when_stamp_is_off(isolated_app_dir):
+    from export_general_equip_install_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {
+        "tag_number": "29152-DCSFFJB-001", "yanda_rep_signature": "J. Doe",
+    })
+    full = eda.read_full_row("K1B Well Pad", "general_equip_install", row)
+    out_path = eda.ELECTRICAL_TEMP_DIR / "ge_no_stamp_typed_value_check.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"yanda_rep_signature": full["yanda_rep_signature"]}, out_path, add_signature=False)
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["yanda_rep_signature"].get("/V") == "J. Doe"
+
+
+def test_run_export_general_equip_install_respects_include_signature_toggle(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    eda.save_row("K1B Well Pad", "general_equip_install", row, {"tag_number": "29152-DCSFFJB-001"})
+
+    written_with = eda.run_export("K1B Well Pad", "general_equip_install", mode="all", include_signature=True)
+    written_without = eda.run_export("K1B Well Pad", "general_equip_install", mode="all",
+                                       include_signature=False, suffix="nosig")
+
+    with_keys = _xobject_keys(written_with[0])
+    without_keys = _xobject_keys(written_without[0])
+    assert with_keys > without_keys
+    assert len(with_keys) == len(without_keys) + 1
+
+
+def test_general_equip_install_field_mapping_fidelity_against_its_own_template():
+    """Same check as every other from-scratch form's own equivalent:
+    every schema field has a FIELD_MAP entry, every FIELD_MAP value is a
+    real field on the built template, and every real template field is
+    actually used."""
+    import general_equip_install_schema as schema
+    import general_equip_install_field_map as fm
+    from export_general_equip_install_to_pdf import DEFAULT_TEMPLATE
+
+    for field in schema.LOG_COLUMNS:
+        assert field["id"] in fm.FIELD_MAP, f"{field['id']} has no FIELD_MAP entry"
+
+    template_fields = set(PdfReader(str(DEFAULT_TEMPLATE)).get_fields().keys())
+    for schema_id, pdf_field in fm.FIELD_MAP.items():
+        assert pdf_field in template_fields, (
+            f"FIELD_MAP['{schema_id}'] = '{pdf_field}' is not a real field on "
+            f"{DEFAULT_TEMPLATE.name}"
+        )
+    mapped = set(fm.FIELD_MAP.values())
+    assert template_fields == mapped, (
+        f"unused template fields: {template_fields - mapped}, "
+        f"or FIELD_MAP entries with no matching template field: {mapped - template_fields}"
+    )
+
+
+def test_general_equip_install_sheet_name_also_respects_the_31_char_limit(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    long_name = "A Very Long Zone Name That Would Blow Past The Excel Sheet Name Limit"
+    entry = eda.add_zone(long_name)
+    assert len(entry["general_equip_install_sheet"]) <= 31
+
+
+def test_general_equip_install_template_has_no_baked_in_sample_data():
+    """This template was built from a HAND-FILLED scan (see
+    general_equip_install_field_positions.py) - every field must come
+    back blank on the checked-in template, or every export would start
+    from someone else's real equipment data."""
+    from export_general_equip_install_to_pdf import DEFAULT_TEMPLATE
+    fields = PdfReader(str(DEFAULT_TEMPLATE)).get_fields()
+    non_blank = {k: v.get("/V") for k, v in fields.items()
+                 if v.get("/V") and str(v.get("/V")).strip() not in ("", " ", "  ")}
+    assert non_blank == {}
+
+
+def test_general_equip_install_torqueing_log_fields_all_present_and_flattened(isolated_app_dir):
+    """The 5-row x 8-column Torqueing Log sub-table is flattened into
+    numbered fields (torqueing_row_N_<col>) - a regression here (e.g. a
+    typo dropping a row) would silently lose data for whichever column
+    it hit. Confirms all 40 are wired end-to-end."""
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "general_equip_install")
+    values = {"tag_number": "29152-DCSFFJB-001"}
+    for r in range(1, 6):
+        values[f"torqueing_row_{r}_cond_id"] = f"cond-{r}"
+        values[f"torqueing_row_{r}_date"] = f"2026-09-{r:02d}"
+    eda.save_row("K1B Well Pad", "general_equip_install", row, values)
+    full = eda.read_full_row("K1B Well Pad", "general_equip_install", row)
+    for r in range(1, 6):
+        assert full[f"torqueing_row_{r}_cond_id"] == f"cond-{r}"
+        assert full[f"torqueing_row_{r}_date"] == f"2026-09-{r:02d}"

@@ -49,12 +49,14 @@ import eht_pre_insulation_schema
 import torqueing_schema
 import transformer_test_schema
 import small_power_cable_schema
+import general_equip_install_schema
 import export_eht_removal_to_pdf
 import export_eht_rtd_to_pdf
 import export_eht_pre_insulation_to_pdf
 import export_torqueing_to_pdf
 import export_transformer_test_to_pdf
 import export_small_power_cable_to_pdf
+import export_general_equip_install_to_pdf
 
 ELECTRICAL_WORKBOOK_PATH = HERE / "Electrical_Inspection_Tracker.xlsx"
 ELECTRICAL_CONFIG_PATH = HERE / "electrical_registry.json"
@@ -139,6 +141,15 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "summary_labels": ["Cable Tag Number", "Cable Type", "Location"],
         "supports_signature_stamp": True,
     },
+    "general_equip_install": {
+        "label": "General Electrical Equipment Installation & Test",
+        "schema": general_equip_install_schema,
+        "export_module": export_general_equip_install_to_pdf,
+        "key_field": "tag_number",
+        "summary_fields": ["tag_number", "manufacturer", "location"],
+        "summary_labels": ["Tag #", "Manufacturer", "Location"],
+        "supports_signature_stamp": True,
+    },
 }
 
 # Short, distinct prefixes for sheet names - the equipment types' own
@@ -151,6 +162,7 @@ SHEET_NAME_PREFIXES = {
     "torqueing": "Torqueing",
     "transformer_test": "Transformer Test",
     "small_power_cable": "Small Power Cable",
+    "general_equip_install": "General Equip Install",
 }
 
 
