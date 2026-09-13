@@ -36,19 +36,18 @@ SHEET_NAME = "Transformer Test Log"
 # Same Yanda QA Representative signature stamp export_to_pdf.py/
 # export_valve_to_pdf.py/export_torqueing_to_pdf.py already use - reused
 # directly (a shared static asset, not domain-specific data). Placed on
-# this form's own "Yanda QA Representative - Signature" cell (the real,
-# individually-measured sign-off rect from
-# transformer_test_field_positions.py's SIGNOFF_YANDA_VALUE_X x
-# SIGNOFF_SIGNATURE_Y, converted to PDF points the same way
-# build_transformer_test_template.py converts every other field's rect:
-# px/SCALE, inset by PAD_PT). This cell already has its own real fillable
+# this form's own "Yanda QA Representative - Signature" cell - real PDF
+# coordinates now (this form's REVISION 5 rebuild reads field rects
+# directly off the real source PDF, in true PDF point space - see
+# transformer_test_field_positions.py's own docstring - no px/DPI
+# conversion of any kind). This cell already has its own real fillable
 # text field (yanda_rep_signature) - see fill_pdf() below for why that
 # field's own typed value is skipped whenever the stamp is applied, so the
 # two never render on top of each other.
 SIGNATURE_IMAGE = HERE / "assets" / "yanda_qa_signature_transparent.png"
 SIGNATURE_PAGE_INDEX = 0
-SIGNATURE_X = 95
-SIGNATURE_Y = 94
+SIGNATURE_X = 92
+SIGNATURE_Y = 106
 SIGNATURE_W = 87
 SIGNATURE_H = 87 * (90 / 458)  # preserve the source image's aspect ratio
 
