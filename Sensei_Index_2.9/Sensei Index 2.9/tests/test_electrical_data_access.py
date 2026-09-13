@@ -1396,13 +1396,14 @@ def test_transformer_test_template_has_no_baked_in_sample_data():
 
 # ===========================================================================
 # Small Power and Control Cable Inspection & Test Record (YCQE-E&I-113
-# Rev.0) - the Electrical side's sixth form, and the second of three new
-# forms from the user's second uploaded scan bundle (spcc_itrs.pdf). Same
-# "no original fillable PDF, only hand-filled scans" situation as
-# eht_pre_insulation/transformer_test - see
-# small_power_cable_field_positions.py's own docstring for the build
-# methodology (rectangle whiteout, not ink-color - this form's pen is
-# black, not blue).
+# Rev.0) - the Electrical side's sixth form. REVISION 2: built directly
+# from the user's own real, official source PDF (assets/
+# small_power_cable_source.pdf) - see build_small_power_cable_template.py's
+# own docstring. That real PDF already has its own correctly-positioned
+# AcroForm fields, so there's no whiteout/reconstruction involved at all -
+# no signature-stamp mechanism either (no digital signature field exists on
+# the real PDF - hand-signed only, same as eht_removal/eht_rtd's own tests
+# not having any signature-stamp tests either).
 # ===========================================================================
 
 def test_add_zone_creates_small_power_cable_sheet(isolated_app_dir):
@@ -1459,10 +1460,10 @@ def test_generate_preview_pdf_small_power_cable_fills_real_fields(isolated_app_d
     eda.save_row("K1B Well Pad", "small_power_cable", row, {
         "cable_tag_number": "29152-XY-0203", "cable_type": "Field bus type A",
         "location": "Drain Tank 29152",
-        "insulation_conductor_to_conductor": "NA",
-        "continuity_conductor_to_conductor": "1.0",
-        "remarks": "line1\nline2",
-        "yanda_rep_signature": "J. Doe",
+        "insulation_cond_to_cond": "NA",
+        "continuity_cond_to_cond": "1.0",
+        "remarks_line1": "line1", "remarks_line2": "line2",
+        "yanda_rep_name": "J. Doe",
     })
     out_path = eda.generate_preview_pdf("K1B Well Pad", "small_power_cable", row)
     assert out_path.exists()
@@ -1470,66 +1471,15 @@ def test_generate_preview_pdf_small_power_cable_fills_real_fields(isolated_app_d
     fields = PdfReader(str(out_path)).get_fields()
     assert fields["cable_tag_number"].get("/V") == "29152-XY-0203"
     assert fields["cable_type"].get("/V") == "Field bus type A"
-    assert fields["location"].get("/V") == "Drain Tank 29152"
-    assert fields["insulation_conductor_to_conductor"].get("/V") == "NA"
-    assert fields["continuity_conductor_to_conductor"].get("/V") == "1.0"
-    assert fields["remarks"].get("/V") == "line1\nline2"
-    # yanda_rep_signature's own typed value is superseded by the automatic
-    # signature image stamp (generate_preview_pdf() always stamps by
-    # default) - see the dedicated stamp tests below.
-    assert fields["yanda_rep_signature"].get("/V") in (None, "")
-
-
-def test_generate_preview_pdf_small_power_cable_stamps_yanda_signature_by_default(isolated_app_dir):
-    """Same XObject-diff signal as eht_pre_insulation/transformer_test's
-    own equivalent tests."""
-    from export_small_power_cable_to_pdf import fill_pdf, DEFAULT_TEMPLATE
-    tmp_path, da = isolated_app_dir
-    eda.add_zone("K1B Well Pad")
-    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
-    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_tag_number": "29152-XY-0203"})
-
-    out_path = eda.generate_preview_pdf("K1B Well Pad", "small_power_cable", row)
-    with_stamp_keys = _xobject_keys(out_path)
-
-    baseline_path = eda.ELECTRICAL_TEMP_DIR / "cable_xobject_baseline_no_stamp.pdf"
-    fill_pdf(DEFAULT_TEMPLATE, {"cable_tag_number": "29152-XY-0203"}, baseline_path, add_signature=False)
-    baseline_keys = _xobject_keys(baseline_path)
-
-    assert with_stamp_keys > baseline_keys
-    assert len(with_stamp_keys) == len(baseline_keys) + 1
-
-
-def test_small_power_cable_yanda_rep_signature_typed_value_still_fills_when_stamp_is_off(isolated_app_dir):
-    from export_small_power_cable_to_pdf import fill_pdf, DEFAULT_TEMPLATE
-    tmp_path, da = isolated_app_dir
-    eda.add_zone("K1B Well Pad")
-    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
-    eda.save_row("K1B Well Pad", "small_power_cable", row, {
-        "cable_tag_number": "29152-XY-0203", "yanda_rep_signature": "J. Doe",
-    })
-    full = eda.read_full_row("K1B Well Pad", "small_power_cable", row)
-    out_path = eda.ELECTRICAL_TEMP_DIR / "cable_no_stamp_typed_value_check.pdf"
-    fill_pdf(DEFAULT_TEMPLATE, {"yanda_rep_signature": full["yanda_rep_signature"]}, out_path, add_signature=False)
-
-    fields = PdfReader(str(out_path)).get_fields()
-    assert fields["yanda_rep_signature"].get("/V") == "J. Doe"
-
-
-def test_run_export_small_power_cable_respects_include_signature_toggle(isolated_app_dir):
-    tmp_path, da = isolated_app_dir
-    eda.add_zone("K1B Well Pad")
-    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
-    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_tag_number": "29152-XY-0203"})
-
-    written_with = eda.run_export("K1B Well Pad", "small_power_cable", mode="all", include_signature=True)
-    written_without = eda.run_export("K1B Well Pad", "small_power_cable", mode="all",
-                                       include_signature=False, suffix="nosig")
-
-    with_keys = _xobject_keys(written_with[0])
-    without_keys = _xobject_keys(written_without[0])
-    assert with_keys > without_keys
-    assert len(with_keys) == len(without_keys) + 1
+    assert fields["Location"].get("/V") == "Drain Tank 29152"
+    assert fields["insulation_cond_to_cond"].get("/V") == "NA"
+    assert fields["continuity_cond_to_cond"].get("/V") == "1.0"
+    assert fields["remarks_line1"].get("/V") == "line1"
+    assert fields["remarks_line2"].get("/V") == "line2"
+    assert fields["yanda_rep_name"].get("/V") == "J. Doe"
+    # no signature field exists on this form at all (hand-signed only) -
+    # see build_small_power_cable_template.py's own docstring.
+    assert "yanda_rep_signature" not in fields
 
 
 def test_small_power_cable_field_mapping_fidelity_against_its_own_template():
@@ -1551,10 +1501,11 @@ def test_small_power_cable_field_mapping_fidelity_against_its_own_template():
             f"{DEFAULT_TEMPLATE.name}"
         )
     mapped = set(fm.FIELD_MAP.values())
-    assert template_fields == mapped, (
-        f"unused template fields: {template_fields - mapped}, "
-        f"or FIELD_MAP entries with no matching template field: {mapped - template_fields}"
-    )
+    # Project/Job No are real template fields with no schema field/FIELD_MAP
+    # entry at all - deliberately not modeled (this engagement's own
+    # constant values, see build_small_power_cable_template.py's docstring).
+    unmapped = template_fields - mapped
+    assert unmapped == {"Project", "Job No"}, f"unexpectedly unused template fields: {unmapped}"
 
 
 def test_small_power_cable_sheet_name_also_respects_the_31_char_limit(isolated_app_dir):
@@ -1565,15 +1516,20 @@ def test_small_power_cable_sheet_name_also_respects_the_31_char_limit(isolated_a
 
 
 def test_small_power_cable_template_has_no_baked_in_sample_data():
-    """This template was built from hand-filled scans (see
-    small_power_cable_field_positions.py) - every field must come back
-    blank on the checked-in template, or every export would start from
-    someone else's real cable data."""
+    """Every genuinely per-row field must come back blank on the checked-in
+    template, or every export would start from someone else's real cable
+    data. Project and Job No are the one deliberate exception - real
+    AcroForm fields on the source PDF, but not modeled as schema fields at
+    all (this engagement's own constant values, same "not a field, baked
+    in" precedent every other Electrical form already sets for its own
+    Customer/Project/Contract# header) - see
+    build_small_power_cable_template.py's own docstring for why those two
+    correctly stay pre-filled forever."""
     from export_small_power_cable_to_pdf import DEFAULT_TEMPLATE
     fields = PdfReader(str(DEFAULT_TEMPLATE)).get_fields()
     non_blank = {k: v.get("/V") for k, v in fields.items()
                  if v.get("/V") and str(v.get("/V")).strip() not in ("", " ", "  ")}
-    assert non_blank == {}
+    assert non_blank == {"Project": "K1B Well Pad Project", "Job No": "CA23007"}
 
 
 # ===========================================================================

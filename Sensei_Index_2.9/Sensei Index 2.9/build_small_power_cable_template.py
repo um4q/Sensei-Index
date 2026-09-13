@@ -3,26 +3,28 @@
 """
 One-time generator for
 Small_Power_and_Control_Cable_Inspection_and_Test_Record_TEMPLATE.pdf
-(YCQE-E&I-113 Rev.0) - the Electrical side's sixth form, and the second
-of three new forms from the user's second uploaded scan bundle
-(spcc_itrs.pdf - see transformer_test's own build script for the first).
+(YCQE-EI-113 Rev.0) - the Electrical side's sixth form.
 
-Same "real scanned page as the background image" approach as
-build_transformer_test_template.py (see that module's own docstring for
-why - exact design/font/border fidelity, at the user's explicit request).
-One real difference from transformer_test: this form's handwriting is
-black/near-neutral ink (confirmed by direct RGB sampling - R≈G≈B on
-every sample checked), not blue, so the ink-color whiteout technique
-transformer_test uses doesn't apply here - every field's whiteout is a
-directly-measured rectangle instead (see
-small_power_cable_field_positions.py for the measurement notes,
-including this scan's own ~1.4 degree rotation, which threw off an early
-measurement pass and is worth reading before touching this template
-again).
+REVISION 2: this form is now built from the user's own real, official
+source PDF (assets/small_power_cable_source.pdf) instead of a hand-filled
+scan sample. The earlier scan-based build (whiteout + reportlab-drawn
+AcroForm fields over a background image) is retired entirely - it never
+reliably matched the source's actual ink extent (see this repo's own
+commit history for the "white spots" investigation that found it), and
+there is no whiteout to get wrong here in the first place: the real
+source PDF is a genuinely BLANK, digitally-authored form, not a scan.
 
-This script itself only assembles the already-produced background image
-(assets/small_power_cable_background.jpg) and the AcroForm fields; it
-does not repeat the whiteout step.
+The real source PDF is not just blank - it already has its own 41 real
+AcroForm fields, correctly positioned by whoever authored the original
+document (three of them - Project/Location/Job No - already carry this
+engagement's constant pre-filled values: "K1B Well Pad Project"/
+"K1B Kinosis"/"CA23007"). So this script does the simplest, most
+faithful thing possible: take that PDF byte-for-byte and rename each
+field's own internal /T name to this schema's own id - no redrawing, no
+repositioning, no whiteout. See RENAME below for the exact old-name ->
+new-id table (verified directly against the source PDF's own AcroForm
+field dictionary, same as every other from-a-real-PDF Electrical form's
+own field_map.py already documents doing).
 
 Run once:
     python3 build_small_power_cable_template.py
@@ -31,61 +33,127 @@ next to this script.
 """
 from pathlib import Path
 
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
 from pypdf import PdfReader, PdfWriter
-
-from small_power_cable_field_positions import all_fields, PAGE_H_PX, DPI
+from pypdf.generic import DictionaryObject, NameObject, TextStringObject
 
 HERE = Path(__file__).resolve().parent
-OUT_PATH = HERE / "Small_Power_and_Control_Cable_Inspection_and_Test_Record_TEMPLATE.pdf"
-BG_IMAGE = HERE / "assets" / "small_power_cable_background.jpg"
+SRC = HERE / "assets" / "small_power_cable_source.pdf"
+OUT = HERE / "Small_Power_and_Control_Cable_Inspection_and_Test_Record_TEMPLATE.pdf"
 
-PAGE_W, PAGE_H = letter
-SCALE = DPI / 72.0
-PAD_PT = 5 / SCALE
+RENAME = {
+    "Text37": "cable_tag_number",
+    "Text39": "cable_type",
+    "Text41": "system",
+    "Text38": "cable_size",
+    "Text40": "number_of_conductors",
+    "Text42": "cable_rated_voltage",
+    "Initial /NA": "vis_item_1_initial",
+    "Initial /NA (1)": "vis_item_2_initial",
+    "Text7": "vis_item_3_initial",
+    "Text8": "vis_item_4_initial",
+    "Text9": "vis_item_5_initial",
+    "Text10": "vis_item_6_initial",
+    "Text11": "vis_item_7_initial",
+    "Text12": "vis_item_8_initial",
+    "9. Check phase location and marking (Left to Right, Top to Bottom, or Front to Rear) are in accordance with the drawings": "vis_item_9_initial",
+    "Text14": "vis_item_10_initial",
+    "Text15": "vis_item_11_initial",
+    "Make": "test_equip_1_make",
+    "Model": "test_equip_1_model",
+    "Asset/Serial Number": "test_equip_1_asset_serial",
+    "Calibrated On": "test_equip_1_calibrated_on",
+    "Make (1)": "test_equip_2_make",
+    "Model (1)": "test_equip_2_model",
+    "Asset/Serial Number (1)": "test_equip_2_asset_serial",
+    "Calibrated On (1)": "test_equip_2_calibrated_on",
+    "Conductor to Conductor": "insulation_cond_to_cond",
+    "Conductor to Conductor (1)": "continuity_cond_to_cond",
+    "Result": "insulation_cond_to_ground",
+    "Result (1)": "continuity_cond_to_ground",
+    "Text28": "insulation_cond_to_armour",
+    "Text29": "continuity_cond_to_armour",
+    "PART 6 – Remarks": "remarks_line1",
+    "PART 6 – Remarks (1)": "remarks_line2",
+    "Text32": "remarks_line3",
+    "Name": "yanda_rep_name",
+    "Name (1)": "client_rep_name",
+    "Date": "yanda_rep_date",
+    "Date (1)": "client_rep_date",
+    # left as-is (already meaningful, already correctly pre-filled
+    # constants baked in by the source PDF itself): Project, Location, Job No
+}
 
-MULTILINE_FIELDS = {"remarks"}
 
-
-def px_rect_to_pt(x0, y0, x1, y1):
-    px = x0 / SCALE + PAD_PT
-    py = (PAGE_H_PX - y1) / SCALE + PAD_PT
-    pw = (x1 - x0) / SCALE - 2 * PAD_PT
-    ph = (y1 - y0) / SCALE - 2 * PAD_PT
-    return px, py, pw, ph
+def ensure_default_resources(writer):
+    """The source PDF's /AcroForm has no /DR (default resources) entry,
+    which crashes pypdf's field-update code later and leaves no /Helv font
+    for a viewer to render typed text with. Same fix every other Electrical
+    form's own build/export script already applies."""
+    acro = writer._root_object["/AcroForm"]
+    helv = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+        NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
+    })
+    helv_ref = writer._add_object(helv)
+    font_dict = DictionaryObject({NameObject("/Helv"): helv_ref})
+    dr = DictionaryObject({NameObject("/Font"): font_dict})
+    acro[NameObject("/DR")] = dr
+    acro[NameObject("/DA")] = TextStringObject("/Helv 9 Tf 0 g")
 
 
 def build():
-    c = canvas.Canvas(str(OUT_PATH), pagesize=letter)
-    c.setTitle("Small Power and Control Cable Inspection & Test Record - YCQE-E&I-113 Rev.0")
-    c.drawImage(str(BG_IMAGE), 0, 0, width=PAGE_W, height=PAGE_H)
-
-    count = 0
-    for field_id, x0, y0, x1, y1 in all_fields():
-        px, py, pw, ph = px_rect_to_pt(x0, y0, x1, y1)
-        if pw <= 0 or ph <= 0:
-            raise ValueError(f"Degenerate rect for {field_id}: {(x0, y0, x1, y1)}")
-        multiline = field_id in MULTILINE_FIELDS
-        c.acroForm.textfield(
-            name=field_id, tooltip=field_id, x=px, y=py, width=pw, height=ph,
-            borderStyle=None, borderWidth=0, fillColor=None,
-            forceBorder=False, fontSize=8 if multiline else 7,
-            fieldFlags="multiline" if multiline else "",
-        )
-        count += 1
-
-    c.showPage()
-    c.save()
-
-    reader = PdfReader(str(OUT_PATH))
+    reader = PdfReader(str(SRC))
     writer = PdfWriter()
     writer.append(reader)
+
+    page = writer.pages[0]
+    present_old_names = {
+        str(a.get_object().get("/T"))
+        for a in PdfReader(str(SRC)).pages[0]["/Annots"]
+        if a.get_object().get("/T")
+    }
+    missing = set(RENAME) - present_old_names
+    if missing:
+        raise ValueError(f"Expected field name(s) not found in source PDF: {missing}")
+
+    renamed = 0
+    seen = set()
+    for annot in page["/Annots"]:
+        obj = annot.get_object()
+        old_name = obj.get("/T")
+        if old_name is None:
+            continue
+        old_name = str(old_name)
+        if old_name in RENAME:
+            new_name = RENAME[old_name]
+            if new_name in seen:
+                raise ValueError(f"Duplicate target field id: {new_name}")
+            seen.add(new_name)
+            obj[NameObject("/T")] = TextStringObject(new_name)
+            renamed += 1
+
+    # "Location" is a real per-row field (unlike Project/Job No, which are
+    # constants for this one client engagement and correctly stay
+    # pre-filled forever) - the source PDF's own sample happened to have
+    # "K1B Kinosis" typed into it, which would otherwise silently show up
+    # on every export whose own row leaves location blank. Clear it.
+    for annot in page["/Annots"]:
+        obj = annot.get_object()
+        if obj.get("/T") == "Location":
+            if "/V" in obj:
+                del obj[NameObject("/V")]
+            if "/AP" in obj:
+                del obj[NameObject("/AP")]
+
+    ensure_default_resources(writer)
     writer.set_need_appearances_writer(True)
-    with open(OUT_PATH, "wb") as fh:
+    with open(OUT, "wb") as fh:
         writer.write(fh)
 
-    print(f"Wrote {OUT_PATH} with {count} fields")
+    print(f"Wrote {OUT} - renamed {renamed} of {len(RENAME)} fields "
+          "(3 more - Project/Location/Job No - kept their original real names)")
 
 
 if __name__ == "__main__":

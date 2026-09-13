@@ -168,7 +168,10 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "key_field": "cable_tag_number",
         "summary_fields": ["cable_tag_number", "cable_type", "location"],
         "summary_labels": ["Cable Tag Number", "Cable Type", "Location"],
-        "supports_signature_stamp": True,
+        # REVISION 2: this form's real source PDF has no signature field for
+        # either representative (hand-signed only, same as eht_removal/
+        # eht_rtd) - no supports_signature_stamp key, matching their own
+        # registry entries.
         "date_fields": ["yanda_rep_date", "client_rep_date"],
         "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
     },

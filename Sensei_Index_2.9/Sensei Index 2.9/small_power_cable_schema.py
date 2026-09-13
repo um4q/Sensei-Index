@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Single source of truth for every field on the Small Power and Control
-Cable Inspection & Test Record (YCQE-E&I-113 Rev.0) - the Electrical
-side's sixth form, and the second of three new forms added from the
-user's second uploaded scan bundle (spcc_itrs.pdf). Used by:
+Cable Inspection & Test Record (YCQE-EI-113 Rev.0) - the Electrical
+side's sixth form. Used by:
   - export_small_power_cable_to_pdf.py  (fills the PDF template from a selected row)
   - electrical_data_access.py           (reads/writes the Excel log sheet)
   - gui_app.py                          (the Electrical edit form)
@@ -16,19 +15,22 @@ Each field:
   ftype    - 'text' | 'multiline' | 'choice'
   choices  - list of allowed values, only for ftype == 'choice'
 
-Like eht_pre_insulation/transformer_test, there was no original fillable
-PDF for this form - only 10 hand-filled scans of the same blank template
-in the user's upload. The template is built by
-build_small_power_cable_template.py using the real scanned page as a
-background image, field names chosen to be exactly this schema's own
-ids (see small_power_cable_field_map.py - an identity mapping).
+REVISION 2: rebuilt from the user's own real, official source PDF
+(YCQE-EI-113 Rev.0) instead of a hand-filled scan sample - see
+small_power_cable_field_map.py's own docstring for why this replaces the
+earlier scan-based reconstruction. The real PDF already had its own
+correctly-positioned AcroForm fields (41 of them, one per fillable cell) -
+this schema's own field shape now matches that real structure exactly
+(test equipment is 2 rows, not 1; remarks is 3 separate lines, not one
+multiline box; there is no signature field at all - both are hand-signed
+only, same convention eht_removal/eht_rtd already use for their own
+real, signature-field-less source PDFs).
 
-project / contract_no are NOT modeled as fields - cleanly typeset and
-IDENTICAL across all 10 samples of this form ("K1B Well Pad Project" /
-"CA23007"), confirmed by inspection - same precedent
-eht_pre_insulation_schema.py set. location IS a real field: still
-typeset (not hand-written) but genuinely varies between samples (e.g.
-"Drain Tank 29152" vs "Drain Tank 29151").
+project / contract_no are NOT modeled as fields - the real PDF has them
+as already-filled, non-fillable print text ("K1B Well Pad Project" /
+"CA23007"). location IS a real fillable field on the real PDF (labeled
+"Location:" under PART 1), pre-filled with "K1B Kinosis" on the sample
+seen but still a genuine field, not baked-in print.
 """
 
 FIELDS = []
@@ -80,30 +82,38 @@ for _n, _label in enumerate(_VISUAL_LABELS, start=1):
     _add(f"vis_item_{_n}_initial", f"{_n}. {_label} - Initial/NA", "visual_inspection")
 
 # ------------------------------------------------------- PART 4 - Test Equipment
-_add("test_equip_make", "Test Equipment - Make", "test_equipment")
-_add("test_equip_model", "Test Equipment - Model", "test_equipment")
-_add("test_equip_asset_serial", "Test Equipment - Asset/Serial Number", "test_equipment")
-_add("test_equip_calibrated_on", "Test Equipment - Calibrated On", "test_equipment")
+# Two rows on the real form, same "flatten a repeating table into numbered
+# columns" approach every other multi-row section in this app already uses.
+for _row in (1, 2):
+    _add(f"test_equip_{_row}_make", f"Test Equipment {_row} - Make", "test_equipment")
+    _add(f"test_equip_{_row}_model", f"Test Equipment {_row} - Model", "test_equipment")
+    _add(f"test_equip_{_row}_asset_serial", f"Test Equipment {_row} - Asset/Serial Number",
+         "test_equipment")
+    _add(f"test_equip_{_row}_calibrated_on", f"Test Equipment {_row} - Calibrated On",
+         "test_equipment")
 
 # ------------------------------------------------------- PART 5 - Test Results
-_RESULT_ROWS = [("conductor_to_conductor", "Conductor to Conductor"),
-                 ("conductor_to_ground", "Conductor to Ground"),
-                 ("conductor_to_armour", "Conductor to Armour")]
+_RESULT_ROWS = [("cond_to_cond", "Conductor to Conductor"),
+                 ("cond_to_ground", "Conductor to Ground"),
+                 ("cond_to_armour", "Conductor to Armour")]
 for _id, _label in _RESULT_ROWS:
     _add(f"insulation_{_id}", f"Insulation Resistance - {_label}", "test_results")
 for _id, _label in _RESULT_ROWS:
     _add(f"continuity_{_id}", f"Continuity - {_label}", "test_results")
 
 # --------------------------------------------------------------- PART 6 - Remarks
-_add("remarks", "Remarks", "remarks", "multiline")
+# 3 separate ruled lines on the real form (not one multiline box).
+_add("remarks_line1", "Remarks - Line 1", "remarks")
+_add("remarks_line2", "Remarks - Line 2", "remarks")
+_add("remarks_line3", "Remarks - Line 3", "remarks")
 
 # ------------------------------------------------------------------- PART 7 Sign-off
+# No signature field exists on the real PDF for either representative -
+# hand-signed only, same convention eht_removal/eht_rtd already use.
 _add("yanda_rep_name", "Yanda QA Representative - Name", "signoff")
 _add("yanda_rep_date", "Yanda QA Representative - Date", "signoff")
-_add("yanda_rep_signature", "Yanda QA Representative - Signature", "signoff")
 _add("client_rep_name", "Client Representative - Name", "signoff")
 _add("client_rep_date", "Client Representative - Date", "signoff")
-_add("client_rep_signature", "Client Representative - Signature", "signoff")
 
 
 def by_section(section):

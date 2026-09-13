@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Turns one row of the Small Power Cable Log into a filled, ready-to-print
-PDF, using
-Small_Power_and_Control_Cable_Inspection_and_Test_Record_TEMPLATE.pdf as
-the blank form.
+Turns one row of the Small Power and Control Cable ITR Log into a filled,
+ready-to-print PDF, using
+Small_Power_and_Control_Cable_Inspection_and_Test_Record_TEMPLATE.pdf
+as the blank form.
 
 BASIC USE:
     python3 export_small_power_cable_to_pdf.py Electrical_Inspection_Tracker.xlsx --sheet "Small Power Cable Log <zone>" --rows 4
@@ -13,7 +13,6 @@ Requires: pip install openpyxl pypdf
 """
 import argparse
 import datetime
-import io
 import re
 import sys
 from pathlib import Path
@@ -21,8 +20,6 @@ from pathlib import Path
 import openpyxl
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, TextStringObject, ArrayObject
-from reportlab.pdfgen import canvas as rl_canvas
-from reportlab.lib.pagesizes import letter
 
 from small_power_cable_schema import LOG_COLUMNS
 from small_power_cable_field_map import FIELD_MAP  # noqa: F401
@@ -34,25 +31,6 @@ DEFAULT_OUTPUT_DIR = HERE / "output_pdfs"
 HEADER_ROW = 3
 FIRST_DATA_ROW = 4
 SHEET_NAME = "Small Power Cable Log"
-
-# Same Yanda QA Representative signature stamp export_to_pdf.py/
-# export_valve_to_pdf.py/export_torqueing_to_pdf.py already use - reused
-# directly (a shared static asset, not domain-specific data). Placed on
-# this form's own "Yanda QA Representative - Signature" cell (the real,
-# individually-measured sign-off rect from
-# small_power_cable_field_positions.py's own SIGNOFF_YANDA_X x
-# SIGNOFF_SIGNATURE_Y, converted to PDF points the same way
-# build_small_power_cable_template.py converts every other field's rect:
-# px/SCALE, inset by PAD_PT). This cell already has its own real fillable
-# text field (yanda_rep_signature) - see fill_pdf() below for why that
-# field's own typed value is skipped whenever the stamp is applied, so the
-# two never render on top of each other.
-SIGNATURE_IMAGE = HERE / "assets" / "yanda_qa_signature_transparent.png"
-SIGNATURE_PAGE_INDEX = 0
-SIGNATURE_X = 103
-SIGNATURE_Y = 138
-SIGNATURE_W = 87
-SIGNATURE_H = 87 * (90 / 458)  # preserve the source image's aspect ratio
 
 
 def sanitize(text, fallback):
@@ -106,8 +84,7 @@ def load_column_map(ws):
 def build_values_for_row(ws, field_to_col, row_num):
     """Returns a dict of REAL PDF field name -> value. Every field on this
     template is a plain text widget (see small_power_cable_field_map.py's
-    docstring) - no checkbox/ATC/multi-widget special cases needed, unlike
-    eht_rtd's equivalent function."""
+    docstring) - no checkbox/ATC/multi-widget special cases needed."""
     values = {}
 
     for field in LOG_COLUMNS:
@@ -128,12 +105,13 @@ def build_values_for_row(ws, field_to_col, row_num):
 
 
 def ensure_default_resources(writer):
-    """See export_to_pdf.py's identical helper - a PDF built without an
-    explicit /DR (default resources) entry on its /AcroForm crashes
-    pypdf's field-update code. build_small_power_cable_template.py's
-    reportlab-generated AcroForm already carries its own /DR, but this
-    guard is cheap insurance against ever regenerating the template with a
-    tool that doesn't."""
+    """See export_eht_removal_to_pdf.py's identical helper - a PDF built
+    without an explicit /DR (default resources) entry on its /AcroForm
+    crashes pypdf's field-update code. This template's own /DR (added when
+    the real source PDF's fields were renamed - see
+    build_small_power_cable_template.py) already has one, but this guard is
+    cheap insurance against ever regenerating the template with a tool that
+    doesn't set one up."""
     acro = writer._root_object["/AcroForm"]
     if "/DR" in acro and "/Font" in acro["/DR"] and "/Helv" in acro["/DR"]["/Font"]:
         return
@@ -151,40 +129,12 @@ def ensure_default_resources(writer):
         acro[NameObject("/DA")] = TextStringObject("/Helv 0 Tf 0 g")
 
 
-def stamp_signature(writer):
-    """Overlays the Yanda QA Representative signature image onto this
-    form's own Yanda Representative - Signature cell - the same mechanism
-    export_to_pdf.py/export_torqueing_to_pdf.py already use for their own
-    Yanda stamp."""
-    if not SIGNATURE_IMAGE.exists():
-        print(f"   ! Signature image not found at {SIGNATURE_IMAGE} - skipping signature stamp. "
-              f"Make sure the 'assets' folder is in the same directory as this script.")
-        return
-    buf = io.BytesIO()
-    c = rl_canvas.Canvas(buf, pagesize=letter)
-    c.drawImage(str(SIGNATURE_IMAGE), SIGNATURE_X, SIGNATURE_Y,
-                width=SIGNATURE_W, height=SIGNATURE_H,
-                mask="auto", preserveAspectRatio=True)
-    c.save()
-    buf.seek(0)
-    overlay_reader = PdfReader(buf)
-    writer.pages[SIGNATURE_PAGE_INDEX].merge_page(overlay_reader.pages[0])
-
-
-def fill_pdf(template_path, values, out_path, flatten=False, add_signature=True):
-    """Unlike eht_removal/eht_rtd (hand-signed only, no field at all) and
-    Torqueing (no field either), this form's Yanda Representative -
-    Signature cell IS a real, independently fillable AcroForm text field
-    (see small_power_cable_field_map.py's docstring) - so when the
-    automatic image stamp is applied, that field's own typed value (if
-    any - e.g. leftover data from before this stamp existed) is skipped
-    here rather than written underneath the stamp, so the two never
-    render on top of each other. Turning add_signature off restores the
-    old behavior (the typed value, if any, fills normally)."""
-    values = dict(values)
-    if add_signature:
-        values.pop(FIELD_MAP["yanda_rep_signature"], None)
-
+def fill_pdf(template_path, values, out_path, flatten=False):
+    """No signature-image stamping on this form - both Yanda and Client
+    Representative sign-off blocks are hand-signed only (no digital field
+    exists for either on the real source PDF - see
+    small_power_cable_field_map.py's UNMAPPED_NOTE), same as
+    export_eht_removal_to_pdf.py - pure AcroForm fill, no reportlab overlay."""
     reader = PdfReader(str(template_path))
     writer = PdfWriter()
     writer.append(reader)
@@ -193,9 +143,6 @@ def fill_pdf(template_path, values, out_path, flatten=False, add_signature=True)
     for page in writer.pages:
         writer.update_page_form_field_values(page, values, flatten=flatten)
     writer.set_need_appearances_writer(not flatten)
-
-    if add_signature:
-        stamp_signature(writer)
 
     if flatten:
         writer.remove_annotations(subtypes="/Widget")
@@ -217,7 +164,6 @@ def main():
                      help="Comma-separated Excel row numbers to export, e.g. --rows 4,7,12")
     ap.add_argument("--flatten", action="store_true", help="Flatten the filled fields into static page content "
                                                               "(no longer editable/fillable afterward)")
-    ap.add_argument("--no-signature", action="store_true", help="Skip the Yanda Representative signature stamp")
     ap.add_argument("--sheet", default=SHEET_NAME, help=f"Which sheet to read from (default: '{SHEET_NAME}')")
     args = ap.parse_args()
 
@@ -255,7 +201,7 @@ def main():
             n += 1
         used_names.add(name)
         out_path = output_dir / f"{name}.pdf"
-        fill_pdf(template_path, values, out_path, flatten=args.flatten, add_signature=not args.no_signature)
+        fill_pdf(template_path, values, out_path, flatten=args.flatten)
         print(f"   -> {out_path}")
 
     print(f"Done. {len(rows)} PDF(s) written to {output_dir}/")
