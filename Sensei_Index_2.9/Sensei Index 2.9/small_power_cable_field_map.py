@@ -21,7 +21,9 @@ Yes checkboxes some other forms have don't exist on this one; every cell
 here really is free text on the real source PDF).
 """
 
-FIELD_MAP = {f["id"]: f["id"] for f in __import__("small_power_cable_schema").FIELDS}
+import small_power_cable_schema
+
+FIELD_MAP = {f["id"]: f["id"] for f in small_power_cable_schema.FIELDS}
 # "location" is the one schema id that does NOT match its real PDF field
 # name - Project/Job No were left with their original real names since
 # they're not modeled as schema fields at all (see the schema's own

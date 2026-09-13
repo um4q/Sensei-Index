@@ -13,6 +13,7 @@ places you navigate to and stay.
 import sys
 import os
 import datetime
+import traceback
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize, QItemSelectionModel, QDate, QTimer
@@ -34,7 +35,7 @@ import datasheet_reader
 from theme import LIGHT_QSS, DARK_QSS
 
 
-APP_TITLE = "Sensei Index 2.9"
+APP_TITLE = "Sensei Index 2.95"
 
 
 # =============================================================================
@@ -826,7 +827,7 @@ class MainWindow(QMainWindow):
         header_row.addWidget(logo_label)
 
 
-        title = QLabel("Sensei Index 2.9")
+        title = QLabel(APP_TITLE)
         title.setObjectName("SidebarTitle")
         header_row.addWidget(title)
         header_row.addStretch()
@@ -6315,7 +6316,48 @@ def _run_startup_with_splash(app):
     return win
 
 
+def _install_crash_handler():
+    """The compiled .exe runs windowed - no console window - so an
+    unhandled exception would otherwise just vanish with zero visible
+    sign the app died, unlike running gui_app.py straight from a
+    terminal/START_INSTINDEX.bat where the traceback prints right there.
+    This writes the full traceback to crash_log.txt next to the app
+    (same frozen-aware folder every save already uses - see
+    data_access.py's own HERE for why sys.executable's folder, not
+    __file__, is used once frozen) and shows it in a message box too, so
+    nothing is silently lost either way."""
+    def _handle(exc_type, exc_value, exc_tb):
+        text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        try:
+            here = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) \
+                else Path(__file__).resolve().parent
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(here / "crash_log.txt", "a", encoding="utf-8") as fh:
+                fh.write(f"\n{'=' * 70}\n{stamp}\n{text}")
+        except Exception:
+            pass  # never let logging the crash cause a second crash
+
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                QMessageBox.critical(
+                    None, f"{APP_TITLE} - Unexpected Error",
+                    "Something went wrong and the app needs to close.\n\n"
+                    "The full error has been saved to crash_log.txt, in the "
+                    "same folder as the app - if this keeps happening, that "
+                    "file is the most useful thing to share.\n\n"
+                    f"{text[-1500:]}",
+                )
+        except Exception:
+            pass
+
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _handle
+
+
 def main():
+    _install_crash_handler()
     app = QApplication(sys.argv)
     theme = da.get_setting("theme") or "light"
     app.setStyleSheet(DARK_QSS if theme == "dark" else LIGHT_QSS)
