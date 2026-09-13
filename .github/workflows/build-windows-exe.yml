@@ -16,6 +16,18 @@ on:
         description: "Branch, tag, or commit to build from"
         required: false
         default: ""
+  # workflow_dispatch alone can't be triggered via the API until this file
+  # exists on the repo's default branch (GitHub only resolves a workflow_id
+  # by looking there) - this repo's own default branch isn't touched from
+  # here, so `push` is what actually fires this workflow for now: it runs
+  # for any commit reaching this feature branch, workflow file included in
+  # the very push that adds it.
+  push:
+    branches:
+      - claude/new-session-rcv1yz
+    paths:
+      - "Sensei_Index_2.9/Sensei Index 2.9/**"
+      - ".github/workflows/build-windows-exe.yml"
 
 permissions:
   contents: read
