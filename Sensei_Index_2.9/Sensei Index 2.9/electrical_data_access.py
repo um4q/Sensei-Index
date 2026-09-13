@@ -47,10 +47,14 @@ import eht_removal_schema
 import eht_rtd_schema
 import eht_pre_insulation_schema
 import torqueing_schema
+import transformer_test_schema
+import small_power_cable_schema
 import export_eht_removal_to_pdf
 import export_eht_rtd_to_pdf
 import export_eht_pre_insulation_to_pdf
 import export_torqueing_to_pdf
+import export_transformer_test_to_pdf
+import export_small_power_cable_to_pdf
 
 ELECTRICAL_WORKBOOK_PATH = HERE / "Electrical_Inspection_Tracker.xlsx"
 ELECTRICAL_CONFIG_PATH = HERE / "electrical_registry.json"
@@ -117,6 +121,24 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "summary_labels": ["Torque Record No.", "Reference Tag #", "System No."],
         "supports_signature_stamp": True,
     },
+    "transformer_test": {
+        "label": "Transformer Test Record",
+        "schema": transformer_test_schema,
+        "export_module": export_transformer_test_to_pdf,
+        "key_field": "tag",
+        "summary_fields": ["tag", "make", "serial_number"],
+        "summary_labels": ["Tag", "Make", "Serial Number"],
+        "supports_signature_stamp": True,
+    },
+    "small_power_cable": {
+        "label": "Small Power and Control Cable ITR",
+        "schema": small_power_cable_schema,
+        "export_module": export_small_power_cable_to_pdf,
+        "key_field": "cable_tag_number",
+        "summary_fields": ["cable_tag_number", "cable_type", "location"],
+        "summary_labels": ["Cable Tag Number", "Cable Type", "Location"],
+        "supports_signature_stamp": True,
+    },
 }
 
 # Short, distinct prefixes for sheet names - the equipment types' own
@@ -127,6 +149,8 @@ SHEET_NAME_PREFIXES = {
     "eht_rtd": "EHT RTD",
     "eht_pre_insulation": "EHT PreIns",
     "torqueing": "Torqueing",
+    "transformer_test": "Transformer Test",
+    "small_power_cable": "Small Power Cable",
 }
 
 

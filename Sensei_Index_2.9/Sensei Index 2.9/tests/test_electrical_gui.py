@@ -497,7 +497,7 @@ def test_main_window_add_zone_flow_and_sidebar_tree(qtbot, isolated_app_dir, mon
     assert win.tree.topLevelItemCount() == 2
     zone_item = win.tree.topLevelItem(1)
     assert zone_item.text(0) == "K1B Well Pad"
-    assert zone_item.childCount() == 4  # eht_removal + eht_rtd + eht_pre_insulation + torqueing
+    assert zone_item.childCount() == 6  # eht_removal + eht_rtd + eht_pre_insulation + torqueing + transformer_test + small_power_cable
 
 
 # ------------------------------------------------------- QOL prompt Phase A.10
@@ -983,3 +983,79 @@ def test_electrical_export_dialog_eht_pre_insulation_signature_checkbox_controls
     dlg._run()
     assert dlg.result() == gui_app.QDialog.Accepted
     assert seen_include_signature == [False]
+
+
+# --------------------------------------------------------------------------
+# Transformer Test Record (YCQE-E&I-112 Rev. 0) - the fifth Electrical
+# form. ElectricalDashboardPage/ElectricalIndexPage/ElectricalEditDialog
+# are generic over ELECTRICAL_EQUIPMENT_TYPES, so this is a light smoke
+# test (dashboard total + index listing), not a full re-run of every
+# eht_removal-level GUI test - the generic dispatch is already covered.
+
+def test_electrical_dashboard_shows_transformer_test_totals(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row, {"tag": "29152-PT-001"})
+
+    page = gui_app.ElectricalDashboardPage(fake_main_window)
+    qtbot.addWidget(page)
+
+    totals_by_title = {}
+    for card in page.findChildren(gui_app.StatCard):
+        title_label = next(w for w in card.findChildren(gui_app.QLabel) if w.objectName() == "StatLabel")
+        number_label = card.findChild(gui_app.QLabel, "StatNumber")
+        totals_by_title[title_label.text()] = number_label.text()
+
+    assert totals_by_title["Transformer Test Record"] == "1"
+
+
+def test_electrical_index_page_lists_saved_transformer_test_rows(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row, {
+        "tag": "29152-PT-001", "make": "HPS", "serial_number": "CB01681369",
+    })
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "transformer_test")
+    qtbot.addWidget(page)
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "29152-PT-001"  # summary_fields[0] = tag, no leading Row column here
+
+
+# --------------------------------------------------------------------------
+# Small Power and Control Cable ITR (YCQE-E&I-113 Rev.0) - the sixth
+# Electrical form. Light smoke test only - see the transformer_test
+# equivalent above for why.
+
+def test_electrical_dashboard_shows_small_power_cable_totals(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_tag_number": "29152-XY-0203"})
+
+    page = gui_app.ElectricalDashboardPage(fake_main_window)
+    qtbot.addWidget(page)
+
+    totals_by_title = {}
+    for card in page.findChildren(gui_app.StatCard):
+        title_label = next(w for w in card.findChildren(gui_app.QLabel) if w.objectName() == "StatLabel")
+        number_label = card.findChild(gui_app.QLabel, "StatNumber")
+        totals_by_title[title_label.text()] = number_label.text()
+
+    assert totals_by_title["Small Power and Control Cable ITR"] == "1"
+
+
+def test_electrical_index_page_lists_saved_small_power_cable_rows(qtbot, isolated_app_dir, fake_main_window):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {
+        "cable_tag_number": "29152-XY-0203", "cable_type": "Field bus type A",
+    })
+
+    page = gui_app.ElectricalIndexPage(fake_main_window, "K1B Well Pad", "small_power_cable")
+    qtbot.addWidget(page)
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "29152-XY-0203"  # summary_fields[0] = cable_tag_number

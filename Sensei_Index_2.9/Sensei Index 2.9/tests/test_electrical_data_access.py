@@ -273,10 +273,12 @@ def test_count_all_by_type_and_zone_summary(isolated_app_dir):
 
     assert eda.count_all_by_type() == {
         "eht_removal": 1, "eht_rtd": 0, "eht_pre_insulation": 0, "torqueing": 0,
+        "transformer_test": 0, "small_power_cable": 0,
     }
     assert eda.zone_summary("K1B Well Pad") == {
         "eht_removal": {"total": 1}, "eht_rtd": {"total": 0},
         "eht_pre_insulation": {"total": 0}, "torqueing": {"total": 0},
+        "transformer_test": {"total": 0}, "small_power_cable": {"total": 0},
     }
 
 
@@ -702,6 +704,7 @@ def test_zone_summary_zero_fills_every_registry_key_same_as_count_all_by_type(is
     assert eda.zone_summary("K1B Well Pad") == {
         "eht_removal": {"total": 0}, "eht_rtd": {"total": 0},
         "eht_pre_insulation": {"total": 0}, "torqueing": {"total": 0},
+        "transformer_test": {"total": 0}, "small_power_cable": {"total": 0},
     }
 
 
@@ -1203,4 +1206,369 @@ def test_torqueing_template_has_no_baked_in_sample_data(isolated_app_dir):
                  if v.get("/V") and str(v.get("/V")).strip() not in ("", " ", "  ")}
     # The N/A checkbox's own /Off default state is not "sample data".
     non_blank.pop("N/A", None)
+    assert non_blank == {}
+
+
+# ===========================================================================
+# Transformer Test Record (YCQE-E&I-112 Rev. 0) - the Electrical side's
+# fifth form, and the first of three new forms from the user's second
+# uploaded scan bundle (spcc_itrs.pdf). Same "no original fillable PDF,
+# only a hand-filled scan" situation as eht_pre_insulation - see
+# transformer_test_field_positions.py's own docstring for the build
+# methodology (ink-color whiteout, not rectangle whiteout).
+# ===========================================================================
+
+def test_add_zone_creates_transformer_test_sheet(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    entry = eda.add_zone("K1B Well Pad")
+    assert "transformer_test_sheet" in entry
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry["transformer_test_sheet"] in wb.sheetnames
+
+
+def test_add_zone_transformer_test_header_row_matches_schema_labels(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    import transformer_test_schema
+    entry = eda.add_zone("K1B Well Pad")
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    ws = wb[entry["transformer_test_sheet"]]
+    header = [ws.cell(row=3, column=c).value for c in range(1, len(transformer_test_schema.LOG_COLUMNS) + 1)]
+    assert header == [f["label"] for f in transformer_test_schema.LOG_COLUMNS]
+
+
+def test_transformer_test_save_and_read_row_round_trips(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row, {
+        "tag": "29152-PT-001", "make": "HPS", "serial_number": "CB01681369",
+        "vis_item_1_initial": "TS",
+    })
+    full = eda.read_full_row("K1B Well Pad", "transformer_test", row)
+    assert full["tag"] == "29152-PT-001"
+    assert full["make"] == "HPS"
+    assert full["serial_number"] == "CB01681369"
+    assert full["vis_item_1_initial"] == "TS"
+    assert full["vis_item_2_initial"] == ""  # untouched field stays blank
+
+
+def test_transformer_test_read_index_rows_only_shows_rows_with_key_filled(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row, {"make": "HPS"})  # no tag
+    assert eda.read_index_rows("K1B Well Pad", "transformer_test") == []
+
+    eda.save_row("K1B Well Pad", "transformer_test", row, {"tag": "29152-PT-001"})
+    rows = eda.read_index_rows("K1B Well Pad", "transformer_test")
+    assert len(rows) == 1
+    assert rows[0]["tag"] == "29152-PT-001"
+
+
+def test_generate_preview_pdf_transformer_test_fills_real_fields(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row, {
+        "tag": "29152-PT-001", "make": "HPS", "serial_number": "CB01681369",
+        "project": "K1B Well Pad Project", "location": "North Drain Tank",
+        "insulation_row_1_primary_to_ground": "2.2",
+        "winding_h1": "0.1",
+        "remarks": "line1\nline2",
+        "yanda_rep_signature": "J. Doe",
+    })
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "transformer_test", row)
+    assert out_path.exists()
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["tag"].get("/V") == "29152-PT-001"
+    assert fields["make"].get("/V") == "HPS"
+    assert fields["serial_number"].get("/V") == "CB01681369"
+    assert fields["project"].get("/V") == "K1B Well Pad Project"
+    assert fields["location"].get("/V") == "North Drain Tank"
+    assert fields["insulation_row_1_primary_to_ground"].get("/V") == "2.2"
+    assert fields["winding_h1"].get("/V") == "0.1"
+    assert fields["remarks"].get("/V") == "line1\nline2"
+    # yanda_rep_signature's own typed value is superseded by the automatic
+    # signature image stamp (generate_preview_pdf() always stamps by
+    # default) - see the dedicated stamp tests below.
+    assert fields["yanda_rep_signature"].get("/V") in (None, "")
+
+
+def test_generate_preview_pdf_transformer_test_stamps_yanda_signature_by_default(isolated_app_dir):
+    """Same XObject-diff signal as eht_pre_insulation's own equivalent
+    test - see that test's docstring for why a bare 'any FormXob key
+    exists' check isn't valid on its own for a reportlab-built template."""
+    from export_transformer_test_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row, {"tag": "29152-PT-001"})
+
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "transformer_test", row)
+    with_stamp_keys = _xobject_keys(out_path)
+
+    baseline_path = eda.ELECTRICAL_TEMP_DIR / "transformer_xobject_baseline_no_stamp.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"tag": "29152-PT-001"}, baseline_path, add_signature=False)
+    baseline_keys = _xobject_keys(baseline_path)
+
+    assert with_stamp_keys > baseline_keys
+    assert len(with_stamp_keys) == len(baseline_keys) + 1
+
+
+def test_transformer_test_yanda_rep_signature_typed_value_still_fills_when_stamp_is_off(isolated_app_dir):
+    from export_transformer_test_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row, {
+        "tag": "29152-PT-001", "yanda_rep_signature": "J. Doe",
+    })
+    full = eda.read_full_row("K1B Well Pad", "transformer_test", row)
+    out_path = eda.ELECTRICAL_TEMP_DIR / "transformer_no_stamp_typed_value_check.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"yanda_rep_signature": full["yanda_rep_signature"]}, out_path, add_signature=False)
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["yanda_rep_signature"].get("/V") == "J. Doe"
+
+
+def test_run_export_transformer_test_respects_include_signature_toggle(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row, {"tag": "29152-PT-001"})
+
+    written_with = eda.run_export("K1B Well Pad", "transformer_test", mode="all", include_signature=True)
+    written_without = eda.run_export("K1B Well Pad", "transformer_test", mode="all",
+                                       include_signature=False, suffix="nosig")
+
+    with_keys = _xobject_keys(written_with[0])
+    without_keys = _xobject_keys(written_without[0])
+    assert with_keys > without_keys
+    assert len(with_keys) == len(without_keys) + 1
+
+
+def test_transformer_test_field_mapping_fidelity_against_its_own_template():
+    """Same check as eht_pre_insulation's own equivalent: every schema
+    field has a FIELD_MAP entry, every FIELD_MAP value is a real field on
+    the built template, and every real template field is actually used -
+    this purpose-built template shouldn't have any dangling widgets."""
+    import transformer_test_schema as schema
+    import transformer_test_field_map as fm
+    from export_transformer_test_to_pdf import DEFAULT_TEMPLATE
+
+    for field in schema.LOG_COLUMNS:
+        assert field["id"] in fm.FIELD_MAP, f"{field['id']} has no FIELD_MAP entry"
+
+    template_fields = set(PdfReader(str(DEFAULT_TEMPLATE)).get_fields().keys())
+    for schema_id, pdf_field in fm.FIELD_MAP.items():
+        assert pdf_field in template_fields, (
+            f"FIELD_MAP['{schema_id}'] = '{pdf_field}' is not a real field on "
+            f"{DEFAULT_TEMPLATE.name}"
+        )
+    mapped = set(fm.FIELD_MAP.values())
+    assert template_fields == mapped, (
+        f"unused template fields: {template_fields - mapped}, "
+        f"or FIELD_MAP entries with no matching template field: {mapped - template_fields}"
+    )
+
+
+def test_transformer_test_sheet_name_also_respects_the_31_char_limit(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    long_name = "A Very Long Zone Name That Would Blow Past The Excel Sheet Name Limit"
+    entry = eda.add_zone(long_name)
+    assert len(entry["transformer_test_sheet"]) <= 31
+
+
+def test_transformer_test_template_has_no_baked_in_sample_data():
+    """This template was built from a HAND-FILLED scan (see
+    transformer_test_field_positions.py) - every field must come back
+    blank on the checked-in template, or every export would start from
+    someone else's real transformer data."""
+    from export_transformer_test_to_pdf import DEFAULT_TEMPLATE
+    fields = PdfReader(str(DEFAULT_TEMPLATE)).get_fields()
+    non_blank = {k: v.get("/V") for k, v in fields.items()
+                 if v.get("/V") and str(v.get("/V")).strip() not in ("", " ", "  ")}
+    assert non_blank == {}
+
+
+# ===========================================================================
+# Small Power and Control Cable Inspection & Test Record (YCQE-E&I-113
+# Rev.0) - the Electrical side's sixth form, and the second of three new
+# forms from the user's second uploaded scan bundle (spcc_itrs.pdf). Same
+# "no original fillable PDF, only hand-filled scans" situation as
+# eht_pre_insulation/transformer_test - see
+# small_power_cable_field_positions.py's own docstring for the build
+# methodology (rectangle whiteout, not ink-color - this form's pen is
+# black, not blue).
+# ===========================================================================
+
+def test_add_zone_creates_small_power_cable_sheet(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    entry = eda.add_zone("K1B Well Pad")
+    assert "small_power_cable_sheet" in entry
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    assert entry["small_power_cable_sheet"] in wb.sheetnames
+
+
+def test_add_zone_small_power_cable_header_row_matches_schema_labels(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    import small_power_cable_schema
+    entry = eda.add_zone("K1B Well Pad")
+    wb = openpyxl.load_workbook(eda.ELECTRICAL_WORKBOOK_PATH)
+    ws = wb[entry["small_power_cable_sheet"]]
+    header = [ws.cell(row=3, column=c).value for c in range(1, len(small_power_cable_schema.LOG_COLUMNS) + 1)]
+    assert header == [f["label"] for f in small_power_cable_schema.LOG_COLUMNS]
+
+
+def test_small_power_cable_save_and_read_row_round_trips(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {
+        "cable_tag_number": "29152-XY-0203", "cable_type": "Field bus type A",
+        "location": "Drain Tank 29152", "vis_item_1_initial": "HB",
+    })
+    full = eda.read_full_row("K1B Well Pad", "small_power_cable", row)
+    assert full["cable_tag_number"] == "29152-XY-0203"
+    assert full["cable_type"] == "Field bus type A"
+    assert full["location"] == "Drain Tank 29152"
+    assert full["vis_item_1_initial"] == "HB"
+    assert full["vis_item_2_initial"] == ""  # untouched field stays blank
+
+
+def test_small_power_cable_read_index_rows_only_shows_rows_with_key_filled(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_type": "Field bus type A"})  # no tag
+    assert eda.read_index_rows("K1B Well Pad", "small_power_cable") == []
+
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_tag_number": "29152-XY-0203"})
+    rows = eda.read_index_rows("K1B Well Pad", "small_power_cable")
+    assert len(rows) == 1
+    assert rows[0]["cable_tag_number"] == "29152-XY-0203"
+
+
+def test_generate_preview_pdf_small_power_cable_fills_real_fields(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {
+        "cable_tag_number": "29152-XY-0203", "cable_type": "Field bus type A",
+        "location": "Drain Tank 29152",
+        "insulation_conductor_to_conductor": "NA",
+        "continuity_conductor_to_conductor": "1.0",
+        "remarks": "line1\nline2",
+        "yanda_rep_signature": "J. Doe",
+    })
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "small_power_cable", row)
+    assert out_path.exists()
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["cable_tag_number"].get("/V") == "29152-XY-0203"
+    assert fields["cable_type"].get("/V") == "Field bus type A"
+    assert fields["location"].get("/V") == "Drain Tank 29152"
+    assert fields["insulation_conductor_to_conductor"].get("/V") == "NA"
+    assert fields["continuity_conductor_to_conductor"].get("/V") == "1.0"
+    assert fields["remarks"].get("/V") == "line1\nline2"
+    # yanda_rep_signature's own typed value is superseded by the automatic
+    # signature image stamp (generate_preview_pdf() always stamps by
+    # default) - see the dedicated stamp tests below.
+    assert fields["yanda_rep_signature"].get("/V") in (None, "")
+
+
+def test_generate_preview_pdf_small_power_cable_stamps_yanda_signature_by_default(isolated_app_dir):
+    """Same XObject-diff signal as eht_pre_insulation/transformer_test's
+    own equivalent tests."""
+    from export_small_power_cable_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_tag_number": "29152-XY-0203"})
+
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "small_power_cable", row)
+    with_stamp_keys = _xobject_keys(out_path)
+
+    baseline_path = eda.ELECTRICAL_TEMP_DIR / "cable_xobject_baseline_no_stamp.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"cable_tag_number": "29152-XY-0203"}, baseline_path, add_signature=False)
+    baseline_keys = _xobject_keys(baseline_path)
+
+    assert with_stamp_keys > baseline_keys
+    assert len(with_stamp_keys) == len(baseline_keys) + 1
+
+
+def test_small_power_cable_yanda_rep_signature_typed_value_still_fills_when_stamp_is_off(isolated_app_dir):
+    from export_small_power_cable_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {
+        "cable_tag_number": "29152-XY-0203", "yanda_rep_signature": "J. Doe",
+    })
+    full = eda.read_full_row("K1B Well Pad", "small_power_cable", row)
+    out_path = eda.ELECTRICAL_TEMP_DIR / "cable_no_stamp_typed_value_check.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"yanda_rep_signature": full["yanda_rep_signature"]}, out_path, add_signature=False)
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["yanda_rep_signature"].get("/V") == "J. Doe"
+
+
+def test_run_export_small_power_cable_respects_include_signature_toggle(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_tag_number": "29152-XY-0203"})
+
+    written_with = eda.run_export("K1B Well Pad", "small_power_cable", mode="all", include_signature=True)
+    written_without = eda.run_export("K1B Well Pad", "small_power_cable", mode="all",
+                                       include_signature=False, suffix="nosig")
+
+    with_keys = _xobject_keys(written_with[0])
+    without_keys = _xobject_keys(written_without[0])
+    assert with_keys > without_keys
+    assert len(with_keys) == len(without_keys) + 1
+
+
+def test_small_power_cable_field_mapping_fidelity_against_its_own_template():
+    """Same check as eht_pre_insulation/transformer_test's own
+    equivalent: every schema field has a FIELD_MAP entry, every
+    FIELD_MAP value is a real field on the built template, and every
+    real template field is actually used."""
+    import small_power_cable_schema as schema
+    import small_power_cable_field_map as fm
+    from export_small_power_cable_to_pdf import DEFAULT_TEMPLATE
+
+    for field in schema.LOG_COLUMNS:
+        assert field["id"] in fm.FIELD_MAP, f"{field['id']} has no FIELD_MAP entry"
+
+    template_fields = set(PdfReader(str(DEFAULT_TEMPLATE)).get_fields().keys())
+    for schema_id, pdf_field in fm.FIELD_MAP.items():
+        assert pdf_field in template_fields, (
+            f"FIELD_MAP['{schema_id}'] = '{pdf_field}' is not a real field on "
+            f"{DEFAULT_TEMPLATE.name}"
+        )
+    mapped = set(fm.FIELD_MAP.values())
+    assert template_fields == mapped, (
+        f"unused template fields: {template_fields - mapped}, "
+        f"or FIELD_MAP entries with no matching template field: {mapped - template_fields}"
+    )
+
+
+def test_small_power_cable_sheet_name_also_respects_the_31_char_limit(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    long_name = "A Very Long Zone Name That Would Blow Past The Excel Sheet Name Limit"
+    entry = eda.add_zone(long_name)
+    assert len(entry["small_power_cable_sheet"]) <= 31
+
+
+def test_small_power_cable_template_has_no_baked_in_sample_data():
+    """This template was built from hand-filled scans (see
+    small_power_cable_field_positions.py) - every field must come back
+    blank on the checked-in template, or every export would start from
+    someone else's real cable data."""
+    from export_small_power_cable_to_pdf import DEFAULT_TEMPLATE
+    fields = PdfReader(str(DEFAULT_TEMPLATE)).get_fields()
+    non_blank = {k: v.get("/V") for k, v in fields.items()
+                 if v.get("/V") and str(v.get("/V")).strip() not in ("", " ", "  ")}
     assert non_blank == {}
