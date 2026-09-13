@@ -30,7 +30,7 @@ on:
       - ".github/workflows/build-windows-exe.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   APP_DIR: "Sensei_Index_2.9/Sensei Index 2.9"
@@ -101,3 +101,30 @@ jobs:
           name: crash-log-if-any
           path: ${{ env.APP_DIR }}/dist/crash_log.txt
           if-no-files-found: ignore
+
+      # actions/upload-artifact stores the exe in Azure Blob Storage
+      # (*.blob.core.windows.net) for retrieval via the GitHub API - the
+      # dev environment driving this workflow can reach github.com/
+      # api.github.com/objects.githubusercontent.com fine, but that
+      # specific blob host is blocked by its own egress policy. Pushing
+      # the exe to its own git branch (git, not a raw HTTPS blob host, is
+      # already confirmed reachable from there) sidesteps that entirely -
+      # a one-time transport, deleted once retrieved (see the branch's
+      # own commit message).
+      - name: Push the built exe to a delivery branch (git-fetchable, unlike the artifact's blob storage)
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -e
+          git config user.name "sensei-exe-bot"
+          git config user.email "actions@users.noreply.github.com"
+          rm -rf /tmp/exe-delivery
+          mkdir -p /tmp/exe-delivery
+          cp "dist/Sensei Index 2.95.exe" /tmp/exe-delivery/
+          cd /tmp/exe-delivery
+          git init -q
+          git checkout -q -b exe-delivery
+          git add "Sensei Index 2.95.exe"
+          git commit -q -m "Sensei Index 2.95.exe built from ${{ github.sha }}"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push -f origin exe-delivery

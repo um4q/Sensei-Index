@@ -4,9 +4,57 @@ INSTINDEX - WHAT'S NEW
 
 HOW TO RUN THIS VERSION
 ---------------------------
-This one's delivered as a patch, not a full folder - see APPLY_UPDATE.bat /
-README_PATCH.txt alongside it for how to apply it. Once applied, running
-the app is unchanged: double-click START_INSTINDEX.bat.
+The whole app is now ONE FILE: double-click "Sensei Index 2.95.exe" -
+see READ_ME_FIRST.txt for the full quick-start. No more separate Python
+install, no more patch folders to apply - just replace the old exe (or
+the old loose-.py-files folder, if you were still on that) with this one
+and everything else in the folder (workbooks, PDF templates, assets,
+JSON config) keeps working exactly as before.
+
+
+=================================================================
+LATEST UPDATE - THE WHOLE APP IS NOW ONE COMPILED EXE
+=================================================================
+
+WHAT'S NEW
+----------------
+InstINDEX is now built into a single "Sensei Index 2.95.exe" - no more
+Python install, no more first-time pip package setup, no more folder
+full of loose .py files. Double-click the exe and it opens straight to
+the app. Everything that ALREADY lived next to gui_app.py before -
+the workbooks, the PDF templates, the assets folder, the .json config
+files - still lives right next to the exe now, and still works the
+exact same way (nothing about where your data lives or how it's saved
+changed).
+
+If the app ever closes unexpectedly, it now writes the full error to a
+crash_log.txt file next to the exe (and shows it in a pop-up too) rather
+than just vanishing with no explanation - that file is the single most
+useful thing to send along if something looks wrong.
+
+Running from source (START_INSTINDEX.bat + the loose .py files) still
+works too, if you ever want to make your own code changes - see
+READ_ME_FIRST.txt.
+
+WHAT CHANGED UNDER THE HOOD (skip this if you don't care)
+----------------------------------------------------------------
+Added a PyInstaller build (SenseiIndex.spec) and a CI workflow that
+actually builds it on a real Windows machine and launches the result to
+confirm it starts cleanly before ever calling it done - PyInstaller
+can't cross-compile, so this couldn't be built or personally test-driven
+from this project's own Linux dev environment; the CI run doing an
+actual launch-and-check is the closest thing to hands-on verification
+available here. Also tidied up a batch of now-obsolete distribution
+cruft that predates the exe (old patch folders, a stray fake "exe" that
+was actually just a wrapped .bat file, some stale generated preview
+PDFs that had ended up checked in) and closed a couple of small gaps
+(a dynamic import that's now a normal one; a hardcoded "Sensei Index
+2.9" sidebar label that could drift from the app's own title constant).
+
+
+=================================================================
+PREVIOUS UPDATE
+=================================================================
 
 
 =================================================================

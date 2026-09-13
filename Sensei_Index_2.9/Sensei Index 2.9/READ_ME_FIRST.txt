@@ -4,23 +4,30 @@ INSTINDEX - QUICK START
 1. Put this whole folder somewhere normal, like your Desktop or Documents.
    (Don't split it up - everything in here needs to stay together.)
 
-2. Double-click START_INSTINDEX.bat
+2. Double-click "Sensei Index 2.95.exe"
 
-That's it. The first time, it'll quietly install a few required Python
-packages (needs Python already installed - the .bat file will tell you
-exactly what to do if it isn't). Every time after that, it opens straight
-to the app, usually within a few seconds.
+That's it - no separate Python install, no first-time package setup.
+The whole app is one file now; everything else in this folder (the
+.xlsx workbooks, the .json config files, the PDF templates, the assets
+folder) just needs to stay sitting right next to it, exactly like it
+already needs to sit next to gui_app.py today - the app looks for all
+of it relative to its own location either way.
 
 The app window can take 20-30 seconds to appear the very first time you
 open it after adding data - that's normal, not a freeze.
 
-If you'd rather export PDFs from the command line instead of using the
-app, Run_Export_Transmitters.bat and Run_Export_Valves.bat still work
-exactly like before.
+If something goes wrong and the app closes unexpectedly, check for a
+crash_log.txt file that appears right next to the exe - it has the full
+error, and is the most useful thing to share if you need help.
 
-Everything else in this folder (the .xlsx, the .json files, the PDF
-templates, the assets folder) needs to stay right next to gui_app.py -
-the app looks for all of it relative to its own location.
+RUNNING FROM SOURCE INSTEAD (only if you need to - e.g. to make your own
+code changes)
+--------------------------------------------------------------------------
+Double-click START_INSTINDEX.bat instead of the exe. First time, it'll
+quietly install the required Python packages (needs Python already
+installed - the .bat file will tell you exactly what to do if it isn't).
+Run_Export_Transmitters.bat and Run_Export_Valves.bat still work the
+same way too, if you'd rather export PDFs from the command line.
 
 WHERE TO PUT THIS FOLDER (IMPORTANT)
 ----------------------------------------

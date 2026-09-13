@@ -31,3 +31,14 @@ Sensei_Index_2.9/Sensei Index 2.9/Electrical_Inspection_Tracker.xlsx
 Sensei_Index_2.9/Sensei Index 2.9/electrical_registry.json
 Sensei_Index_2.9/Sensei Index 2.9/electrical_temp_previews/
 Sensei_Index_2.9/Sensei Index 2.9/electrical_status.json
+
+# Compiled exe (SenseiIndex.spec's own source stays tracked - only
+# PyInstaller's OWN build output doesn't) + the crash handler's log file.
+# The real Sensei Index 2.95.exe is built by .github/workflows/
+# build-windows-exe.yml and delivered as a build artifact, not committed
+# here - PyInstaller can't cross-compile a Windows exe from this repo's
+# own (Linux) dev environment anyway, and a compiled binary doesn't
+# belong in source control regardless.
+Sensei_Index_2.9/Sensei Index 2.9/build/
+Sensei_Index_2.9/Sensei Index 2.9/dist/
+Sensei_Index_2.9/Sensei Index 2.9/crash_log.txt
