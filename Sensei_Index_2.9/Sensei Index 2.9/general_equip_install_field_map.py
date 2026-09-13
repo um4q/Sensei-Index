@@ -4,14 +4,15 @@ Maps each general_equip_install_schema.py field id to the ACTUAL AcroForm
 field name inside
 General_Electrical_Equipment_Installation_and_Test_Report_TEMPLATE.pdf.
 
-Same situation as every other from-scratch-built Electrical form: there
-was no original fillable PDF, only one hand-filled scan. The template is
-built by build_general_equip_install_template.py using the real scanned
-page as a background image, with field names chosen to be exactly the
-schema's own ids - so this is a clean identity mapping, not a lookup
-table of legacy "Text##"-style widget names. Kept as a genuine dict
-anyway (rather than reading schema ids directly as PDF field names) so
-this form follows the same trio shape as every other Electrical form.
+REVISION 2: this form's template is now built directly from the user's
+own real, official source document (a Word .docx converted to PDF via
+LibreOffice) - see general_equip_install_field_positions.py's and
+build_general_equip_install_template.py's own docstrings for the full
+rebuild methodology. Field names on the built template are chosen to be
+exactly the schema's own ids - so this is a clean identity mapping, not
+a lookup table of legacy "Text##"-style widget names. Kept as a genuine
+dict anyway (rather than reading schema ids directly as PDF field names)
+so this form follows the same trio shape as every other Electrical form.
 
 No checkbox fields on this template - every cell, including the section
 N/A flags and the Torqueing Log's own "Torque Marked" column, is a plain
@@ -21,11 +22,12 @@ from-scratch form here makes).
 yanda_rep_signature's own typed value is what
 export_general_equip_install_to_pdf.py's fill_pdf() actually fills by
 default though: the same automatic Yanda QA Representative signature-
-image stamp Torqueing/eht_pre_insulation/transformer_test/small_power_cable
-have is overlaid on this exact cell, and that field's typed value (if
-any) is skipped whenever the stamp is applied so the two never render on
-top of each other. client_rep_signature is untouched by any of this -
-still a plain typed field.
+image stamp Torqueing/eht_pre_insulation/transformer_test have is
+overlaid on this exact cell (on page 1 of this form's real 2-page
+source - see field_positions.py's own docstring), and that field's
+typed value (if any) is skipped whenever the stamp is applied so the two
+never render on top of each other. client_rep_signature is untouched by
+any of this - still a plain typed field.
 """
 
 FIELD_MAP = {

@@ -2,9 +2,7 @@
 """
 Single source of truth for every field on the General Electrical
 Equipment Installation & Test Report (YCQE-E&I-013 Rev.0) - the
-Electrical side's seventh form, and the third and most complex of three
-new forms added from the user's second uploaded scan bundle
-(spcc_itrs.pdf). Used by:
+Electrical side's seventh form. Used by:
   - export_general_equip_install_to_pdf.py  (fills the PDF template from a selected row)
   - electrical_data_access.py                (reads/writes the Excel log sheet)
   - gui_app.py                                (the Electrical edit form)
@@ -17,12 +15,14 @@ Each field:
   ftype    - 'text' | 'multiline' | 'choice'
   choices  - list of allowed values, only for ftype == 'choice'
 
-Like every other from-scratch-built Electrical form, there was no
-original fillable PDF for this form - only one hand-filled scan. The
-template is built by build_general_equip_install_template.py using the
-real scanned page as a background image, field names chosen to be
-exactly this schema's own ids (see general_equip_install_field_map.py -
-an identity mapping).
+REVISION 2: this form's template is now built from the user's own real,
+official source document (a Word .docx converted to PDF via LibreOffice)
+instead of a hand-filled scan sample - see
+general_equip_install_field_positions.py's and
+build_general_equip_install_template.py's own docstrings for the full
+rebuild methodology. Field names are still chosen to be exactly this
+schema's own ids (see general_equip_install_field_map.py - an identity
+mapping).
 
 customer_name / project_name / contract_no are NOT modeled as fields -
 cleanly typeset, matching this whole engagement's constant values (same
@@ -30,12 +30,12 @@ precedent every other Electrical form here sets). location IS a field -
 also typeset (not hand-written), matching small_power_cable's own
 Location field.
 
-"MANFACTURER" is a typo on the real, printed form (confirmed - not a
-transcription error here) - kept as-is on the template's own background
-image (never edited, per the "do not change the design" instruction),
-but this schema's own label spells it correctly ("Manufacturer") since
-that's only used internally (Excel column header, edit-form caption),
-not printed anywhere.
+"MANFACTURER" is a typo on the real, printed source document (confirmed
+- not a transcription error here) - kept as-is on the template (never
+edited, per the "do not change the design" instruction), but this
+schema's own label spells it correctly ("Manufacturer") since that's
+only used internally (Excel column header, edit-form caption), not
+printed anywhere.
 
 Two sections - "EQUIPMENT RESISTANCE TESTING" and "EQUIPMENT INSULATION
 RESISTANCE TESTING (1 MINUTE PER)" - have no printed column headers on

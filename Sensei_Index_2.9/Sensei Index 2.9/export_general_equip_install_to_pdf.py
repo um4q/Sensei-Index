@@ -38,21 +38,23 @@ SHEET_NAME = "General Equip Install Log"
 # Same Yanda QA Representative signature stamp export_to_pdf.py/
 # export_valve_to_pdf.py/export_torqueing_to_pdf.py already use - reused
 # directly (a shared static asset, not domain-specific data). Placed on
-# this form's own "Yanda Representative - Signature" cell (the real,
-# individually-measured sign-off rect from
-# general_equip_install_field_positions.py's own SIGNOFF_SIGNATURE_X x
-# SIGNOFF_YANDA_ROW_Y, converted to PDF points the same way
-# build_general_equip_install_template.py converts every other field's
-# rect: px/SCALE, inset by PAD_PT). This cell already has its own real
-# fillable text field (yanda_rep_signature) - see fill_pdf() below for
-# why that field's own typed value is skipped whenever the stamp is
-# applied, so the two never render on top of each other.
+# this form's own "Yanda Representative - Signature" cell - real PDF
+# coordinates (this form's REVISION 4 rebuild reads field rects directly
+# off the real source PDF, in true PDF point space - see
+# general_equip_install_field_positions.py's own docstring - no px/DPI
+# conversion of any kind). The sign-off block is on PAGE 1 (the second
+# page of this form's real 2-page source), not page 0 - see
+# general_equip_install_field_positions.py's own docstring for why this
+# source is 2 pages. This cell already has its own real fillable text
+# field (yanda_rep_signature) - see fill_pdf() below for why that
+# field's own typed value is skipped whenever the stamp is applied, so
+# the two never render on top of each other.
 SIGNATURE_IMAGE = HERE / "assets" / "yanda_qa_signature_transparent.png"
-SIGNATURE_PAGE_INDEX = 0
-SIGNATURE_X = 365
-SIGNATURE_Y = 84
-SIGNATURE_W = 87
-SIGNATURE_H = 87 * (90 / 458)  # preserve the source image's aspect ratio
+SIGNATURE_PAGE_INDEX = 1
+SIGNATURE_X = 401
+SIGNATURE_Y = 657
+SIGNATURE_W = 70
+SIGNATURE_H = 70 * (90 / 458)  # preserve the source image's aspect ratio
 
 
 def sanitize(text, fallback):

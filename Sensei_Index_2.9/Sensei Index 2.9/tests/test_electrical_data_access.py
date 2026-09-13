@@ -1534,14 +1534,13 @@ def test_small_power_cable_template_has_no_baked_in_sample_data():
 
 # ===========================================================================
 # General Electrical Equipment Installation & Test Report (YCQE-E&I-013
-# Rev.0) - the Electrical side's seventh form, and the third and most
-# complex of three new forms from the user's second uploaded scan bundle
-# (spcc_itrs.pdf). Same "no original fillable PDF, only a hand-filled
-# scan" situation as every other from-scratch Electrical form - see
-# general_equip_install_field_positions.py's own docstring for the build
-# methodology and the several measurement corrections it took to get
-# right (a misjudged header-row boundary erased "YES INITIAL" outright on
-# a first pass, caught by a quantitative dark-pixel check, not by eye).
+# Rev.0) - the Electrical side's seventh form. REVISION 2: rebuilt from
+# the user's own real, official source document (a Word .docx converted
+# to PDF via LibreOffice) instead of a hand-filled scan sample - see
+# general_equip_install_field_positions.py's and
+# build_general_equip_install_template.py's own docstrings for the full
+# rebuild methodology (including the 2-page source and the one spot with
+# real pre-filled sample text that needed a targeted whiteout).
 # ===========================================================================
 
 def test_add_zone_creates_general_equip_install_sheet(isolated_app_dir):
@@ -1711,10 +1710,12 @@ def test_general_equip_install_sheet_name_also_respects_the_31_char_limit(isolat
 
 
 def test_general_equip_install_template_has_no_baked_in_sample_data():
-    """This template was built from a HAND-FILLED scan (see
-    general_equip_install_field_positions.py) - every field must come
-    back blank on the checked-in template, or every export would start
-    from someone else's real equipment data."""
+    """This template's real source document had one spot with genuine
+    pre-filled sample text ("Module Yard" in the Location cell - see
+    general_equip_install_field_positions.py's own docstring), whited
+    out during the build - every field must come back blank on the
+    checked-in template, or every export would start from someone else's
+    real equipment data."""
     from export_general_equip_install_to_pdf import DEFAULT_TEMPLATE
     fields = PdfReader(str(DEFAULT_TEMPLATE)).get_fields()
     non_blank = {k: v.get("/V") for k, v in fields.items()

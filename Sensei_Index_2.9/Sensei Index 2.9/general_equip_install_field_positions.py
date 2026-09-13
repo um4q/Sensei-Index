@@ -1,90 +1,101 @@
 # -*- coding: utf-8 -*-
 """Precisely measured field rects for the General Electrical Equipment
-Installation & Test Report (YCQE-E&I-013 Rev.0) - the third and most
-complex of the new forms from the user's second uploaded scan bundle
-(spcc_itrs.pdf). Derived from gridline-overlaid crops of a clean 300 DPI
-render of page 2 of that upload, one sample only (no repeats of this
-form in the bundle) - see the module docstring in
-build_general_equip_install_template.py for the overall build approach.
+Installation & Test Report (YCQE-E&I-013 Rev.0).
 
-All coordinates are PIXEL space at 300 DPI, image origin TOP-LEFT
-(y grows downward). Page is 2550 x 3300 px (= 612 x 792 pt, US Letter).
+REVISION 3 (built from the user's own real, official source document):
+this form is no longer reconstructed from a hand-filled scan sample -
+the user provided the real source as a Word document (.docx), converted
+to PDF via LibreOffice (see build_general_equip_install_template.py's own
+docstring for the conversion + build pipeline). All coordinates below
+were read directly off that converted PDF's own text and vector-line
+positions (pymupdf get_text("words") / get_drawings()) - not measured
+from a raster image.
 
-Unlike transformer_test (blue pen, ink-color whiteout) this form's
-handwriting is a MIX of blue (e.g. the header's own "Tag #" and the
-Torqueing Log's "Location" cell) and black/near-neutral (everything
-else, confirmed by direct inspection of a page-wide ink-color pass that
-left almost every field untouched) - not worth splitting into two
-techniques for one form, so every field here uses the same rectangle
-whiteout small_power_cable does.
+Two important facts about this specific source, both different from
+transformer_test's/small_power_cable's own real sources:
 
-CUSTOMER NAME / PROJECT NAME / CONTRACT# are NOT modeled as fields -
-cleanly typeset, matching this whole engagement's constant values (same
-precedent every other Electrical form here already set). LOCATION IS a
-field - also typeset (not hand-written) on this form, matching
-small_power_cable's own treatment of its Location field, not
-transformer_test's (whose own Location is hand-written).
+1. The converted PDF is TWO PAGES, not one - the Word document's own
+   content (Torqueing Log rows 3-5, Comments, and the Sign-Off block)
+   spills onto a second page under LibreOffice's rendering (a
+   pagination/margin difference from whatever produced the DOCX
+   originally, not a content difference - confirmed no text/data is lost,
+   only where the page break lands). Every field below is tagged with
+   which page (0 or 1) it belongs on; build_general_equip_install_
+   template.py merges each field's own overlay onto the matching page.
+2. Unlike transformer_test/small_power_cable, this source is NOT
+   perfectly blank - "Location" has real sample text ("Module Yard")
+   printed directly into the page content (not a fillable field's
+   default value - this document has no AcroForm fields of its own at
+   all, unlike small_power_cable's real source). The cell is narrow
+   enough that "Module Yard" wraps across 2 lines, and - critically -
+   the printed "LOCATION:" LABEL shares that exact same cell, sitting on
+   line 1 immediately to the left of "Module" (line 2, where "Yard"
+   wraps to, is flush with the cell's own left edge - the same x
+   position the label occupies one line up). A single bounding-box
+   whiteout around the whole value therefore erases the real "LOCATION:"
+   label too - confirmed by an earlier build attempt that did exactly
+   that (caught by visual inspection: the label was simply gone).
+   LOCATION_WHITEOUT_LINE1/LINE2 below are two separate, narrower
+   rectangles read directly off this cell's own ruling-line borders
+   (get_drawings()) and each line's own word boxes (get_text("words")) -
+   LINE1 covers only "Module" (x to the right of "LOCATION:"'s own right
+   edge), LINE2 covers only "Yard" (the full cell width, since line 2 has
+   no label on it at all) - so the label itself is never touched. This is
+   the only whiteout this build needs anywhere on the document - every
+   other field's value zone was confirmed blank by direct text-extraction
+   inspection.
 
-Two sections have NO printed column structure at all - "EQUIPMENT
-RESISTANCE TESTING" and "EQUIPMENT INSULATION RESISTANCE TESTING (1
-MINUTE PER)" are each a blank 2-row grid with unlabeled cells (no column
-headers anywhere on the form, on the one sample seen - a genuine gap in
-the source form's own design, not something this app invented). Rather
-than guess at column meanings that don't exist, each is modeled as ONE
-multiline field spanning the whole blank area - the printed grid lines
-stay exactly as scanned (nothing about the design changes), it's just
-fillable as free text instead of column-by-column.
-
-"TORQUE MARKED" (one column in the 5-row Torqueing Log sub-table) is a
-printed checkbox + "YES" per row, modeled as a single narrow text field
-per row (same "plain text, not a real checkbox" choice every other form
-here makes) - matches this same upload's General Electrical form's own
-"YES INITIAL"/"N/A INITIAL" verification columns and the valve ITR's
-fv_N_yes/fv_N_na split.
+All coordinates are in the coordinate space PyMuPDF's own
+get_text()/get_drawings() report them in: origin TOP-LEFT, y grows
+DOWNWARD - NOT the PDF's native bottom-left-origin space. all_fields()
+converts each field's own y0/y1 to true PDF coordinates before yielding,
+same fix (and same reasoning) as transformer_test_field_positions.py's
+own all_fields() - see that module's docstring for the full story of how
+this was found.
 """
 
-PAGE_W_PX = 2550
-PAGE_H_PX = 3300
-DPI = 300
+PAGE_W_PT = 612.0
+PAGE_H_PT = 792.0
+
+# The one spot on the whole document with real pre-filled sample text
+# instead of a blank cell - "LOCATION: Module Yard" wraps across 2 lines
+# within its own narrow header cell, with the "LOCATION:" label itself
+# sharing line 1 (see docstring above for why this is 2 rects, not 1).
+# Real cell borders (get_drawings()): left x=481.9, right x~581.9,
+# top y=82.3, bottom y=107.8. Real word boxes (get_text("words")):
+# "LOCATION:" x487.3-536.4 y88.9-98.2; "Module" x539.2-572.2 y88.9-98.2;
+# "Yard" x487.3-507.6 y98.2-107.5.
+LOCATION_WHITEOUT_LINE1 = (537.0, 82.5, 581.0, 98.3)  # (x0,y0,x1,y1), top-down, page 0 - "Module" only
+LOCATION_WHITEOUT_LINE2 = (483.0, 98.3, 581.0, 107.6)  # (x0,y0,x1,y1), top-down, page 0 - "Yard" only (no label on this line)
+LOCATION_WHITEOUT_BOXES = (LOCATION_WHITEOUT_LINE1, LOCATION_WHITEOUT_LINE2)
 
 # ---------------------------------------------------------------- Header block
-LOCATION_X = (2005.0, 2430.0)
-LOCATION_Y = (432.0, 495.0)
+LOCATION_X = (539.0, 576.0)
+LOCATION_Y = (88.9, 107.5)
 
-ROW_TAG_Y = (505.0, 560.0)
-# REVISION 2 (rectangle-whiteout width fix): tag_number/serial_number were
-# both measured far too narrow - a direct pixel/gridline check against the
-# clean source showed the real sample's handwritten values ("29152-
-# DCSFFJB-001", "5478101") both run right up to their column's own
-# vertical divider, not stopping ~300px short of it the way the original
-# rects did. Rectangle whiteout (unlike the old page-wide ink-color pass)
-# only ever clears what its own rect covers, so a too-narrow rect here
-# left the value's own tail end fully visible on the built template -
-# found by direct visual audit, not by the original halo-check pass
-# (which evidently never caught this one). Widened to each column's real
-# divider position (~995 / ~610), measured off a gridline crop.
-TAG_NUMBER_X = (355.0, 850.0)
-MANUFACTURER_X = (1130.0, 1400.0)
-MODEL_NUMBER_X = (1610.0, 1900.0)
-SYSTEM_NUMBER_X = (2160.0, 2500.0)
+ROW_TAG_Y = (124.0, 134.5)
+TAG_NUMBER_X = (92.0, 206.0)
+MANUFACTURER_X = (293.0, 348.0)
+MODEL_NUMBER_X = (406.0, 476.0)
+SYSTEM_NUMBER_X = (539.0, 576.0)
 
-ROW_SERIAL_Y = (562.0, 618.0)
-SERIAL_NUMBER_X = (270.0, 610.0)
-VOLTAGE_X = (595.0, 745.0)
-FREQ_X = (810.0, 995.0)
-PHASE_X = (1090.0, 1195.0)
-AMPS_X = (1320.0, 1495.0)
-AREA_CLASS_OF_EQUIP_X = (2280.0, 2525.0)
+ROW_SERIAL_Y = (136.4, 146.9)
+SERIAL_NUMBER_X = (107.0, 149.0)
+VOLTAGE_X = (207.0, 225.0)
+FREQ_X = (269.0, 292.0)
+PHASE_X = (333.0, 338.0)
+AMPS_X = (388.0, 420.0)
+AREA_CLASS_OF_EQUIP_X = (540.0, 576.0)
 
-ROW_REFDWG_Y = (625.0, 680.0)
-REF_DWG_NUMBER_X = (430.0, 1495.0)
-KVA_X = (1590.0, 1745.0)
-AREA_CLASS_X = (2070.0, 2525.0)
+ROW_REFDWG_Y = (148.6, 159.1)
+REF_DWG_NUMBER_X = (123.0, 348.0)
+KVA_X = (381.0, 420.0)
+AREA_CLASS_X = (493.0, 576.0)
 
-ROW_TESTEQUIP_Y = (685.0, 745.0)
-TEST_EQUIP_MODEL_NUMBER_X = (625.0, 700.0)
-TEST_EQUIP_SERIAL_NUMBER_X = (1375.0, 1690.0)
-CAL_DUE_X = (1875.0, 2500.0)
+ROW_TESTEQUIP_Y = (160.4, 171.3)
+TEST_EQUIP_MODEL_NUMBER_X = (174.0, 225.0)
+TEST_EQUIP_SERIAL_NUMBER_X = (349.0, 420.0)
+CAL_DUE_X = (478.0, 576.0)
 
 HEADER_FIELDS = [
     ("tag_number", TAG_NUMBER_X, ROW_TAG_Y),
@@ -106,97 +117,137 @@ HEADER_FIELDS = [
 ]
 
 # ------------------------------------------------------------ Verifications (18)
-YES_INITIAL_X = (1910.0, 2075.0)
-NA_INITIAL_X = (2080.0, 2330.0)
-# 19 boundaries -> 18 rows. Item 2 (2-line) and item 14 (2-line) are
-# taller than the rest - measured directly off a gridline crop, not
-# interpolated (see module docstring in build_general_equip_install_template.py
-# re: why an earlier interpolation approach on a sibling form's Visual
-# Inspection table broke badly and isn't repeated here).
-TASK_ROWS_Y = [838.0, 883.0, 955.0, 1000.0, 1062.5, 1125.0, 1187.5, 1250.0,
-               1300.0, 1350.0, 1400.0, 1450.0, 1500.0, 1544.6, 1616.0,
-               1660.6, 1705.2, 1750.0, 1810.0]
+# Column boundaries read directly off the table's own vertical ruling
+# lines/segments. Row boundaries read directly off the table's own
+# horizontal ruling lines - each item's own row is however tall its own
+# (possibly multi-line-wrapped) description text needs.
+YES_INITIAL_X = (515.0, 540.0)
+NA_INITIAL_X = (547.0, 573.0)
+TASK_ROWS_Y = [203.5, 224.5, 266.8, 287.9, 299.2, 320.2, 341.2, 362.2, 383.4,
+               404.4, 415.6, 436.6, 457.8, 478.8, 521.2, 542.2, 563.2, 574.5, 585.8]
 TASK_FIELDS = []
 for _n in range(18):
     y0, y1 = TASK_ROWS_Y[_n], TASK_ROWS_Y[_n + 1]
     TASK_FIELDS.append((f"task_{_n + 1}_yes", YES_INITIAL_X, (y0, y1)))
     TASK_FIELDS.append((f"task_{_n + 1}_na", NA_INITIAL_X, (y0, y1)))
 
-# ------------------------------------------------------- Section N/A checkboxes
-# Each of these 5 section headers has its own small "[ ] N/A" checkbox -
-# narrow fields, just the checkbox glyph (same "one field per checkbox"
-# convention as everywhere else on this form).
-SECTION_NA_FIELDS = [
-    ("electrical_equipment_testing_na", (1225.0, 1270.0), (1815.0, 1855.0)),
-    ("equipment_resistance_testing_na", (1225.0, 1270.0), (1955.0, 1995.0)),
-    ("equipment_insulation_resistance_testing_na", (1395.0, 1440.0), (2130.0, 2170.0)),
-    ("torqueing_log_na", (1130.0, 1175.0), (2250.0, 2290.0)),
-    ("comments_na", (1095.0, 1140.0), (2700.0, 2745.0)),
-]
+# --------------------------------------------------------- Section N/A flags
+# Small checkbox glyphs, each positioned a few points left of its own
+# printed "N/A" text (measured directly - none of these render as a
+# vector rect PyMuPDF's get_drawings() can find, unlike every ruled-table
+# border on this page, so there's no ruling-line boundary to read for
+# these specifically).
+ELECTRICAL_EQUIPMENT_TESTING_NA_X = (378.0, 393.0)
+ELECTRICAL_EQUIPMENT_TESTING_NA_Y = (586.1, 596.6)
+EQUIPMENT_RESISTANCE_TESTING_NA_X = (378.0, 393.0)
+EQUIPMENT_RESISTANCE_TESTING_NA_Y = (617.0, 627.5)
+EQUIPMENT_INSULATION_RESISTANCE_TESTING_NA_X = (419.0, 434.0)
+EQUIPMENT_INSULATION_RESISTANCE_TESTING_NA_Y = (653.8, 664.3)
+TORQUEING_LOG_NA_X = (345.0, 360.0)
+TORQUEING_LOG_NA_Y = (700.2, 710.7)
+# Comments N/A is on page 1 (see COMMENTS_NA_PAGE below).
+COMMENTS_NA_X = (324.0, 339.0)
+COMMENTS_NA_Y = (78.2, 87.5)
 
-# ----------------------------------------------------- Unlabeled blank grids
-# See module docstring - no column headers exist on the form for either
-# of these, so each is one multiline field spanning its whole blank area.
-EQUIPMENT_RESISTANCE_TESTING_NOTES = ("equipment_resistance_testing_notes", (170.0, 2530.0), (2000.0, 2100.0))
-EQUIPMENT_INSULATION_RESISTANCE_TESTING_NOTES = (
-    "equipment_insulation_resistance_testing_notes", (170.0, 2530.0), (2150.0, 2250.0))
+# ------------------------------------------------------ Unlabeled blank grids
+# No printed column headers anywhere on the real source for either of
+# these two sections (confirmed by inspection) - each modeled as one
+# multiline field spanning the whole blank grid area, same as this app's
+# other unlabeled-grid forms.
+EQUIPMENT_RESISTANCE_TESTING_NOTES_X = (54.0, 572.0)
+EQUIPMENT_RESISTANCE_TESTING_NOTES_Y = (616.8, 640.8)
+EQUIPMENT_INSULATION_RESISTANCE_TESTING_NOTES_X = (54.0, 572.0)
+EQUIPMENT_INSULATION_RESISTANCE_TESTING_NOTES_Y = (674.5, 700.0)
 
-# --------------------------------------------------------------- Torqueing Log
+# ------------------------------------------------------------- Torqueing Log
+# Column boundaries read off page 1's own vertical ruling lines (cleaner
+# than page 0's - the header row's own checkbox glyphs there visually
+# overlap a couple of header words, splitting them into extra line
+# fragments PyMuPDF sees as more text lines, but none of that affects
+# these column x-positions, all read from real ruling-line geometry, not
+# text). Rows 1-2 are the last content on page 0; rows 3-5 continue at
+# the top of page 1 - same table, split by the page break.
 TORQUEING_COLS = [
-    ("cond_id", (170.0, 680.0)),
-    ("location", (680.0, 1105.0)),
-    ("bolt_grade", (1105.0, 1290.0)),
-    ("bolt_size", (1290.0, 1410.0)),
-    ("torque_value", (1410.0, 1680.0)),
-    ("torque_marked", (1685.0, 1740.0)),   # just the checkbox glyph
-    ("torque_by", (1875.0, 2085.0)),
-    ("date", (2085.0, 2350.0)),
+    ("cond_id", (54.0, 166.0)), ("location", (173.0, 272.0)),
+    ("bolt_grade", (278.0, 308.0)), ("bolt_size", (314.0, 351.0)),
+    ("torque_value", (357.0, 408.0)), ("torque_marked", (414.0, 451.0)),
+    ("torque_by", (457.0, 508.0)), ("date", (515.0, 573.0)),
 ]
-TORQUEING_ROWS_Y = [(2400.0, 2500.0), (2500.0, 2550.0), (2550.0, 2600.0),
-                     (2600.0, 2650.0), (2650.0, 2700.0)]
-TORQUEING_FIELDS = []
-for _row_n, _row_y in enumerate(TORQUEING_ROWS_Y, start=1):
+TORQUEING_ROWS = [
+    (1, (749.0, 761.7), 0), (2, (761.7, 774.5), 0),
+    (3, (35.2, 48.0), 1), (4, (48.0, 60.7), 1), (5, (60.7, 74.0), 1),
+]
+TORQUEING_FIELDS = []  # (field_id, x, y, page)
+for _row_n, _row_y, _page in TORQUEING_ROWS:
     for _col_id, _col_x in TORQUEING_COLS:
-        TORQUEING_FIELDS.append((f"torqueing_row_{_row_n}_{_col_id}", _col_x, _row_y))
+        TORQUEING_FIELDS.append((f"torqueing_row_{_row_n}_{_col_id}", _col_x, _row_y, _page))
 
-# ------------------------------------------------------------------- Comments
-COMMENTS_BOX = ("comments", (170.0, 2530.0), (2750.0, 2850.0))
+# ------------------------------------------------------------------ Comments
+# Page 1 - the blank row directly below the "COMMENTS" header bar.
+COMMENTS_X = (54.0, 572.0)
+COMMENTS_Y = (88.3, 105.7)
 
-# ------------------------------------------------------------------- Sign-off
-SIGNOFF_YANDA_X = (170.0, 960.0)
-SIGNOFF_DATE_X = (960.0, 1495.0)
-SIGNOFF_SIGNATURE_X = (1495.0, 2530.0)
-SIGNOFF_YANDA_ROW_Y = (2900.0, 2950.0)
-SIGNOFF_CLIENT_ROW_Y = (3000.0, 3050.0)
+# ------------------------------------------------------------------ Sign-off
+# Page 1 - column boundaries off that page's own vertical ruling lines,
+# row boundaries off its own horizontal ruling lines.
+SIGNOFF_NAME_X = (54.0, 220.0)
+SIGNOFF_DATE_X = (228.0, 386.0)
+SIGNOFF_SIGNATURE_X = (393.0, 572.0)
+SIGNOFF_YANDA_ROW_Y = (120.0, 135.5)
+SIGNOFF_CLIENT_ROW_Y = (150.0, 165.5)
 
 SIGNOFF_FIELDS = [
-    ("yanda_rep_name", SIGNOFF_YANDA_X, SIGNOFF_YANDA_ROW_Y),
+    ("yanda_rep_name", SIGNOFF_NAME_X, SIGNOFF_YANDA_ROW_Y),
     ("yanda_rep_date", SIGNOFF_DATE_X, SIGNOFF_YANDA_ROW_Y),
     ("yanda_rep_signature", SIGNOFF_SIGNATURE_X, SIGNOFF_YANDA_ROW_Y),
-    ("client_rep_name", SIGNOFF_YANDA_X, SIGNOFF_CLIENT_ROW_Y),
+    ("client_rep_name", SIGNOFF_NAME_X, SIGNOFF_CLIENT_ROW_Y),
     ("client_rep_date", SIGNOFF_DATE_X, SIGNOFF_CLIENT_ROW_Y),
     ("client_rep_signature", SIGNOFF_SIGNATURE_X, SIGNOFF_CLIENT_ROW_Y),
 ]
 
 
+def _to_pdf_y(y0_topdown, y1_topdown):
+    return PAGE_H_PT - y1_topdown, PAGE_H_PT - y0_topdown
+
+
 def all_fields():
-    yield ("location", LOCATION_X[0], LOCATION_Y[0], LOCATION_X[1], LOCATION_Y[1])
-    for fid, (x0, x1), (y0, y1) in HEADER_FIELDS:
-        yield fid, x0, y0, x1, y1
-    for fid, (x0, x1), (y0, y1) in TASK_FIELDS:
-        yield fid, x0, y0, x1, y1
-    for fid, (x0, x1), (y0, y1) in SECTION_NA_FIELDS:
-        yield fid, x0, y0, x1, y1
-    fid, (x0, x1), (y0, y1) = EQUIPMENT_RESISTANCE_TESTING_NOTES
-    yield fid, x0, y0, x1, y1
-    fid, (x0, x1), (y0, y1) = EQUIPMENT_INSULATION_RESISTANCE_TESTING_NOTES
-    yield fid, x0, y0, x1, y1
-    for fid, (x0, x1), (y0, y1) in TORQUEING_FIELDS:
-        yield fid, x0, y0, x1, y1
-    fid, (x0, x1), (y0, y1) = COMMENTS_BOX
-    yield fid, x0, y0, x1, y1
-    for fid, (x0, x1), (y0, y1) in SIGNOFF_FIELDS:
-        yield fid, x0, y0, x1, y1
+    """Yields (field_id, x0, y0, x1, y1, page) - note the extra `page`
+    element (0 or 1) this module's own all_fields() has that
+    transformer_test/small_power_cable's don't need, since this is the
+    one Electrical form whose real source spans 2 pages."""
+    page0_raw = [
+        ("location", LOCATION_X, LOCATION_Y),
+        *HEADER_FIELDS,
+        *TASK_FIELDS,
+        ("electrical_equipment_testing_na", ELECTRICAL_EQUIPMENT_TESTING_NA_X,
+         ELECTRICAL_EQUIPMENT_TESTING_NA_Y),
+        ("equipment_resistance_testing_na", EQUIPMENT_RESISTANCE_TESTING_NA_X,
+         EQUIPMENT_RESISTANCE_TESTING_NA_Y),
+        ("equipment_insulation_resistance_testing_na",
+         EQUIPMENT_INSULATION_RESISTANCE_TESTING_NA_X,
+         EQUIPMENT_INSULATION_RESISTANCE_TESTING_NA_Y),
+        ("torqueing_log_na", TORQUEING_LOG_NA_X, TORQUEING_LOG_NA_Y),
+        ("equipment_resistance_testing_notes", EQUIPMENT_RESISTANCE_TESTING_NOTES_X,
+         EQUIPMENT_RESISTANCE_TESTING_NOTES_Y),
+        ("equipment_insulation_resistance_testing_notes",
+         EQUIPMENT_INSULATION_RESISTANCE_TESTING_NOTES_X,
+         EQUIPMENT_INSULATION_RESISTANCE_TESTING_NOTES_Y),
+    ]
+    for fid, (x0, x1), (y0, y1) in page0_raw:
+        py0, py1 = _to_pdf_y(y0, y1)
+        yield fid, x0, py0, x1, py1, 0
+    for fid, (x0, x1), (y0, y1), page in TORQUEING_FIELDS:
+        py0, py1 = _to_pdf_y(y0, y1)
+        yield fid, x0, py0, x1, py1, page
+
+    page1_raw = [
+        ("comments_na", COMMENTS_NA_X, COMMENTS_NA_Y),
+        ("comments", COMMENTS_X, COMMENTS_Y),
+        *SIGNOFF_FIELDS,
+    ]
+    for fid, (x0, x1), (y0, y1) in page1_raw:
+        py0, py1 = _to_pdf_y(y0, y1)
+        yield fid, x0, py0, x1, py1, 1
 
 
 if __name__ == "__main__":
