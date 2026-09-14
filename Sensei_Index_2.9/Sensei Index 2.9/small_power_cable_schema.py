@@ -22,9 +22,23 @@ earlier scan-based reconstruction. The real PDF already had its own
 correctly-positioned AcroForm fields (41 of them, one per fillable cell) -
 this schema's own field shape now matches that real structure exactly
 (test equipment is 2 rows, not 1; remarks is 3 separate lines, not one
-multiline box; there is no signature field at all - both are hand-signed
-only, same convention eht_removal/eht_rtd already use for their own
-real, signature-field-less source PDFs).
+multiline box).
+
+REVISION 3: yanda_rep_signature/client_rep_signature added back. The
+real PDF has no signature AcroForm field of its own for either
+representative - only the printed "Signature:" label and blank line
+(confirmed directly against the source's own field list) - so REVISION 2
+treated this form as hand-signed only, same as eht_removal/eht_rtd's own
+real, signature-field-less source PDFs. That's still literally true of
+the real PDF, but nothing stops this app from adding its OWN new field
+on top of that blank line, the same way transformer_test/
+general_equip_install add fields onto real source PDFs that had none at
+all - see build_small_power_cable_template.py's own docstring for the
+merge-overlay mechanics. yanda_rep_signature gets the same automatic
+Yanda QA Representative signature-image stamp every other signature-
+bearing Electrical form has (see small_power_cable_field_map.py);
+client_rep_signature is a plain typed field, same as every other form's
+own client-side signature cell.
 
 project / contract_no are NOT modeled as fields - the real PDF has them
 as already-filled, non-fillable print text ("K1B Well Pad Project" /
@@ -108,12 +122,15 @@ _add("remarks_line2", "Remarks - Line 2", "remarks")
 _add("remarks_line3", "Remarks - Line 3", "remarks")
 
 # ------------------------------------------------------------------- PART 7 Sign-off
-# No signature field exists on the real PDF for either representative -
-# hand-signed only, same convention eht_removal/eht_rtd already use.
+# yanda_rep_signature/client_rep_signature are new fields merged onto the
+# real PDF's own blank "Signature:" line - see this file's own docstring
+# (REVISION 3) and build_small_power_cable_template.py's for why/how.
 _add("yanda_rep_name", "Yanda QA Representative - Name", "signoff")
 _add("yanda_rep_date", "Yanda QA Representative - Date", "signoff")
+_add("yanda_rep_signature", "Yanda QA Representative - Signature", "signoff")
 _add("client_rep_name", "Client Representative - Name", "signoff")
 _add("client_rep_date", "Client Representative - Date", "signoff")
+_add("client_rep_signature", "Client Representative - Signature", "signoff")
 
 
 def by_section(section):

@@ -13,6 +13,7 @@ Requires: pip install openpyxl pypdf
 """
 import argparse
 import datetime
+import io
 import re
 import sys
 from pathlib import Path
@@ -20,6 +21,8 @@ from pathlib import Path
 import openpyxl
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, TextStringObject, ArrayObject
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.lib.pagesizes import letter
 
 from small_power_cable_schema import LOG_COLUMNS
 from small_power_cable_field_map import FIELD_MAP  # noqa: F401
@@ -31,6 +34,24 @@ DEFAULT_OUTPUT_DIR = HERE / "output_pdfs"
 HEADER_ROW = 3
 FIRST_DATA_ROW = 4
 SHEET_NAME = "Small Power Cable Log"
+
+# Same shared Yanda QA Representative signature stamp export_to_pdf.py/
+# export_torqueing_to_pdf.py/export_transformer_test_to_pdf.py/
+# export_general_equip_install_to_pdf.py already use. Placed on this
+# form's own "Yanda QA Representative - Signature" cell - a NEW field
+# (build_small_power_cable_template.py's own REVISION 3 merges it onto
+# the real source PDF's printed blank line; the real PDF had no
+# signature field of its own at all - see that script's docstring).
+# That row is only 11.5pt tall (same tight constraint
+# transformer_test_field_positions.py's own SIGNOFF_SIGNATURE_Y hit) -
+# sized down from the shared default for the same reason, see
+# export_transformer_test_to_pdf.py's own comment on this.
+SIGNATURE_IMAGE = HERE / "assets" / "yanda_qa_signature_transparent.png"
+SIGNATURE_PAGE_INDEX = 0
+SIGNATURE_X = 93
+SIGNATURE_Y = 142.6
+SIGNATURE_W = 51
+SIGNATURE_H = 51 * (90 / 458)  # preserve the source image's aspect ratio
 
 
 def sanitize(text, fallback):
@@ -129,12 +150,42 @@ def ensure_default_resources(writer):
         acro[NameObject("/DA")] = TextStringObject("/Helv 0 Tf 0 g")
 
 
-def fill_pdf(template_path, values, out_path, flatten=False):
-    """No signature-image stamping on this form - both Yanda and Client
-    Representative sign-off blocks are hand-signed only (no digital field
-    exists for either on the real source PDF - see
-    small_power_cable_field_map.py's UNMAPPED_NOTE), same as
-    export_eht_removal_to_pdf.py - pure AcroForm fill, no reportlab overlay."""
+def stamp_signature(writer):
+    """Overlays the Yanda QA Representative signature image onto this
+    form's own Yanda QA Representative - Signature cell - the same
+    mechanism every other signature-bearing Electrical form already
+    uses."""
+    if not SIGNATURE_IMAGE.exists():
+        print(f"   ! Signature image not found at {SIGNATURE_IMAGE} - skipping signature stamp. "
+              f"Make sure the 'assets' folder is in the same directory as this script.")
+        return
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=letter)
+    c.drawImage(str(SIGNATURE_IMAGE), SIGNATURE_X, SIGNATURE_Y,
+                width=SIGNATURE_W, height=SIGNATURE_H,
+                mask="auto", preserveAspectRatio=True)
+    c.save()
+    buf.seek(0)
+    overlay_reader = PdfReader(buf)
+    writer.pages[SIGNATURE_PAGE_INDEX].merge_page(overlay_reader.pages[0])
+
+
+def fill_pdf(template_path, values, out_path, flatten=False, add_signature=True):
+    """Client Representative sign-off stays hand-signed only (no field on
+    the real source PDF, and no automation makes sense for an external
+    party's own signature) - client_rep_signature's own typed value (if
+    any) fills normally, same as every other plain field. Yanda QA
+    Representative - Signature IS a real fillable field (a new one - see
+    build_small_power_cable_template.py's own REVISION 3), and gets the
+    automatic image stamp by default; that field's own typed value (if
+    any) is skipped whenever the stamp is applied so the two never render
+    on top of each other, same as every other signature-bearing
+    Electrical form. Turning add_signature off restores the typed-value-
+    only behavior."""
+    values = dict(values)
+    if add_signature:
+        values.pop(FIELD_MAP["yanda_rep_signature"], None)
+
     reader = PdfReader(str(template_path))
     writer = PdfWriter()
     writer.append(reader)
@@ -143,6 +194,9 @@ def fill_pdf(template_path, values, out_path, flatten=False):
     for page in writer.pages:
         writer.update_page_form_field_values(page, values, flatten=flatten)
     writer.set_need_appearances_writer(not flatten)
+
+    if add_signature:
+        stamp_signature(writer)
 
     if flatten:
         writer.remove_annotations(subtypes="/Widget")
@@ -164,6 +218,7 @@ def main():
                      help="Comma-separated Excel row numbers to export, e.g. --rows 4,7,12")
     ap.add_argument("--flatten", action="store_true", help="Flatten the filled fields into static page content "
                                                               "(no longer editable/fillable afterward)")
+    ap.add_argument("--no-signature", action="store_true", help="Skip the Yanda Representative signature stamp")
     ap.add_argument("--sheet", default=SHEET_NAME, help=f"Which sheet to read from (default: '{SHEET_NAME}')")
     args = ap.parse_args()
 
@@ -201,7 +256,7 @@ def main():
             n += 1
         used_names.add(name)
         out_path = output_dir / f"{name}.pdf"
-        fill_pdf(template_path, values, out_path, flatten=args.flatten)
+        fill_pdf(template_path, values, out_path, flatten=args.flatten, add_signature=not args.no_signature)
         print(f"   -> {out_path}")
 
     print(f"Done. {len(rows)} PDF(s) written to {output_dir}/")

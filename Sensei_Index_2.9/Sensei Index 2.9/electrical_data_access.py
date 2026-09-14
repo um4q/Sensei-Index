@@ -168,10 +168,12 @@ ELECTRICAL_EQUIPMENT_TYPES = {
         "key_field": "cable_tag_number",
         "summary_fields": ["cable_tag_number", "cable_type", "location"],
         "summary_labels": ["Cable Tag Number", "Cable Type", "Location"],
-        # REVISION 2: this form's real source PDF has no signature field for
-        # either representative (hand-signed only, same as eht_removal/
-        # eht_rtd) - no supports_signature_stamp key, matching their own
-        # registry entries.
+        # REVISION 3: yanda_rep_signature is now a real field (merged onto
+        # the real source PDF's own blank "Signature:" line - see
+        # build_small_power_cable_template.py's own docstring) that gets
+        # the automatic Yanda signature stamp, same as every other
+        # signature-bearing Electrical form.
+        "supports_signature_stamp": True,
         "date_fields": ["yanda_rep_date", "client_rep_date"],
         "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
     },

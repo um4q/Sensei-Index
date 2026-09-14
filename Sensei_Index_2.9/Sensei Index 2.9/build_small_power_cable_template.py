@@ -26,19 +26,58 @@ new-id table (verified directly against the source PDF's own AcroForm
 field dictionary, same as every other from-a-real-PDF Electrical form's
 own field_map.py already documents doing).
 
+REVISION 3: the real source has no signature field at all (see RENAME's
+own history/small_power_cable_schema.py's docstring) - only a printed
+"Signature:" label and blank underline, for both representatives. Two
+BRAND NEW fields (yanda_rep_signature, client_rep_signature) are merged
+on top of those two blank lines - same merge-overlay technique
+transformer_test's/general_equip_install's own build scripts use for
+forms whose real source has NO existing fields at all, just applied here
+to 2 specific cells on a source that otherwise already has its own 41
+real fields. build_signature_fields_overlay() below reads the exact
+blank-line extent directly off the source PDF's own text
+(get_text("words")) - see that function's own docstring for the
+coordinates. Unlike a pure-rename field, merge_page() only adds the new
+widgets to the page's own /Annots - the document catalog's existing
+/AcroForm/Fields array (already populated by the 41 renamed fields) needs
+the 2 new widgets appended to it by hand, or a viewer would never find
+them despite them being visibly present on the page.
+
 Run once:
     python3 build_small_power_cable_template.py
 Regenerates Small_Power_and_Control_Cable_Inspection_and_Test_Record_TEMPLATE.pdf
 next to this script.
 """
+import io
 from pathlib import Path
 
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, TextStringObject
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "assets" / "small_power_cable_source.pdf"
 OUT = HERE / "Small_Power_and_Control_Cable_Inspection_and_Test_Record_TEMPLATE.pdf"
+
+PAGE_W_PT, PAGE_H_PT = letter
+
+# Real "Signature:" blank-line extent for each representative, read
+# directly off the source PDF's own text (get_text("words"), top-down
+# space - PyMuPDF's own convention, NOT the PDF's native bottom-left
+# origin - see transformer_test_field_positions.py's own docstring for
+# the full story of why this matters). "Signature:" itself ends at
+# x=86.7 (Yanda)/x=342.4 (Client); each blank underscore run - the real
+# value zone - spans the coordinates below, y638.6-650.1 for both
+# (same row, two columns).
+SIGNATURE_FIELDS_TOPDOWN = {
+    "yanda_rep_signature": ((89.0, 271.0), (638.6, 650.1)),
+    "client_rep_signature": ((344.6, 526.9), (638.6, 650.1)),
+}
+
+
+def _to_pdf_y(y0_topdown, y1_topdown):
+    return PAGE_H_PT - y1_topdown, PAGE_H_PT - y0_topdown
 
 RENAME = {
     "Text37": "cable_tag_number",
@@ -82,6 +121,30 @@ RENAME = {
     # left as-is (already meaningful, already correctly pre-filled
     # constants baked in by the source PDF itself): Project, Location, Job No
 }
+
+
+def build_signature_fields_overlay():
+    """A single blank page with nothing but 2 invisible AcroForm text
+    field widgets on it (yanda_rep_signature, client_rep_signature),
+    positioned exactly on top of the real source PDF's own printed
+    "Signature:" blank lines - reportlab's own page, completely separate
+    from the real source page, merged onto it afterward so none of that
+    page's own content (including the other 41 real fields, already
+    renamed in place) is ever redrawn."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    for field_id, (x_range, y_range_td) in SIGNATURE_FIELDS_TOPDOWN.items():
+        x0, x1 = x_range
+        y0, y1 = _to_pdf_y(*y_range_td)
+        c.acroForm.textfield(
+            name=field_id, tooltip=field_id, x=x0, y=y0, width=x1 - x0, height=y1 - y0,
+            borderStyle=None, borderWidth=0, fillColor=None,
+            forceBorder=False, fontSize=8,
+        )
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf
 
 
 def ensure_default_resources(writer):
@@ -147,13 +210,32 @@ def build():
             if "/AP" in obj:
                 del obj[NameObject("/AP")]
 
+    # 2 brand new fields (yanda_rep_signature/client_rep_signature) - see
+    # this script's own docstring (REVISION 3) for why these aren't just
+    # more RENAME entries: the real source has no signature field at all.
+    before = {id(a) for a in page["/Annots"]}
+    overlay_reader = PdfReader(build_signature_fields_overlay())
+    page.merge_page(overlay_reader.pages[0])
+    new_widgets = [a for a in page["/Annots"] if id(a) not in before]
+    if len(new_widgets) != len(SIGNATURE_FIELDS_TOPDOWN):
+        raise ValueError(
+            f"Expected {len(SIGNATURE_FIELDS_TOPDOWN)} new signature widgets after merge, "
+            f"got {len(new_widgets)}"
+        )
+    # merge_page() only adds the new widgets to the PAGE's own /Annots -
+    # the document catalog's existing /AcroForm/Fields array (already
+    # populated by the 41 renamed fields) needs them appended by hand, or
+    # a viewer would never find them despite them being visibly present.
+    writer._root_object["/AcroForm"]["/Fields"].extend(new_widgets)
+
     ensure_default_resources(writer)
     writer.set_need_appearances_writer(True)
     with open(OUT, "wb") as fh:
         writer.write(fh)
 
     print(f"Wrote {OUT} - renamed {renamed} of {len(RENAME)} fields "
-          "(3 more - Project/Location/Job No - kept their original real names)")
+          "(3 more - Project/Location/Job No - kept their original real names), "
+          f"added {len(new_widgets)} new signature fields")
 
 
 if __name__ == "__main__":

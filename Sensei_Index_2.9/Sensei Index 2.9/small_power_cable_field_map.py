@@ -9,11 +9,20 @@ official source PDF (YCQE-EI-113 Rev.0) - not reconstructed from a
 hand-filled scan. That source PDF already had its own correctly-positioned
 AcroForm fields (41 of them - one per fillable cell, authored by whoever
 built the original Word/PDF form), so build_small_power_cable_template.py
-does no whiteout and draws no new fields at all: it takes the real PDF
-byte-for-byte and only renames each field's internal /T name to this
-schema's own id (an identity mapping below, same shape every other
-Electrical form's field_map.py already uses) - see that script's own
-docstring for the exact rename table.
+does no whiteout for those: it takes the real PDF byte-for-byte and only
+renames each field's internal /T name to this schema's own id (an
+identity mapping below, same shape every other Electrical form's
+field_map.py already uses) - see that script's own docstring for the
+exact rename table.
+
+REVISION 3: yanda_rep_signature/client_rep_signature added. The real PDF
+still has no signature field of its own for either representative - only
+a printed "Signature:" label and blank line - but build_small_power_cable
+_template.py now merges 2 brand new fields on top of those 2 blank lines
+(same merge-overlay technique transformer_test/general_equip_install use
+for forms whose real source has no fields at all, just applied here to 2
+specific cells on a source that otherwise already had its own 41). Both
+new ids map to themselves too, same identity shape as every other field.
 
 Every field is a plain text widget - no checkbox/ATC/multi-widget special
 cases (the "Initial /NA" verification columns and "TORQUE MARKED"-style
@@ -34,11 +43,7 @@ FIELD_MAP["location"] = "Location"
 
 YES_NO_CHECKBOXES = {}
 
-# No signature field exists on the real PDF for either representative -
-# hand-signed only, same convention eht_removal/eht_rtd already use (see
-# their own field_map.py UNMAPPED_NOTE for the identical situation).
-UNMAPPED_NOTE = (
-    "Both Yanda QA Representative and Client Representative Signature "
-    "lines have no digital field on the real source PDF - hand-sign those "
-    "after exporting, same as eht_removal/eht_rtd."
-)
+# Nothing unmapped - yanda_rep_signature/client_rep_signature are new
+# fields merged onto the real PDF (see this module's own docstring,
+# REVISION 3), not hand-signed-only fields with no backing field at all.
+UNMAPPED_NOTE = None

@@ -1400,10 +1400,12 @@ def test_transformer_test_template_has_no_baked_in_sample_data():
 # from the user's own real, official source PDF (assets/
 # small_power_cable_source.pdf) - see build_small_power_cable_template.py's
 # own docstring. That real PDF already has its own correctly-positioned
-# AcroForm fields, so there's no whiteout/reconstruction involved at all -
-# no signature-stamp mechanism either (no digital signature field exists on
-# the real PDF - hand-signed only, same as eht_removal/eht_rtd's own tests
-# not having any signature-stamp tests either).
+# AcroForm fields, so there's no whiteout/reconstruction involved for those.
+# REVISION 3: yanda_rep_signature/client_rep_signature are new fields
+# merged onto the real PDF's own blank "Signature:" line (the real PDF
+# still has no signature field of its own - see that same docstring) -
+# yanda_rep_signature gets the automatic stamp, same as every other
+# signature-bearing Electrical form's own tests below.
 # ===========================================================================
 
 def test_add_zone_creates_small_power_cable_sheet(isolated_app_dir):
@@ -1477,9 +1479,62 @@ def test_generate_preview_pdf_small_power_cable_fills_real_fields(isolated_app_d
     assert fields["remarks_line1"].get("/V") == "line1"
     assert fields["remarks_line2"].get("/V") == "line2"
     assert fields["yanda_rep_name"].get("/V") == "J. Doe"
-    # no signature field exists on this form at all (hand-signed only) -
-    # see build_small_power_cable_template.py's own docstring.
-    assert "yanda_rep_signature" not in fields
+    # yanda_rep_signature's own typed value is superseded by the automatic
+    # signature image stamp (generate_preview_pdf() always stamps by
+    # default) - see the dedicated stamp tests below.
+    assert fields["yanda_rep_signature"].get("/V") in (None, "")
+
+
+def test_generate_preview_pdf_small_power_cable_stamps_yanda_signature_by_default(isolated_app_dir):
+    """Same XObject-diff signal as every other signature-bearing
+    Electrical form's own equivalent test."""
+    from export_small_power_cable_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_tag_number": "29152-XY-0203"})
+
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "small_power_cable", row)
+    with_stamp_keys = _xobject_keys(out_path)
+
+    baseline_path = eda.ELECTRICAL_TEMP_DIR / "spc_xobject_baseline_no_stamp.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"cable_tag_number": "29152-XY-0203"}, baseline_path, add_signature=False)
+    baseline_keys = _xobject_keys(baseline_path)
+
+    assert with_stamp_keys > baseline_keys
+    assert len(with_stamp_keys) == len(baseline_keys) + 1
+
+
+def test_small_power_cable_yanda_rep_signature_typed_value_still_fills_when_stamp_is_off(isolated_app_dir):
+    from export_small_power_cable_to_pdf import fill_pdf, DEFAULT_TEMPLATE
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {
+        "cable_tag_number": "29152-XY-0203", "yanda_rep_signature": "J. Doe",
+    })
+    full = eda.read_full_row("K1B Well Pad", "small_power_cable", row)
+    out_path = eda.ELECTRICAL_TEMP_DIR / "spc_no_stamp_typed_value_check.pdf"
+    fill_pdf(DEFAULT_TEMPLATE, {"yanda_rep_signature": full["yanda_rep_signature"]}, out_path, add_signature=False)
+
+    fields = PdfReader(str(out_path)).get_fields()
+    assert fields["yanda_rep_signature"].get("/V") == "J. Doe"
+
+
+def test_run_export_small_power_cable_respects_include_signature_toggle(isolated_app_dir):
+    tmp_path, da = isolated_app_dir
+    eda.add_zone("K1B Well Pad")
+    row = eda.find_first_blank_row("K1B Well Pad", "small_power_cable")
+    eda.save_row("K1B Well Pad", "small_power_cable", row, {"cable_tag_number": "29152-XY-0203"})
+
+    written_with = eda.run_export("K1B Well Pad", "small_power_cable", mode="all", include_signature=True)
+    written_without = eda.run_export("K1B Well Pad", "small_power_cable", mode="all",
+                                       include_signature=False, suffix="nosig")
+
+    with_keys = _xobject_keys(written_with[0])
+    without_keys = _xobject_keys(written_without[0])
+    assert with_keys > without_keys
+    assert len(with_keys) == len(without_keys) + 1
 
 
 def test_small_power_cable_field_mapping_fidelity_against_its_own_template():
