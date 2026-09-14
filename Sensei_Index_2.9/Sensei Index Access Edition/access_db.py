@@ -74,18 +74,26 @@ def _row_to_dict(cursor, row):
 
 def insert_row(conn, table_name, values):
     """values: {column: value} - INSERTs one new row, returns its real
-    autoincrement id (Access's own @@IDENTITY, same as SQLite's own
-    cursor.lastrowid - both drivers expose this the same DB-API way)."""
+    autoincrement id. sqlite3's own Cursor always has a lastrowid
+    attribute (populated after an INSERT); pyodbc's Access driver's own
+    Cursor has NO such attribute AT ALL - not just unpopulated, genuinely
+    missing, so a bare cursor.lastrowid raises AttributeError rather than
+    returning None (confirmed the hard way, via
+    .github/workflows/build-access-edition.yml's own real-Access run -
+    this is exactly the class of dialect gap the local SQLite-backed
+    tests can't catch, see this module's own docstring). getattr(...,
+    None) covers both drivers uniformly; @@IDENTITY is the fallback
+    every real Access connection needs."""
     columns = list(values.keys())
     placeholders = ", ".join("?" for _ in columns)
     col_sql = ", ".join(_quoted(c) for c in columns)
     sql = f"INSERT INTO {_quoted(table_name)} ({col_sql}) VALUES ({placeholders})"
     cursor = conn.cursor()
     cursor.execute(sql, list(values.values()))
-    new_id = cursor.lastrowid
+    new_id = getattr(cursor, "lastrowid", None)
     if new_id is None:
-        # pyodbc's Access driver doesn't always populate lastrowid -
-        # @@IDENTITY is the reliable fallback for a COUNTER column.
+        # @@IDENTITY is the reliable way to get a COUNTER column's
+        # just-inserted value back from Access via ODBC.
         cursor.execute("SELECT @@IDENTITY")
         new_id = cursor.fetchone()[0]
     conn.commit()
