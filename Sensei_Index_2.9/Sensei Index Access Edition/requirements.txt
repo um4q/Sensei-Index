@@ -1,0 +1,10 @@
+# Runtime (needed to actually run access_gui_app.py):
+PySide6>=6.5
+pyodbc>=5.0
+openpyxl>=3.1
+pypdf>=4.0
+reportlab>=4.0
+
+# Build-only (needed just to run build_access_database.py ONCE, to
+# create SenseiIndex.accdb - not needed afterward):
+pywin32>=306

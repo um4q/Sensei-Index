@@ -1,0 +1,483 @@
+SENSEI INDEX ACCESS EDITION - HOSTING YOUR DATABASE ON SHAREPOINT
+====================================================================
+
+This guide covers how to move the Sensei Index database off a single
+local file and into the cloud, so people at different sites/locations
+can all work off the same live data instead of emailing or copying a
+.accdb file back and forth. It covers two ways to do that, with a clear
+recommendation, plus the setup steps, the real limitations, and fixes
+for the problems people actually run into.
+
+Important framing up front: Sensei Index itself (the Python/PySide6
+app with the windows, buttons, and PDF exports you already know) keeps
+running locally on each person's Windows PC either way. Nothing below
+turns this into a web app. What moves to the cloud is only the DATA -
+the tables the app reads and writes to.
+
+
+WHICH OPTION SHOULD I ACTUALLY PICK
+--------------------------------------
+If more than one or two people genuinely need to add or edit records
+around the same time - different shifts, different sites, people
+working the same day - go with Option A (Access front end linked to
+SharePoint Lists). It is more setup work up front, but it is the setup
+that is actually built for real simultaneous multi-user access, and it
+is the pattern Microsoft itself recommends for exactly this situation.
+
+If it is a small team where realistically only one person is ever
+actively entering data at a time and everyone else is just looking
+things up or pulling reports, and you would rather not touch the table
+structure at all, Option B (putting the .accdb file itself in a
+SharePoint-synced OneDrive folder) is a reasonable, low-effort choice.
+Just go in knowing it is file sharing, not true multi-user access, and
+two people editing at once is the one thing it does not handle safely.
+
+When in doubt, pick Option A. The main reason to pick Option B instead
+is that you specifically want to avoid rebuilding the table schema as
+SharePoint Lists right now, and you are confident overlapping edits
+will stay rare.
+
+
+WHAT "HOSTING IN THE CLOUD" ACTUALLY MEANS HERE
+----------------------------------------------------
+Under Option A, the .accdb file sitting on each person's PC stops being
+where the data actually lives. It becomes a thin local shell that holds
+linked table definitions pointing at SharePoint - opening a table, or
+the app querying it, pulls current records from the SharePoint site
+over the network, and saving a record writes it back to SharePoint. The
+forms, reports, and the Sensei Index app's own logic all stay exactly
+where they are, running locally, same as today.
+
+Under Option B, nothing about the database structure changes at all -
+the .accdb file is still one single file containing everything, the
+same as it is right now. The only change is where that one file
+physically sits: inside a folder that OneDrive keeps synced to a
+SharePoint document library, instead of sitting only on one person's
+hard drive.
+
+Either way, end users are still double-clicking the same app on their
+own PC. The difference is entirely on the data side.
+
+
+COST AND LICENSING, ROUGHLY
+--------------------------------
+SharePoint (team sites, Lists, and document libraries) is included in
+most Microsoft 365 business and enterprise plans - Business Basic,
+Business Standard, Business Premium, and any of the Enterprise plans
+(E1, E3, E5). It is also sold on its own as SharePoint Online Plan 1 or
+Plan 2 for organizations that do not want a full Microsoft 365 bundle,
+usually cheaper per user than the bundled plans. As of 2026 the small
+business bundles run roughly in the $6 to $22 per user, per month range
+depending on the tier and any current promotions - check current
+pricing with whoever manages your Microsoft 365 tenant, since it does
+shift over time and by region.
+
+Microsoft Access, the desktop application you need installed to do the
+actual table-linking setup described below, is included in Microsoft
+365 Business Standard, Business Premium, and the Enterprise/Apps for
+Enterprise plans, plus the older perpetual Office Professional /
+Professional Plus licenses. It is notably NOT included in Microsoft 365
+Business Basic or in the base Personal, Family, or Apps for Business
+plans - this catches people out regularly, so confirm the specific plan
+actually includes Access before assuming it does. Only whoever is
+setting up or maintaining the linked tables strictly needs Access
+installed and licensed; the rest of the team just needs a Microsoft 365
+account with permission to the SharePoint site, since ordinary end
+users go through the Sensei Index app itself, not the Access
+application window.
+
+Storage is normally a non-issue at this app's scale - Microsoft 365
+tenants get a pooled SharePoint storage allowance (typically 1 TB plus
+an extra allotment per licensed user), which comfortably covers the
+Lists plus exported PDFs and signature images unless volumes grow into
+the hundreds of gigabytes.
+
+
+OPTION A (RECOMMENDED) - HOW THE ARCHITECTURE ACTUALLY WORKS
+------------------------------------------------------------------
+The Access front end (the local .accdb, or a locked-down .accde) stays
+installed on every PC exactly like it does today. What changes is that
+the real tables - Transmitters, Valves, the equipment logs, everything
+the app currently stores in local tables - get recreated as SharePoint
+Lists on a SharePoint site out in the cloud. Those tables are then
+linked into each user's local .accdb using Access's own External Data
+feature, so the local file no longer holds the actual data, only a
+pointer to where the data really lives.
+
+From the local .accdb's perspective, and therefore from the Sensei
+Index app's perspective, the tables still have the same names and the
+same fields as before, and can still be queried the normal way. Access
+handles the translation to and from SharePoint behind the scenes. Every
+user's PC has its own small local .accdb shell, but all of those shells
+point at the same SharePoint site, so everyone really is reading and
+writing the same shared data - they just each have their own local
+front-end file to get to it, same as any classic Access front-end/
+back-end split, just with SharePoint standing in as the back end
+instead of a shared network drive or SQL Server.
+
+
+OPTION A - PREREQUISITES
+------------------------------
+- A Microsoft 365 subscription that includes SharePoint (see the cost
+  and licensing section above for which tiers qualify).
+- A SharePoint site to hold the Lists and document library. This can be
+  a new dedicated site built just for Sensei Index data, or an existing
+  team site if your organization already has one for this group.
+- Someone with SharePoint admin rights (or at least Site Collection
+  Administrator / Global Administrator rights on the tenant) to create
+  the site the first time and set its top-level permissions. Day to day
+  use after that does not need admin rights.
+- Microsoft Access installed on at least one PC, to do the table
+  linking. It is fine if only whoever is setting this up has Access
+  installed - other users do not need it.
+- Every end user needs their own Microsoft 365 account with permission
+  to the SharePoint site (see the security section further down).
+
+
+OPTION A - STEP BY STEP SETUP
+------------------------------------
+1. Create the SharePoint site. Go to your organization's SharePoint
+   start page (or the SharePoint admin center at admin.microsoft.com if
+   you have admin rights) and choose Create Site > Team Site. Give it a
+   clear name, something like "Sensei Index Data," and set it private
+   unless there is a specific reason to make it broader. This step
+   needs a SharePoint admin or someone with permission to create sites.
+
+2. Set up permission groups on the site before adding any data. Use the
+   site's default Owners / Members / Visitors groups (more on this in
+   the security section) rather than sharing things to individual
+   people one at a time.
+
+3. Create a SharePoint List for each table the app needs, matching the
+   existing Access schema. From the site, choose New > List > Blank
+   List, name it to match the table (for example Transmitters, Valves,
+   TorqueingRecords, EHTRemoval, matching whatever the app's current
+   table names are), and add columns matching the fields already in
+   that table.
+
+4. Map each Access field type to the closest SharePoint column type
+   when creating those columns:
+     - Short Text -> Single line of text
+     - Memo / Long Text -> Multiple lines of text (leave rich text
+       formatting turned off if the field is meant to hold plain notes,
+       not formatted text - it behaves more predictably that way)
+     - Number -> Number
+     - Currency -> Currency
+     - Date/Time -> Date and Time
+     - Yes/No -> Yes/No
+     - AutoNumber primary keys - do not try to recreate the old
+       autonumber behavior. Every SharePoint list already has its own
+       built-in auto-incrementing ID column; either adopt that as the
+       new primary key going forward, or add a separate Number column
+       if you need to preserve legacy ID values from the old data.
+     - Relationships between tables (e.g. a row pointing at a Series or
+       a System) -> SharePoint's Lookup column type, pointed at the
+       related list. See the limitations section below for the quirks
+       here before leaning on this heavily.
+
+5. If there is existing data to bring over, import it into each new
+   List (SharePoint can import from an Excel/CSV export of the old
+   table data) before linking, so users start with real data in place
+   rather than empty lists.
+
+6. On each user's PC, open the local .accdb front end, go to the
+   External Data ribbon tab, and choose the SharePoint List option (in
+   current Access versions this is under New Data Source > From Online
+   Services > SharePoint List; in some versions it is simply listed as
+   "SharePoint List" directly). Enter the SharePoint site's URL, sign in
+   with a Microsoft 365 account that has access to the site, and select
+   the lists to bring in.
+
+7. Choose "Link to the data source by creating a linked table" (not
+   Import) - Import would just copy a one-time snapshot into the local
+   file, which defeats the purpose. Linking keeps the local table
+   pointed live at SharePoint.
+
+8. Finish the wizard. The linked tables appear in the Navigation pane
+   with a small link icon next to them. If needed, rename them to match
+   whatever table names the app's code expects, since the app is
+   querying by table name.
+
+9. Test it before rolling it out: open a linked table in Access, add or
+   edit a row, and confirm the change shows up immediately when you
+   view that list in a browser, and vice versa - edit it in the browser
+   and confirm Access picks up the change.
+
+10. Repeat steps 6 through 9 on every PC that will use the app. Each
+    person's local .accdb needs its own set of linked tables pointed at
+    the same SharePoint site, and each person signs in with their own
+    Microsoft 365 account (not a shared login - see the security
+    section for why that matters).
+
+11. Nothing about how the Sensei Index app itself connects to its
+    database needs to change - it is still pointed at the same local
+    .accdb file, same table names, same fields. The only visible
+    difference for the end user is a one-time Microsoft 365 sign-in
+    prompt the first time the linked tables are used on their PC, and
+    that the app now needs an internet connection to work, since the
+    data is no longer sitting on the local hard drive.
+
+
+OPTION A - REAL LIMITATIONS TO KNOW UPFRONT
+--------------------------------------------------
+SharePoint Lists are not a drop-in replacement for real Access tables,
+and it is worth knowing where the differences show up before you are
+relying on this in production.
+
+Column types are close but not identical to Access field types. Long
+text columns work fine for notes but are not meant for huge blobs of
+data, and formatting behaves a little differently than an Access memo
+field. Lookup columns work but add network overhead and do not enforce
+relational integrity the way a real Access relationship with cascading
+updates/deletes does - if the app depends on rules like "you can't
+delete a Series that still has rows referencing it," that rule needs to
+be enforced in the app's own code, not assumed to come from the
+database layer anymore.
+
+There is no true multi-column unique constraint in a SharePoint List.
+SharePoint can enforce uniqueness ("Enforce unique values") on one
+column at a time, but not across a combination of columns together. If
+part of the existing Access schema relies on a compound key across two
+or more fields, that needs to either become a single combined key
+column (for example concatenating two fields into one indexed text
+column), or be enforced as validation in the app itself rather than at
+the table level.
+
+The list view threshold is a real ceiling to plan around: a single
+SharePoint list view cannot display more than 5,000 items at once by
+default, and operations that would need to scan across more than 5,000
+items (certain sorts, filters, or queries that are not backed by an
+index) can fail outright once a list crosses that size. Equipment
+tracking data tends to accumulate for years, so this is worth planning
+for on the bigger tables from day one, not after it becomes a problem -
+see the troubleshooting section for the fix.
+
+Performance is a real consideration too. Every read and write is now a
+network round trip instead of a local disk read, so normal one-record-
+at-a-time editing through the app's forms feels fine, but bulk
+operations - the kind of "log forty rows at once" or bulk-import habits
+this app has historically supported - will be noticeably slower than
+they were against a local file, and that is worth setting expectations
+for rather than being surprised by later.
+
+There is also no offline access under this setup. If a location loses
+its internet connection, the app cannot reach the SharePoint-linked
+tables at all, so it is worth thinking about whether any of the sites
+using this app have unreliable connectivity before committing fully.
+
+
+OPTION A - WHERE PDFS AND SIGNATURE IMAGES SHOULD LIVE
+------------------------------------------------------------
+Sensei Index generates filled PDF forms and captures signature images
+as part of its normal workflow. Do not try to store these as
+attachments crammed into a SharePoint List item - Lists do technically
+support file attachments per row, but it is a clunky fit, has its own
+size ceiling, does not version cleanly, and is not built for how this
+app names and organizes its exports.
+
+Instead, create a separate SharePoint Document Library on the same site
+(New > Document Library - something like "Sensei Index Exports," or
+split into separate libraries for exported PDFs versus signature
+images if that is cleaner for how the team browses them later), and
+have the app save its generated PDFs and signature files there instead
+of, or in addition to, local disk.
+
+The simplest way to do this day to day is to sync that document library
+locally through the OneDrive client (the same mechanism described under
+Option B below) and just point the app's existing save location at that
+synced folder - the app's file-writing logic does not need to change,
+only the destination path. A more robust longer-term approach is
+uploading files directly to the library through the Microsoft Graph API
+or SharePoint's REST endpoints, but that is a bigger lift and not
+required to get this working.
+
+Either way, store a reference back to the file - its library URL or
+relative path - on the corresponding List item, so a data record can be
+traced straight to its exported PDF or signature image and back.
+
+
+OPTION A - BACKUP AND VERSION HISTORY
+--------------------------------------------
+SharePoint keeps version history on both Lists and document libraries
+automatically, turned on by default. Every time a list item changes or
+a file in a library is overwritten, a new version is saved, and any
+prior version can be restored directly from SharePoint - right-click a
+file and choose Version History, or open a list item's own version
+history from its details pane. This effectively replaces the app's old
+habit of keeping periodic local Excel backup copies of the whole
+workbook, since the equivalent protection is now built into where the
+data lives.
+
+The Recycle Bin is worth knowing about too - deleted items and files
+land there for a retention window (typically around 93 days) before
+being permanently purged, which is another safety net against an
+accidental delete. It is still a good idea to occasionally export a
+fresh offline backup snapshot for long-term safekeeping, but SharePoint
+version history handles day-to-day "undo that edit" recovery without
+any extra effort from users.
+
+
+OPTION B (SIMPLER FALLBACK) - HOW IT ACTUALLY BEHAVES
+------------------------------------------------------------
+Instead of restructuring the tables into SharePoint Lists, this option
+just takes the existing .accdb file as-is and places it inside a folder
+that syncs through OneDrive to a SharePoint document library (or a
+Team's Files tab, which is the same underlying mechanism). Everyone who
+needs access syncs that same library locally through their own OneDrive
+client, so the .accdb file physically sits somewhere like
+C:\Users\<name>\OrgName\SiteName - Documents\SenseiIndex.accdb on each
+person's PC, and OneDrive quietly keeps it synced up to the cloud and
+back down to everyone else's copy.
+
+This is file-level sync, not real multi-user database access, and that
+distinction matters. Access's own file-locking still fully applies -
+when someone has the .accdb open, Access creates a companion .laccdb
+lock file alongside it, and while that lock exists, other users opening
+the same .accdb are restricted, exactly as if it were sitting on a
+plain shared network drive. OneDrive syncing the file around does not
+change or improve that behavior at all.
+
+The real risk is that OneDrive sync has no awareness of database file
+locking. If two people happen to have the .accdb open on their own PCs
+at the same time and both make changes, OneDrive can end up syncing two
+different edited versions of the same file and creating a conflicted
+copy (something like "SenseiIndex-JohnPC.accdb" appearing alongside the
+original). For a database file, that is not a minor annoyance - it is a
+genuine corruption and data-loss risk, especially if it happens mid-
+write.
+
+
+OPTION B - WHY IT IS NOT A FIT FOR GENUINE SIMULTANEOUS EDITING
+------------------------------------------------------------------------
+Because of the locking and sync-conflict behavior above, this option is
+a poor substitute for real multi-user access. If your team regularly
+has more than one person actively entering or editing data at
+overlapping times - different shifts covering the same equipment,
+multiple sites entering records the same day - this approach will
+eventually produce a locked-out user, a sync conflict, or both. It
+should not be treated as a real alternative to Option A for a team that
+actually needs concurrent editing.
+
+
+OPTION B - WHEN IT IS ACTUALLY THE RIGHT, PRAGMATIC CHOICE
+------------------------------------------------------------------
+For a small team - two or three regular users - where in practice only
+one person is ever actively entering data at a given time and everyone
+else is mainly viewing records or pulling reports, this is a reasonable
+and genuinely pragmatic choice. It requires no schema migration, no
+relinking of tables, and no rebuild of the database structure - the
+existing .accdb keeps working exactly as it always has, just from a
+synced cloud folder instead of a purely local one. It also works fine
+as a quick, low-effort stepping stone while a proper Option A migration
+is being planned for later.
+
+If going this route, a few practical habits make it noticeably safer:
+agree informally as a team on who is using the database at any given
+moment (even a quick message in a group chat covers this), close the
+app fully when finished rather than leaving it open in the background,
+and keep an eye on the OneDrive sync status icon for the file so a
+conflict gets noticed and dealt with quickly rather than sitting
+unnoticed.
+
+
+SECURITY BASICS - WHO SHOULD HAVE ACCESS
+----------------------------------------------
+Control access to the SharePoint site (and, under Option A, therefore
+to the data itself) through SharePoint's own built-in permission groups
+- Owners, Members, and Visitors by default - rather than sharing
+individual lists, libraries, or files to individual people one at a
+time. Add someone to the right group when they join the team and remove
+them from it when they leave; that is far easier to keep accurate over
+time than trying to track down every individual grant later.
+
+Decide who genuinely needs to add and edit records (Members) versus who
+only needs to view data or pull reports (Visitors, which is read-only),
+and keep the Owners group small, since Owners control the site's
+permissions and structure itself, not just its data.
+
+Every user should sign in with their own individual Microsoft 365
+account rather than a shared or generic login. Beyond just being good
+practice, this is what makes SharePoint's version history and any audit
+trail actually useful - you can see who really made a given change,
+rather than every edit showing up under one shared identity.
+
+Do not expose the SharePoint site anonymously or through "anyone with
+the link" style external sharing. This is internal operational and
+equipment data, and sharing should be locked down to people within your
+organization at minimum, ideally restricted further to the specific
+people or groups who need it. If external sharing is enabled tenant-
+wide by default, ask whoever administers the Microsoft 365 tenant to
+turn off anonymous and external link sharing for this specific site.
+
+
+TROUBLESHOOTING
+--------------------
+Linked table keeps prompting for sign-in, or authentication pop-ups
+appear repeatedly. SharePoint-linked tables in Access store an
+authentication token locally, and that token expires periodically or
+breaks outright when a Microsoft 365 password changes, multi-factor
+authentication gets re-registered, or a session gets revoked by an
+administrator. The fix is to let it re-prompt and sign in again; if it
+keeps failing, delete the linked table and relink it fresh through
+External Data > SharePoint List rather than trying to repair a stale
+connection. This is a per-PC, per-user issue tied to locally cached
+credentials, so one person's password change only breaks their own
+linked tables, not anyone else's.
+
+"This record has been locked by another user" showing up on
+SharePoint-linked tables. This happens when two people try to save an
+edit to the same record within roughly the same window of time -
+SharePoint applies its own item-level locking during a save, and Access
+surfaces that using the same message it would show for a normal local
+record lock. It is usually transient; wait a few seconds and try again.
+If it does not clear up, check whether someone has that specific record
+open in an edit view in a browser and simply has not saved or closed
+it, and that item's own version history in SharePoint can confirm
+whether a save actually went through despite the error message.
+
+Data type mismatch errors, or a column showing up as read-only after
+linking. SharePoint distinguishes between "Simple" column types, which
+Access can link to and edit normally, and "Complex" types - calculated
+columns, certain lookup configurations, managed metadata, and a handful
+of others - which Access either cannot link to at all or links to as
+read-only. If a column refuses to link or shows up locked for editing,
+check that column's type in the SharePoint list settings first. The fix
+is almost always to simplify the column itself (convert a calculated
+column to a plain stored value, or swap a multi-value lookup for a
+straightforward single-value one) rather than trying to force Access to
+accept it as-is.
+
+Hitting the 5,000-item list view threshold. This shows up as a list
+that will not display all of its rows, a filter or sort that suddenly
+fails or times out, or an outright threshold error, once a list crosses
+roughly 5,000 items (or once an operation on it would need to scan more
+than 5,000 items without an index to narrow things down first). The fix
+is to add indexed columns to the list (List Settings > Indexed Columns)
+on whatever fields are commonly filtered or sorted on - Series, Date,
+Status, and similar - and make sure both Access queries and the app's
+own data access code filter on one of those indexed columns instead of
+pulling the entire table at once. This is worth setting up proactively
+on the larger tables in this app, since equipment tracking data tends
+to keep growing for as long as the app is in use.
+
+
+QUICK REFERENCE CHECKLIST
+------------------------------
+- Confirm your Microsoft 365 plan includes SharePoint, and that Access
+  is installed wherever the linking setup will be done.
+- Pick Option A for genuine multi-user, multi-location use; pick Option
+  B only for a small team where overlapping edits are rare.
+- Under Option A: create the site, set up permission groups first,
+  build the Lists with types mapped from the existing Access schema,
+  link them into each user's local .accdb, and test writes both ways
+  before rolling out to everyone.
+- Add indexed columns to any table likely to grow past a few thousand
+  rows, before it becomes a problem rather than after.
+- Put exported PDFs and signature images in a SharePoint document
+  library, not squeezed into List attachments.
+- Rely on SharePoint's built-in version history and Recycle Bin instead
+  of the old local Excel-backup habit.
+- Use SharePoint permission groups, individual sign-ins, and no
+  anonymous/external sharing.
+- Under Option B: one editor at a time, close the app when done, and
+  watch the OneDrive sync icon for conflicts.

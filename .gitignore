@@ -43,3 +43,17 @@ Sensei_Index_2.9/Sensei Index 2.9/electrical_backups/
 Sensei_Index_2.9/Sensei Index 2.9/build/
 Sensei_Index_2.9/Sensei Index 2.9/dist/
 Sensei_Index_2.9/Sensei Index 2.9/crash_log.txt
+
+# Access Edition: the real SenseiIndex.accdb is built by .github/
+# workflows/build-access-edition.yml (same "can't cross-compile, a
+# built binary doesn't belong in source control" reasoning as the exe
+# above - Access tooling is just as Windows-only as PyInstaller's own
+# output) and delivered the same way (a git delivery branch, not a
+# commit here - see that workflow's own comments). Its own generated
+# previews/crash log follow the same pattern the Excel edition's own
+# equivalents already do.
+Sensei_Index_2.9/Sensei Index Access Edition/SenseiIndex.accdb
+Sensei_Index_2.9/Sensei Index Access Edition/temp_previews/
+Sensei_Index_2.9/Sensei Index Access Edition/electrical_temp_previews/
+Sensei_Index_2.9/Sensei Index Access Edition/crash_log.txt
+Sensei_Index_2.9/Sensei Index Access Edition/.pytest_cache/

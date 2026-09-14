@@ -1,0 +1,141 @@
+name: Build & verify Sensei Index Access Edition
+
+# Real Microsoft Access (.accdb) tooling is Windows-only, and this repo's
+# own dev environment is Linux - this workflow is the only place any of
+# this ever runs against a REAL Access database. It:
+#   1. Installs the free Microsoft Access Database Engine Redistributable
+#      (the ACE OLEDB provider + ODBC driver - NOT full Access, which
+#      isn't needed and isn't installed on this runner).
+#   2. Runs build_access_database.py to create a real SenseiIndex.accdb
+#      from access_schema.py's own table definitions.
+#   3. Runs the local (SQLite-backed) pytest suite, THEN a real-Access
+#      smoke test against the .accdb this run just built.
+#   4. Launches access_gui_app.py against that real database and
+#      confirms it stays alive (same "launch and check, not just build"
+#      verification build-windows-exe.yml already does for the Excel
+#      edition's own exe).
+#   5. Delivers the built .accdb via a git branch, same reason/same
+#      mechanism as exe-delivery in build-windows-exe.yml - GitHub's own
+#      artifact storage host is blocked by this dev environment's egress
+#      policy, git against github.com is not.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/new-session-rcv1yz
+    paths:
+      - "Sensei_Index_2.9/Sensei Index Access Edition/**"
+      - ".github/workflows/build-access-edition.yml"
+
+permissions:
+  contents: write
+
+env:
+  APP_DIR: "Sensei_Index_2.9/Sensei Index Access Edition"
+  EXCEL_EDITION_DIR: "Sensei_Index_2.9/Sensei Index 2.9"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install app + build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r "$env:EXCEL_EDITION_DIR\requirements.txt"
+          pip install pyodbc pywin32 pytest
+
+      - name: Install Microsoft Access Database Engine Redistributable
+        shell: pwsh
+        run: |
+          $url = "https://download.microsoft.com/download/3/5/C/35C84C36-661A-44E6-9324-8786B8DBE231/accessdatabaseengine_X64.exe"
+          $installer = "$env:RUNNER_TEMP\accessdatabaseengine_X64.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $p = Start-Process -FilePath $installer -ArgumentList "/quiet", "/norestart" -PassThru -Wait
+          if ($p.ExitCode -ne 0) {
+            throw "Access Database Engine installer exited with code $($p.ExitCode)"
+          }
+          Write-Host "Access Database Engine installed."
+
+      - name: Build SenseiIndex.accdb
+        working-directory: ${{ env.APP_DIR }}
+        run: python build_access_database.py
+
+      - name: Run the local (SQLite-backed) logic test suite
+        working-directory: ${{ env.APP_DIR }}
+        run: python -m pytest tests -v
+
+      - name: Run a real-Access smoke test against the built .accdb
+        working-directory: ${{ env.APP_DIR }}
+        shell: pwsh
+        run: |
+          python -c @"
+          import access_db as db
+          import access_electrical_data_access as eda
+          import access_data_access as da
+
+          conn = db.get_connection()
+          zone_id = eda.add_zone(conn, 'CI Test Zone')
+          row_id = eda.find_first_blank_row(conn, 'CI Test Zone', 'transformer_test')
+          eda.save_row(conn, 'CI Test Zone', 'transformer_test', row_id, {'tag': 'CI-TEST-001', 'make': 'CI Make'})
+          full = eda.read_full_row(conn, 'CI Test Zone', 'transformer_test', row_id)
+          assert full['tag'] == 'CI-TEST-001', full
+          assert full['make'] == 'CI Make', full
+          dupe = eda.find_duplicate_row(conn, 'CI Test Zone', 'transformer_test', 'CI-TEST-001', exclude_row=row_id)
+          assert dupe is None
+          out_path = eda.generate_preview_pdf(conn, 'CI Test Zone', 'transformer_test', row_id)
+          assert out_path.exists(), out_path
+
+          series_id = da.add_series(conn, 999, 'CI Series')
+          t_row = da.find_first_blank_row(conn, 999, 'transmitter')
+          da.save_row(conn, 999, 'transmitter', t_row, {'tag': 'CI-TIT-001'})
+          assert da.read_full_row(conn, 999, 'transmitter', t_row)['tag'] == 'CI-TIT-001'
+
+          print('REAL ACCESS SMOKE TEST PASSED')
+          conn.close()
+          "@
+
+      - name: Smoke-test the GUI actually launches against the real database
+        working-directory: ${{ env.APP_DIR }}
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "python" -ArgumentList "access_gui_app.py" -PassThru
+          Start-Sleep -Seconds 10
+          if ($p.HasExited) {
+            $code = $p.ExitCode
+            Write-Host "Process exited early with code $code"
+            if (Test-Path "crash_log.txt") {
+              Write-Host "----- crash_log.txt -----"
+              Get-Content "crash_log.txt" | Write-Host
+            }
+            throw "access_gui_app.py exited on its own within 10s (code $code)"
+          }
+          Write-Host "GUI is still running after 10s (PID $($p.Id)) - clean startup."
+          Stop-Process -Id $p.Id -Force
+
+      - name: Push the built .accdb to a delivery branch (git-fetchable, unlike blob-storage artifacts)
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -e
+          rm -rf /tmp/accdb-delivery
+          mkdir -p /tmp/accdb-delivery
+          cp "SenseiIndex.accdb" /tmp/accdb-delivery/
+          cd /tmp/accdb-delivery
+          git init -q
+          git config user.name "sensei-access-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -q -b accdb-delivery
+          git add "SenseiIndex.accdb"
+          git commit -q -m "SenseiIndex.accdb built from ${{ github.sha }}"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push -f origin accdb-delivery
