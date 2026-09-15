@@ -128,6 +128,26 @@ _add("client_name", "Client Representative - Name", "part8")
 _add("client_date", "Client Representative - Date", "part8")
 _add("client_signature", "Client Representative - Signature", "part8")
 
+# --------------------------------------------------- INDEX - engineering ---
+# Not on the paper Transmitter Inspection & Test Record at all - added per
+# the redesign brief's plate 6a ("engineering-grade" instrument index) so
+# the index table can show loop/drawing references, ranges with units, and
+# document/change-control state without inventing a second data source.
+# export_to_pdf.py already skips any field id with no entry in
+# transmitter_field_map.FIELD_MAP, so these never touch the PDF.
+_add("loop_id", "Loop ID", "index")
+_add("pid_rev", "P&ID Rev", "index")
+_add("hookup_dwg", "Hook-up Dwg", "index")
+_add("loop_dwg", "Loop Dwg", "index")
+_add("jb_number", "JB Number", "index")
+_add("cable_number", "Cable Number", "index")
+_add("io_address", "I/O Address", "index")
+_add("eng_units", "Unit", "index")
+_add("cal_due_date", "Cal. Due Date", "index")
+_add("datasheet_rev", "DS Rev", "index")
+_add("doc_status", "Doc Status", "index", "choice", ["IFC", "IFR", "ECN", "SUP"])
+_add("open_ecn", "Open ECN", "index")
+
 
 # Extra column that only exists in the Excel log (not on the PDF form
 # itself) - the checkbox-like flag that export_to_pdf.py looks at to decide
@@ -168,6 +188,7 @@ SECTION_TITLES = {
     "part6": "PART 6 \u2013 Test Results",
     "part7": "PART 7 \u2013 Remarks",
     "part8": "PART 8 \u2013 Inspected/Approved By",
+    "index": "Engineering Index",
 }
 
 if __name__ == "__main__":

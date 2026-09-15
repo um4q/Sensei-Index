@@ -29,10 +29,11 @@ from PySide6.QtWidgets import (
 
 import data_access as da
 import datasheet_reader
-from theme import LIGHT_QSS, DARK_QSS
+import theme
+from theme import LIGHT_QSS, DARK_QSS, HIGH_CONTRAST_QSS
 
 
-APP_TITLE = "Sensei Index 4.0"
+APP_TITLE = "Sensei Index 3.0"
 
 
 # =============================================================================
@@ -945,13 +946,13 @@ class MainWindow(QMainWindow):
         return "".join(html_parts)
 
     def apply_theme(self):
-        theme = da.get_setting("theme") or "light"
+        theme_name = da.get_setting("theme") or "light"
         app = QApplication.instance()
+        apply_app_theme(app, theme_name)
         title_build = self.findChild(QLabel, "SidebarTitle")
         logo_build = self.findChild(QLabel, "SidebarLogo")
-        app.setStyleSheet(DARK_QSS if theme == "dark" else LIGHT_QSS)
         if title_build is not None:
-            title_build.setStyleSheet("color: white;" if theme == "dark" else "color: black;")
+            title_build.setStyleSheet("color: white;" if theme_name == "dark" else "color: black;")
         if logo_build is not None:
             self._set_logo_pixmap(logo_build)
 
@@ -3693,10 +3694,25 @@ class PopulatingWizardDialog(QDialog):
         super().reject()
 
 
+def apply_app_theme(app, theme_name):
+    """The one place that turns a theme name into an applied stylesheet -
+    called from bootstrap.py at startup and from Settings > Appearance the
+    moment the user changes it (plate 1i: "changes apply immediately")."""
+    qss = {"dark": DARK_QSS, "high_contrast": HIGH_CONTRAST_QSS}.get(theme_name, LIGHT_QSS)
+    scale = da.get_setting("ui_scale") or 100
+    if scale and scale != 100:
+        qss += f"\nQWidget {{ font-size: {round(13 * scale / 100, 1)}px; }}"
+    app.setStyleSheet(qss)
+
+
 def main():
+    """Only reached directly when gui_app.py is run on its own (e.g. during
+    development) - the real entry point is bootstrap.py, which shows the
+    splash screen and imports this module only after its own pre-flight
+    checks pass."""
     app = QApplication(sys.argv)
-    theme = da.get_setting("theme") or "light"
-    app.setStyleSheet(DARK_QSS if theme == "dark" else LIGHT_QSS)
+    theme.load_bundled_fonts()
+    apply_app_theme(app, da.get_setting("theme") or "light")
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

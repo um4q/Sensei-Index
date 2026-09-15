@@ -146,6 +146,23 @@ _add("qc_rep_name", "YANDA QC Representative - Name", "signoff")
 _add("qc_date", "YANDA QC Representative - Date", "signoff")
 _add("commissioning_rep_name", "YANDA Commissioning Representative - Name", "signoff")
 
+# --------------------------------------------------- INDEX - engineering ---
+# Same "index" section as transmitter_schema.py, added by plate 6a - not on
+# the paper Valve Check Record, skipped automatically by export_valve_to_pdf.py
+# since none of these ids exist in valve_field_map.FIELD_MAP.
+_add("loop_id", "Loop ID", "index")
+_add("pid_rev", "P&ID Rev", "index")
+_add("hookup_dwg", "Hook-up Dwg", "index")
+_add("loop_dwg", "Loop Dwg", "index")
+_add("jb_number", "JB Number", "index")
+_add("cable_number", "Cable Number", "index")
+_add("io_address", "I/O Address", "index")
+_add("eng_units", "Unit", "index")
+_add("cal_due_date", "Cal. Due Date", "index")
+_add("datasheet_rev", "DS Rev", "index")
+_add("doc_status", "Doc Status", "index", CHOICE_TYPE, ["IFC", "IFR", "ECN", "SUP"])
+_add("open_ecn", "Open ECN", "index")
+
 
 def by_id(field_id):
     for f in FIELDS:
@@ -167,6 +184,7 @@ SECTION_TITLES = {
     "equipment": "Calibration & Configuration Test Equipment Used",
     "comments": "Comments",
     "signoff": "Sign-Off",
+    "index": "Engineering Index",
 }
 
 # Extra column that only exists in the Excel log (not on the PDF form).
