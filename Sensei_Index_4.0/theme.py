@@ -35,10 +35,7 @@ outline-offset: 2px; }") - Qt has no outline-offset, so the closest
 faithful mapping is a 2px solid border in the focus color, which is what
 every rule below does for :focus.
 """
-from pathlib import Path
-
-HERE = Path(__file__).resolve().parent
-FONTS_DIR = HERE / "assets" / "fonts"
+from paths import FONTS_DIR
 
 BODY_FONT = "Barlow"
 # The bundled static TTFs don't carry the name-table entries Qt needs to

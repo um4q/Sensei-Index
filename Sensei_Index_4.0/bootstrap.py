@@ -18,17 +18,18 @@ imported once that check has already passed.
 import importlib.util
 import sys
 import time
-from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 from splash_screen import SplashScreen
+from paths import HERE
 
-HERE = Path(__file__).resolve().parent
 REQUIRED_PACKAGES = ["PySide6", "openpyxl", "pypdf", "reportlab"]
 
 
 def _check_packages():
+    if getattr(sys, "frozen", False):
+        return True, None  # the installed build carries every dependency baked in
     missing = [pkg for pkg in REQUIRED_PACKAGES if importlib.util.find_spec(pkg) is None]
     if missing:
         return False, (

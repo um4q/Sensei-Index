@@ -36,16 +36,7 @@ import valve_schema
 import export_to_pdf
 import export_valve_to_pdf
 
-# When PyInstaller freezes this into a single .exe, __file__ points inside a
-# temporary extraction folder (sys._MEIPASS) that's deleted when the app
-# closes - using it here would silently lose every edit, setting, and
-# signature the moment the exe exits. sys.executable's folder is the actual,
-# persistent location of the .exe (or of python.exe when running as a plain
-# script, which is why the frozen check comes first).
-if getattr(sys, "frozen", False):
-    HERE = Path(sys.executable).resolve().parent
-else:
-    HERE = Path(__file__).resolve().parent
+from paths import HERE
 
 WORKBOOK_PATH = HERE / "Equipment_Inspection_Tracker.xlsx"
 CONFIG_PATH = HERE / "series_registry.json"

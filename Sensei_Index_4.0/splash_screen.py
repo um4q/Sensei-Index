@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from theme import LIGHT
+from paths import ASSETS_DIR
 
 STEP_LABELS = [
     "Required packages present",
@@ -108,7 +109,7 @@ class SplashScreen(QWidget):
         hlayout.setContentsMargins(26, 22, 26, 22)
         hlayout.setSpacing(18)
         logo = QLabel()
-        pix = QPixmap("assets/oathplatehelm.png")
+        pix = QPixmap(str(ASSETS_DIR / "oathplatehelm.png"))
         if not pix.isNull():
             logo.setPixmap(pix.scaledToHeight(58, Qt.SmoothTransformation))
         hlayout.addWidget(logo)
