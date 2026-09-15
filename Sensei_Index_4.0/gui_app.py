@@ -392,6 +392,7 @@ class MainWindow(QMainWindow):
             bind("Ctrl+K", self._shortcut_focus_global_search),
             bind("Ctrl+P", self.toggle_priorities_strip),
             bind("Alt+D", self._shortcut_open_documents),
+            bind("F6", self._cycle_panes),
             bind("Ctrl+Shift+E", self._shortcut_open_export),
             bind("Delete", self._shortcut_remove_selected),
             bind("F5", self._shortcut_refresh),
@@ -437,6 +438,43 @@ class MainWindow(QMainWindow):
         dlg = DocumentsDialog(self, series_number, equip_key, key_value)
         dlg.exec()
         self.refresh_sidebar_and_dashboard()
+
+    # --------------------------------------------------- F6 pane cycling
+    def _pane_cycle_targets(self):
+        """Series rail -> global search -> the current page's own search/
+        table -> priorities strip (if visible) -> back to the rail. Each
+        stop announces its own name (setAccessibleName on every target),
+        satisfying the keyboard contract's "every pane announces its name"
+        without pretending this app has literal tabs or a selection bar
+        that's always on screen to cycle to."""
+        targets = []
+        if self._rail_row_buttons:
+            targets.append(next(iter(self._rail_row_buttons.values())))
+        else:
+            targets.append(self.dashboard_row_btn)
+        targets.append(self.global_search)
+        page = self.current_dynamic_page
+        if hasattr(page, "search_edit"):
+            targets.append(page.search_edit)
+        if hasattr(page, "table"):
+            targets.append(page.table)
+        if self.priorities_strip.isVisible() and self._priority_chip_row.count():
+            targets.append(self._priority_chip_row.itemAt(0).widget())
+        return targets
+
+    def _cycle_panes(self):
+        targets = self._pane_cycle_targets()
+        if not targets:
+            return
+        focused = QApplication.focusWidget()
+        try:
+            idx = targets.index(focused)
+            nxt = targets[(idx + 1) % len(targets)]
+        except ValueError:
+            nxt = targets[0]
+        nxt.setFocus()
+        name = nxt.accessibleName() or nxt.objectName() or type(nxt).__name__
+        self.statusBar().showMessage(name, 2000)
 
     def _shortcut_remove_selected(self):
         page = self._active_index_page()

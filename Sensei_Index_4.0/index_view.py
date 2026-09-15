@@ -20,7 +20,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QFrame, QSizePolicy,
+    QFrame, QSizePolicy, QInputDialog,
 )
 
 import data_access as da
@@ -318,6 +318,10 @@ class IndexView(QWidget):
             btn.setObjectName("SelectionAction")
             btn.clicked.connect(lambda _c, s=stage: self.bulk_set_stage(s))
             layout.addWidget(btn)
+        date_btn = QPushButton("Set a date…")
+        date_btn.setObjectName("SelectionAction")
+        date_btn.clicked.connect(self.bulk_set_date)
+        layout.addWidget(date_btn)
         queue_btn = QPushButton("Queue for export")
         queue_btn.setObjectName("SelectionPrimary")
         queue_btn.clicked.connect(self.bulk_queue_export)
@@ -552,6 +556,25 @@ class IndexView(QWidget):
             f"{len(rows)} row(s) → {STAGE_WORDS[stage]}", 2500)
         self.reload()
         self.main_window.refresh_sidebar_and_dashboard()
+
+    def bulk_set_date(self):
+        """Replaces the old Mass Edit Dates dialog per plate 1k's
+        "sign-off legend" panel: once every date column carries a signed /
+        not-signed mark, the remaining job is one item in the selection
+        bar and a normal inline edit - no separate dialog needed."""
+        rows = self.selected_rows()
+        if not rows:
+            return
+        date_str, ok = QInputDialog.getText(
+            self, "Set a date", "Date (YYYY-MM-DD), or leave blank to clear:")
+        if not ok:
+            return
+        qa_field = "yanda_qa_date" if self.equip_key == "transmitter" else "qc_date"
+        updates = [(e["row"], qa_field, date_str.strip()) for e in rows]
+        da.save_fields_bulk(self.series_number, self.equip_key, updates)
+        self.main_window.statusBar().showMessage(
+            f"Set {qa_field.replace('_', ' ')} on {len(rows)} row(s)", 3000)
+        self.reload()
 
     def bulk_queue_export(self):
         rows = self.selected_rows()
