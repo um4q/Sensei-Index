@@ -32,6 +32,7 @@ import datasheet_reader
 import theme
 from theme import LIGHT_QSS, DARK_QSS, HIGH_CONTRAST_QSS
 from index_view import IndexView
+from documents_dialog import DocumentsDialog
 
 
 APP_TITLE = "Sensei Index 3.0"
@@ -390,6 +391,7 @@ class MainWindow(QMainWindow):
             bind("Ctrl+F", self._shortcut_focus_search),
             bind("Ctrl+K", self._shortcut_focus_global_search),
             bind("Ctrl+P", self.toggle_priorities_strip),
+            bind("Alt+D", self._shortcut_open_documents),
             bind("Ctrl+Shift+E", self._shortcut_open_export),
             bind("Delete", self._shortcut_remove_selected),
             bind("F5", self._shortcut_refresh),
@@ -421,6 +423,20 @@ class MainWindow(QMainWindow):
     def _shortcut_focus_global_search(self):
         self.global_search.setFocus()
         self.global_search.selectAll()
+
+    def _shortcut_open_documents(self):
+        page = self._active_index_page()
+        if not page:
+            return
+        rows = page.selected_rows()
+        if not rows:
+            return
+        self.open_documents(page.series_number, page.equip_key, rows[0]["key_value"])
+
+    def open_documents(self, series_number, equip_key, key_value):
+        dlg = DocumentsDialog(self, series_number, equip_key, key_value)
+        dlg.exec()
+        self.refresh_sidebar_and_dashboard()
 
     def _shortcut_remove_selected(self):
         page = self._active_index_page()
