@@ -236,6 +236,67 @@ def test_series_type_and_progress_summary_shapes_match_excel_edition(da):
     assert prog["transmitter"]["at_0"] + prog["transmitter"]["partial"] + prog["transmitter"]["at_100"] == 2
 
 
+def test_electrical_count_all_by_type_takes_no_arguments(eda, da):
+    """Regression test for a real crash a user hit on their own machine
+    (not caught by any test before this one, including the earlier
+    MainWindow smoke test - see the module docstring's own note on
+    test_startup_sequence_matches_real_app_launch below for why):
+    access_gui_app.py's own startup path calls eda.count_all_by_type()
+    with ZERO arguments (electrical_data_access.py's own version takes
+    none either - it's a GLOBAL count across every zone, same as
+    da.count_all_by_type()) - this module's own version used to require
+    a zone_name positional argument and crashed on startup every time."""
+    eda.add_zone("Zone A")
+    eda.add_zone("Zone B")
+    row_a = eda.find_first_blank_row("Zone A", "transformer_test")
+    eda.save_row("Zone A", "transformer_test", row_a, {"tag": "A-1"})
+    row_b = eda.find_first_blank_row("Zone B", "transformer_test")
+    eda.save_row("Zone B", "transformer_test", row_b, {"tag": "B-1"})
+
+    totals = eda.count_all_by_type()
+    assert totals["transformer_test"] == 2  # across BOTH zones, not just one
+
+    da.add_series(100)
+    d_row = da.find_first_blank_row(100, "transmitter")
+    da.save_row(100, "transmitter", d_row, {"tag": "T-1"})
+    assert da.count_all_by_type()["transmitter"] == 1
+
+
+def test_startup_sequence_matches_real_app_launch(eda, da, monkeypatch):
+    """Actually runs access_gui_app.py's own _run_startup_with_splash()
+    - the exact function main() calls, and the exact function whose
+    da.list_series()/count_all_by_type()/eda.list_zones()/
+    count_all_by_type() startup sequence crashed on a real user's
+    machine (a MainWindow() smoke test alone does NOT exercise this -
+    it skips straight past the startup-splash pre-warm calls that
+    actually crashed). QT_QPA_PLATFORM=offscreen must be set (see
+    conftest.py) - no real display needed."""
+    import access_db as db
+    import access_gui_app as g
+    from PySide6.QtWidgets import QApplication
+
+    # read_activity_log()'s own `limit` uses Access's "SELECT TOP N"
+    # syntax, which SQLite doesn't support - see test_access_db_logic.
+    # py's own docstring for the same documented gap. MainWindow's
+    # Dashboard reads the activity log on construction, so this test
+    # (which goes through MainWindow via the real startup path) needs
+    # the same local workaround, not something a real Access run needs.
+    _orig = db.read_activity_log
+    monkeypatch.setattr(
+        db, "read_activity_log",
+        lambda conn, limit=None, **kw: _orig(conn, limit=None, **kw)[: (limit or 10**9)])
+
+    eda.add_zone("Zone A")
+    da.add_series(100)
+
+    app = QApplication.instance() or QApplication([])
+    win = g._run_startup_with_splash(app)
+    try:
+        assert win is not None
+    finally:
+        win.close()
+
+
 def test_list_backups_and_restore_backup_shapes(da, tmp_path, monkeypatch):
     """Regression test for a second real bug the same smoke test caught:
     list_backups() used to return raw Path objects, but BackupsDialog

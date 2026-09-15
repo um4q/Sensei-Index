@@ -258,8 +258,24 @@ def count_rows(zone_name, equip_key):
     return len(read_index_rows(zone_name, equip_key))
 
 
-def count_all_by_type(zone_name):
-    return {equip_key: count_rows(zone_name, equip_key) for equip_key in ELECTRICAL_EQUIPMENT_TYPES}
+def count_all_by_type():
+    """{'eht_removal': <total across every zone>, 'eht_rtd': <...>} - same
+    shape and same NO-argument signature as electrical_data_access.py's
+    own count_all_by_type() (a real bug: this used to require a
+    zone_name argument, but gui_app.py's own startup/Dashboard code
+    always calls it with none - it's the GLOBAL count, same as
+    access_data_access.py's own count_all_by_type(); the per-zone count
+    is zone_summary(zone_name), a separate function). Caught via a real
+    crash report from access_gui_app.py's own startup path - no
+    automated test called this with zero arguments before this fix."""
+    totals = {k: 0 for k in ELECTRICAL_EQUIPMENT_TYPES}
+    for zone_name in list_zones():
+        for equip_key in ELECTRICAL_EQUIPMENT_TYPES:
+            try:
+                totals[equip_key] += count_rows(zone_name, equip_key)
+            except KeyError:
+                pass
+    return totals
 
 
 # ---------------------------------------------------------------- PDF export

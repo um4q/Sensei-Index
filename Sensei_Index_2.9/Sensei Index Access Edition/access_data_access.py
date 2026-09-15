@@ -349,11 +349,13 @@ def count_rows(series_number, equip_key):
 
 def count_all_by_type(series_number=None):
     """data_access.py's own count_all_by_type() takes NO arguments at
-    all - it's a global count across every series, unlike
-    electrical_data_access.py's own zone-scoped equivalent. series_number
-    is accepted (and ignored) only so a caller that passes one by
-    mistake doesn't crash; the real per-series version is
-    series_full_summary()."""
+    all - it's a global count across every series (electrical_data_
+    access.py's own count_all_by_type() is the same shape: also global,
+    also no arguments - see access_electrical_data_access.py's own
+    identical function for a real bug that shipped from getting this
+    wrong). series_number is accepted (and ignored) only so a caller
+    that passes one by mistake doesn't crash; the real per-series
+    version is series_full_summary()."""
     totals = {k: 0 for k in EQUIPMENT_TYPES}
     for series_number in list_series():
         for equip_key in EQUIPMENT_TYPES:
