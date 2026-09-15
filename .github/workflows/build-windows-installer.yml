@@ -1,0 +1,112 @@
+name: Build Windows Installer
+
+# Manual only, on purpose - this compiles a full PySide6 app with
+# PyInstaller and then runs Inno Setup, which takes real CI minutes.
+# Trigger it from the Actions tab (or the API/CLI) when a setup.exe
+# build is actually wanted, rather than on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "Display version shown in Add/Remove Programs (e.g. 4.0.0)"
+        required: false
+        default: "4.0.0"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        # Pinned to the exact versions the app is developed and tested
+        # against (see Sensei_Index_4.0/START_SENSEI_INDEX.bat / the dev
+        # environment) so the frozen build behaves the same as a normal
+        # `pip install` run of the source would.
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6==6.11.2 openpyxl==3.1.5 pypdf==6.18.1 reportlab==5.0.1 "pyinstaller>=6.0,<7"
+
+      - name: Build frozen app with PyInstaller
+        working-directory: Sensei_Index_4.0/packaging
+        run: pyinstaller sensei_index.spec --noconfirm
+
+      - name: Verify PyInstaller output
+        working-directory: Sensei_Index_4.0/packaging
+        shell: pwsh
+        run: |
+          $exePath = "dist\SenseiIndex\SenseiIndex.exe"
+          if (-not (Test-Path $exePath)) {
+            throw "PyInstaller did not produce $exePath"
+          }
+          Write-Host "Found $exePath"
+
+      - name: Locate Inno Setup compiler
+        id: iscc
+        shell: pwsh
+        run: |
+          $candidates = @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe'
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) {
+            $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $found = $cmd.Source }
+          }
+          if (-not $found) {
+            throw "Could not locate ISCC.exe (Inno Setup 6) on this runner image."
+          }
+          Write-Host "Using Inno Setup compiler at $found"
+          "path=$found" >> $env:GITHUB_OUTPUT
+
+      - name: Compute version numbers
+        id: ver
+        shell: pwsh
+        run: |
+          $display = "${{ github.event.inputs.app_version }}"
+          if ([string]::IsNullOrWhiteSpace($display)) { $display = "4.0.0" }
+          # VersionInfoVersion (Windows' own binary version metadata) has to
+          # be strictly numeric (up to 4 dot-separated parts) - the run
+          # number is always a plain increasing integer, so it's always a
+          # valid 4th component regardless of what the free-form display
+          # version above is set to.
+          $numeric = "4.0.0.${{ github.run_number }}"
+          Write-Host "Display version: $display / VersionInfo: $numeric"
+          "display=$display" >> $env:GITHUB_OUTPUT
+          "numeric=$numeric" >> $env:GITHUB_OUTPUT
+
+      - name: Build installer with Inno Setup
+        working-directory: Sensei_Index_4.0/packaging
+        shell: pwsh
+        run: |
+          & "${{ steps.iscc.outputs.path }}" `
+            "/DAPP_VERSION=${{ steps.ver.outputs.display }}" `
+            "/DAPP_VERSION_INFO=${{ steps.ver.outputs.numeric }}" `
+            installer.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "ISCC.exe exited with code $LASTEXITCODE"
+          }
+
+      - name: Verify installer output
+        working-directory: Sensei_Index_4.0/packaging
+        shell: pwsh
+        run: |
+          $setupPath = "installer_output\SenseiIndex-Setup.exe"
+          if (-not (Test-Path $setupPath)) {
+            throw "Inno Setup did not produce $setupPath"
+          }
+          Write-Host "Found $setupPath"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SenseiIndex-Setup
+          path: Sensei_Index_4.0/packaging/installer_output/SenseiIndex-Setup.exe
+          if-no-files-found: error
