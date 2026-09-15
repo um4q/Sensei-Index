@@ -1,47 +1,11 @@
-::[Bat To Exe Converter]
-::
-::YAwzoRdxOk+EWAjk
-::fBw5plQjdCyDJGyX8VAjFCJVQgCDf1eeCaIS5Of66/m7kUgTR+c2R6bV3rGWH7Fds3nXcJg+03MascUICQMYL1zyUg4numtWpViKNtOUowPgXk2B40c9VWx3iAM=
-::YAwzuBVtJxjWCl3EqQJgSA==
-::ZR4luwNxJguZRRnk
-::Yhs/ulQjdF+5
-::cxAkpRVqdFKZSDk=
-::cBs/ulQjdF+5
-::ZR41oxFsdFKZSDk=
-::eBoioBt6dFKZSDk=
-::cRo6pxp7LAbNWATEpCI=
-::egkzugNsPRvcWATEpCI=
-::dAsiuh18IRvcCxnZtBJQ
-::cRYluBh/LU+EWAnk
-::YxY4rhs+aU+JeA==
-::cxY6rQJ7JhzQF1fEqQJQ
-::ZQ05rAF9IBncCkqN+0xwdVs0
-::ZQ05rAF9IAHYFVzEqQJQ
-::eg0/rx1wNQPfEVWB+kM9LVsJDGQ=
-::fBEirQZwNQPfEVWB+kM9LVsJDGQ=
-::cRolqwZ3JBvQF1fEqQJQ
-::dhA7uBVwLU+EWDk=
-::YQ03rBFzNR3SWATElA==
-::dhAmsQZ3MwfNWATElA==
-::ZQ0/vhVqMQ3MEVWAtB9wSA==
-::Zg8zqx1/OA3MEVWAtB9wSA==
-::dhA7pRFwIByZRRnk
-::Zh4grVQjdCyDJGyX8VAjFCJVQgCDf1eeCaIS5Of66/m7kUgTR+c2R6bV3rGWH7Fds3nXcJg+03MascUICQMYL1zyUjwxp31HvySsOcOZq0+wBBHH41M1ew==
-::YB416Ek+Zm8=
-::
-::
-::978f952a14a936cc963da21a135fa983
 @echo off
 setlocal enabledelayedexpansion
-title Sensei Index 1.9
+title Sensei Index
 cd /d "%~dp0"
 
 echo ============================================
-echo   Sensei Index 1.9 - Setup and Launch
+echo   Sensei Index - Setup and Launch
 echo ============================================
-echo Experimental build Programs a little scuffed
-echo Only used for one-time edits and fast Index --> ITR document converts
-echo and tracking too...
 echo.
 
 REM --- 0. Warn early if this folder needs admin rights to write to --------
@@ -86,7 +50,7 @@ REM --- 2. Install any missing packages (skips ones already present) ------
 REM --user installs into this Windows account's own package folder rather
 REM than the shared, admin-protected one - so this never needs elevation,
 REM even if Python itself was installed "for all users."
-echo Checking required packages - First-time setup only, again it takes minute...
+echo Checking required packages - first-time setup only, takes a minute...
 echo.
 
 set INSTALL_FAILED=0
@@ -131,9 +95,8 @@ if "%INSTALL_FAILED%"=="1" (
 )
 
 echo.
-echo Starting InstINDEX...
-echo First launch takes a minute, please be patient... 
-echo  -GIM MD/G0NCHO
+echo Starting Sensei Index...
+echo First launch after adding data can take 20-30 seconds - that's normal.
 echo.
 
 python gui_app.py

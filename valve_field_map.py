@@ -11,44 +11,35 @@ FIELD_MAP = {
     "project_name": "Text54",
     "contract_no": "Text55",
     "location": "Text56",
-
     "system": "Text4",
     "pid_number": "Text7",
     "line_number": "Text5",
     "equip_number": "Text8",
     "unit_number": "Text6",
     "valve_type_other": "Text60",
-
     "actuator_serial": "Text9",
     "actuator_model": "Text10",
     "trim_plug": "Text19",
     "trim_seat": "Text20",
-
     "valve_serial": "Text11",
     "valve_model": "Text12",
     "travel_value": None,  # handled specially - goes into Text59 or Text58 depending on travel_unit
-
     "positioner_serial": "Text13",
     "positioner_model": "Text14",
-
     "position_limit_serial": "Text15",
     "position_limit_model": "Text16",
     "ansi_size": "Text57",
-
     "solenoid_serial": "Text17",
     "solenoid_model": "Text18",
     "crn_number": "Text21",
-
     "commissioning_tag": "Text25",
     "voltage": "Text24",
     "fuse_rating": "Text23",
     "inst_air_pressure": "Text22",
-
     "equip_make": "Text44",
     "equip_model": "Text45",
     "equip_serial": "Text46",
     "equip_caldate": "Text47",
-
     "qc_rep_name": "Text51",
     "qc_date": "QCRepDate",
     "commissioning_rep_name": "Text52",
@@ -58,28 +49,50 @@ FIELD_MAP = {
 # Each of these schema fields is a single-choice value that maps to ONE of
 # several independent checkboxes (set that one /Yes, leave the rest /Off).
 CHECKBOX_GROUPS = {
-    "valve_type": {"ESDV": "Check Box1", "FCV": "Check Box2", "LCV": "Check Box3", "PCV": "Check Box4"},
+    "valve_type": {
+        "ESDV": "Check Box1",
+        "FCV": "Check Box2",
+        "LCV": "Check Box3",
+        "PCV": "Check Box4",
+    },
     "valve_class": {
-        "I": "Check Box11", "II": "Check Box12", "III": "Check Box13",
-        "IV": "Check Box14", "V": "Check Box15", "VI": "Check Box16",
+        "I": "Check Box11",
+        "II": "Check Box12",
+        "III": "Check Box13",
+        "IV": "Check Box14",
+        "V": "Check Box15",
+        "VI": "Check Box16",
     },
     "ansi_rating": {
-        "150": "Check Box8", "300": "Check Box10", "600": "Check Box9", "900": "Check Box7",
-        "1200": "Check Box53", "1500": "Check Box54", "2500": "Check Box55",
+        "150": "Check Box8",
+        "300": "Check Box10",
+        "600": "Check Box9",
+        "900": "Check Box7",
+        "1200": "Check Box53",
+        "1500": "Check Box54",
+        "2500": "Check Box55",
     },
     "body_style": {"Flanged": "Check Box17", "Threaded": "Check Box18"},
     "signal_type": {
-        "4-20 mA / HART": "Check Box23", "Fieldbus": "Check Box22", "Wireless": "Check Box21",
-        "Modbus": "Check Box20", "Pneumatic": "Check Box19",
+        "4-20 mA / HART": "Check Box23",
+        "Fieldbus": "Check Box22",
+        "Wireless": "Check Box21",
+        "Modbus": "Check Box20",
+        "Pneumatic": "Check Box19",
     },
     "installed_by": {"IESL": "Check Box32", "Other": "Check Box33"},
     "verified_by": {"IESL": "Check Box37", "Other": "Check Box38"},
     "valve_stem_type": {
-        "Sliding Stem": "Check Box52", "Rotary": "Check Box48", "Quarter Turn": "Check Box47",
-        "Throttle": "Check Box45", "Snap Acting": "Check Box43",
+        "Sliding Stem": "Check Box52",
+        "Rotary": "Check Box48",
+        "Quarter Turn": "Check Box47",
+        "Throttle": "Check Box45",
+        "Snap Acting": "Check Box43",
     },
     "fail_position": {
-        "Valve Fails Open": "Check Box49", "Valve Fails Closed": "Check Box46", "Valve Fails Last": "Check Box44",
+        "Valve Fails Open": "Check Box49",
+        "Valve Fails Closed": "Check Box46",
+        "Valve Fails Last": "Check Box44",
     },
     "command_signal_type": {"mA": "Check Box50", "%": "Check Box51"},
 }
@@ -130,15 +143,24 @@ FV_YES_NA_FIELDS = {
 
 # ------------------------------------------------- Travel Indication table
 TRAVEL_FIELD_MAP = {
-    "valve_position_0_up": "Text26", "valve_position_25_up": "Text28", "valve_position_50_up": "Text30",
-    "valve_position_75_up": "Text31", "valve_position_100": "Text34",
-    "valve_position_75_down": "Text36", "valve_position_50_down": "Text38",
-    "valve_position_25_down": "Text40", "valve_position_0_down": "Text42",
-
-    "ma_input_0_up": "Text27", "ma_input_25_up": "Text29", "ma_input_50_up": "Text33",
-    "ma_input_75_up": "Text32", "ma_input_100": "Text35",
-    "ma_input_75_down": "Text37", "ma_input_50_down": "Text39",
-    "ma_input_25_down": "Text41", "ma_input_0_down": "Text43",
+    "valve_position_0_up": "Text26",
+    "valve_position_25_up": "Text28",
+    "valve_position_50_up": "Text30",
+    "valve_position_75_up": "Text31",
+    "valve_position_100": "Text34",
+    "valve_position_75_down": "Text36",
+    "valve_position_50_down": "Text38",
+    "valve_position_25_down": "Text40",
+    "valve_position_0_down": "Text42",
+    "ma_input_0_up": "Text27",
+    "ma_input_25_up": "Text29",
+    "ma_input_50_up": "Text33",
+    "ma_input_75_up": "Text32",
+    "ma_input_100": "Text35",
+    "ma_input_75_down": "Text37",
+    "ma_input_50_down": "Text39",
+    "ma_input_25_down": "Text41",
+    "ma_input_0_down": "Text43",
 }
 FIELD_MAP.update(TRAVEL_FIELD_MAP)
 

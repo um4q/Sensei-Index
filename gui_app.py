@@ -10,21 +10,44 @@ items in a permanent sidebar. Add New, Edit, Settings, Signatures, and
 Export remain focused dialogs, since those are one-off tasks rather than
 places you navigate to and stay.
 """
-import sys
-import os
-import datetime
-from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QItemSelectionModel, QDate
-from PySide6.QtGui import QFont, QColor, QKeySequence, QShortcut
+import sys
+import datetime
+
+from PySide6.QtCore import Qt, QItemSelectionModel, QDate
+from PySide6.QtGui import QColor, QKeySequence, QShortcut, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFormLayout, QLabel, QPushButton, QLineEdit, QComboBox, QTextEdit,
-    QScrollArea, QFrame, QTreeWidget, QTreeWidgetItem, QStackedWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QMessageBox,
-    QInputDialog, QFileDialog, QCheckBox, QRadioButton, QButtonGroup,
-    QGroupBox, QSizePolicy, QAbstractItemView, QSpacerItem, QAbstractScrollArea,
-    QMenu, QStatusBar, QDateEdit,
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QLabel,
+    QPushButton,
+    QLineEdit,
+    QComboBox,
+    QTextEdit,
+    QScrollArea,
+    QFrame,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QDialog,
+    QMessageBox,
+    QInputDialog,
+    QFileDialog,
+    QCheckBox,
+    QRadioButton,
+    QButtonGroup,
+    QGroupBox,
+    QAbstractItemView,
+    QMenu,
+    QStatusBar,
+    QDateEdit,
 )
 
 import data_access as da
@@ -269,8 +292,11 @@ def row_status_color(entry):
 def rename_series_flow(parent_widget, series_number):
     current = da.get_series_name(series_number)
     text, ok = QInputDialog.getText(
-        parent_widget, f"Rename \"{da.series_display_label(series_number)}\"",
-        "Display name (leave blank to just show the number):", text=current)
+        parent_widget,
+        f'Rename "{da.series_display_label(series_number)}"',
+        "Display name (leave blank to just show the number):",
+        text=current,
+    )
     if not ok:
         return
     try:
@@ -282,7 +308,8 @@ def rename_series_flow(parent_widget, series_number):
 def remove_series_flow(parent_widget, series_number):
     label = da.series_display_label(series_number)
     warned = QMessageBox.warning(
-        parent_widget, "Remove series",
+        parent_widget,
+        "Remove series",
         f'Remove "{label}"?\n\n'
         "This un-registers it from the app immediately - it won't show up "
         "in the sidebar, dashboard, or anywhere else. Its Transmitter and "
@@ -290,16 +317,20 @@ def remove_series_flow(parent_widget, series_number):
         "workbook rather than deleted, so the data itself isn't destroyed "
         "and a human can still recover it by hand in Excel (right-click "
         "any sheet tab \u2192 Unhide) if this was a mistake.",
-        QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Cancel)
+        QMessageBox.Ok | QMessageBox.Cancel,
+        QMessageBox.Cancel,
+    )
     if warned != QMessageBox.Ok:
         return
     confirm_text, ok = QInputDialog.getText(
-        parent_widget, "Confirm removal", f'Type "{series_number}" to confirm:')
+        parent_widget, "Confirm removal", f'Type "{series_number}" to confirm:'
+    )
     if not ok:
         return
     if confirm_text.strip() != str(series_number):
-        QMessageBox.information(parent_widget, "Cancelled",
-                                 "Series was not removed - confirmation text didn't match.")
+        QMessageBox.information(
+            parent_widget, "Cancelled", "Series was not removed - confirmation text didn't match."
+        )
         return
     try:
         da.remove_series(series_number)
@@ -355,6 +386,7 @@ class MainWindow(QMainWindow):
         currently on top (Edit, Settings, the Wizard, ...), since those are
         separate top-level widgets. Every one of these is also listed, in
         plain language, in Instructions -> Keyboard Shortcuts."""
+
         def bind(sequence, handler):
             sc = QShortcut(QKeySequence(sequence), self)
             sc.setContext(Qt.WindowShortcut)
@@ -435,6 +467,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Nothing to redo", 2000)
 
     # ---------------------------------------------------------------- sidebar
+
     def _build_sidebar(self):
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
@@ -443,10 +476,24 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        title = QLabel("Sensei Index")
-        
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(
+            30, 12, 16, 0
+        )  # match whatever padding your sidebar already uses
+
+        header_row.setSpacing(0)
+
+        logo_label = QLabel()
+        logo_label.setObjectName("SidebarLogo")
+        self._set_logo_pixmap(logo_label)
+        header_row.addWidget(logo_label)
+
+        title = QLabel("Sensei Index 1.9")
         title.setObjectName("SidebarTitle")
-        layout.addWidget(title)
+        header_row.addWidget(title)
+        header_row.addStretch()
+
+        layout.addLayout(header_row)
         subtitle = QLabel("K1B Equipment Tracker")
         subtitle.setObjectName("SidebarSubtitle")
         layout.addWidget(subtitle)
@@ -464,15 +511,16 @@ class MainWindow(QMainWindow):
         add_series_btn.clicked.connect(self.add_series)
         layout.addWidget(add_series_btn)
 
-        wizard_btn = make_button("\U0001F9D9  Populating Wizard", "SidebarFooterButton")
-        wizard_btn.setToolTip("Bulk-enter a batch of similar equipment "
-                               "(Ctrl+Shift+W)")
+        wizard_btn = make_button("\U0001f9d9  Populating Wizard", "SidebarFooterButton")
+        wizard_btn.setToolTip("Bulk-enter a batch of similar equipment " "(Ctrl+Shift+W)")
         wizard_btn.clicked.connect(self.open_populating_wizard)
         layout.addWidget(wizard_btn)
 
-        datasheet_btn = make_button("\U0001F4C4  Import Datasheet PDF...", "SidebarFooterButton")
-        datasheet_btn.setToolTip("Pre-fill a new row from an engineering data "
-                                  "sheet PDF instead of retyping it (Ctrl+Shift+I)")
+        datasheet_btn = make_button("\U0001f4c4  Import Datasheet PDF...", "SidebarFooterButton")
+        datasheet_btn.setToolTip(
+            "Pre-fill a new row from an engineering data "
+            "sheet PDF instead of retyping it (Ctrl+Shift+I)"
+        )
         datasheet_btn.clicked.connect(self.open_datasheet_import)
         layout.addWidget(datasheet_btn)
 
@@ -482,8 +530,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(drive_btn)
 
         settings_btn = make_button("\u2699  Settings", "SidebarFooterButton")
-        settings_btn.setToolTip("Theme, default export options, series, "
-                                 "signatures (Ctrl+,)")
+        settings_btn.setToolTip("Theme, default export options, series, " "signatures (Ctrl+,)")
         settings_btn.clicked.connect(self.open_settings)
         layout.addWidget(settings_btn)
 
@@ -510,7 +557,8 @@ class MainWindow(QMainWindow):
             for equip_key, etype in da.EQUIPMENT_TYPES.items():
                 try:
                     count, by_system = da.series_type_summary(
-                        series_number, equip_key, etype["group_fields"][0])
+                        series_number, equip_key, etype["group_fields"][0]
+                    )
                 except KeyError:
                     continue
                 type_item = QTreeWidgetItem([f"{etype['label']}s  ({count})"])
@@ -525,9 +573,16 @@ class MainWindow(QMainWindow):
                         leaf_text = f"{system_value}  ({n})"
                         leaf = QTreeWidgetItem([leaf_text])
                         leaf.setToolTip(0, leaf_text)
-                        leaf.setData(0, self.NAV_ROLE,
-                                     ("index", series_number, equip_key,
-                                      {etype["group_fields"][0]: system_value}))
+                        leaf.setData(
+                            0,
+                            self.NAV_ROLE,
+                            (
+                                "index",
+                                series_number,
+                                equip_key,
+                                {etype["group_fields"][0]: system_value},
+                            ),
+                        )
                         sys_parent.addChild(leaf)
             series_item.setExpanded(True)
 
@@ -594,6 +649,13 @@ class MainWindow(QMainWindow):
             page.reload()
         self.refresh_sidebar_and_dashboard()
 
+    def _set_logo_pixmap(self, label):
+        theme = da.get_setting("theme") or "light"
+        filename = "oathplatehelm.png" if theme == "dark" else "oathplatehelm2.png"
+        pixmap = QPixmap(str(da.ASSETS_DIR / filename))
+        if not pixmap.isNull():
+            label.setPixmap(pixmap.scaledToHeight(42, Qt.SmoothTransformation))
+
     # ------------------------------------------------------------- navigation
     def _set_dynamic_page(self, widget):
         if self.current_dynamic_page is not None:
@@ -617,16 +679,22 @@ class MainWindow(QMainWindow):
         existing = da.list_series()
         suggestion = (max(existing) + 100) if existing else 100
         number, ok = QInputDialog.getInt(
-            self, "Add New Series",
+            self,
+            "Add New Series",
             f"New series number (e.g. {suggestion}) - used internally to name "
             f"the sheets; you'll give it a friendlier display name next:",
-            suggestion, 1, 999999)
+            suggestion,
+            1,
+            999999,
+        )
         if not ok:
             return
         name, ok = QInputDialog.getText(
-            self, "Name it",
-            "Display name (e.g. \"K1B Pad B\") - shown everywhere instead of "
-            "the number. Leave blank to just show the number:")
+            self,
+            "Name it",
+            'Display name (e.g. "K1B Pad B") - shown everywhere instead of '
+            "the number. Leave blank to just show the number:",
+        )
         if not ok:
             name = ""
         try:
@@ -637,10 +705,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Couldn't add series", str(exc))
             return
         QMessageBox.information(
-            self, "Series added",
-            f"\"{da.series_display_label(number)}\" created with empty Transmitter + "
+            self,
+            "Series added",
+            f'"{da.series_display_label(number)}" created with empty Transmitter + '
             f"Valve logs.\n\nWorth a quick check in Excel that the new sheet's dropdown "
-            f"columns still work - automatic sheet copies can occasionally miss one.")
+            f"columns still work - automatic sheet copies can occasionally miss one.",
+        )
         self.refresh_sidebar_and_dashboard()
 
     def open_settings(self):
@@ -656,10 +726,12 @@ class MainWindow(QMainWindow):
         button that visibly does nothing is worse than one that's honest
         about being unfinished)."""
         QMessageBox.information(
-            self, "Connect to Drive",
+            self,
+            "Connect to Drive",
             "W.I.P.\n\nCloud sync isn't built yet - this button is a placeholder "
             "for a future update. Your data stays exactly where it is today: "
-            "the workbook and JSON files next to the app.")
+            "the workbook and JSON files next to the app.",
+        )
 
     def open_populating_wizard(self):
         dlg = PopulatingWizardDialog(self, self)
@@ -668,7 +740,8 @@ class MainWindow(QMainWindow):
 
     def open_datasheet_import(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Import from Datasheet PDF(s)", "", "PDF files (*.pdf)")
+            self, "Import from Datasheet PDF(s)", "", "PDF files (*.pdf)"
+        )
         if not paths:
             return
         try:
@@ -678,12 +751,15 @@ class MainWindow(QMainWindow):
             return
         if not records:
             QMessageBox.information(
-                self, "No datasheets recognized",
+                self,
+                "No datasheets recognized",
                 "Didn't find anything recognizable in the file(s) you picked.\n\n"
                 "This importer currently supports the CNOOC/Oilsands-style "
-                "\"DS-\" data sheets: Control Valve, Temp Trans Element and "
-                "TW, and Vortex Flowmeter. Anything else needs to be entered "
-                "by hand, same as always.")
+                '"DS-" data sheets: Control Valve, On/Off Valve, Temp Trans '
+                "Element and TW, Vortex Flowmeter, Pressure Transmitter, and "
+                "Guided Wave Radar Level Transmitter. Anything else needs to "
+                "be entered by hand, same as always.",
+            )
             return
         dlg = DatasheetImportDialog(self, self, records)
         dlg.exec()
@@ -726,148 +802,276 @@ class MainWindow(QMainWindow):
         parts = [h("APP GUIDE \u2013 InstINDEX")]
 
         parts.append(sub("Sidebar"))
-        parts.append(row("Dashboard", "Overall totals, by-system breakdown, and a "
-                          "per-series Installed/Submitted/Accepted card for every series."))
-        parts.append(row("Series entries (e.g. \u201c100\u201d)", "Expand to jump straight to "
-                          "that series' Transmitter or Valve Index, or drill into one System."))
-        parts.append(row("+ Add New Series", "Duplicates an existing series' empty Log sheets "
-                          "under a new series number."))
-        parts.append(row("Populating Wizard", "Bulk-enter a batch of similar equipment \u2013 "
-                          "see below (Ctrl+Shift+W)."))
-        parts.append(row("Connect to Drive", "Placeholder for a future cloud-sync feature \u2013 "
-                          "not built yet, and says so."))
-        parts.append(row("Settings", "Theme, default export options, manage series, "
-                          "manage signatures, open the raw Excel file (Ctrl+,)."))
+        parts.append(
+            row(
+                "Dashboard",
+                "Overall totals, by-system breakdown, and a "
+                "per-series Installed/Submitted/Accepted card for every series.",
+            )
+        )
+        parts.append(
+            row(
+                "Series entries (e.g. \u201c100\u201d)",
+                "Expand to jump straight to "
+                "that series' Transmitter or Valve Index, or drill into one System.",
+            )
+        )
+        parts.append(
+            row(
+                "+ Add New Series",
+                "Duplicates an existing series' empty Log sheets " "under a new series number.",
+            )
+        )
+        parts.append(
+            row(
+                "Populating Wizard",
+                "Bulk-enter a batch of similar equipment \u2013 " "see below (Ctrl+Shift+W).",
+            )
+        )
+        parts.append(
+            row(
+                "Connect to Drive",
+                "Placeholder for a future cloud-sync feature \u2013 " "not built yet, and says so.",
+            )
+        )
+        parts.append(
+            row(
+                "Settings",
+                "Theme, default export options, manage series, "
+                "manage signatures, open the raw Excel file (Ctrl+,).",
+            )
+        )
         parts.append(row("Instructions", "This dialog."))
 
         parts.append(sub("Index page toolbar"))
         parts.append(row("+ Add New", "Opens a blank entry form in the first free row (Ctrl+N)."))
-        parts.append(row("Show More", "Read-only listing of EVERY field on the selected row, "
-                          "not just the few columns the table has room for."))
-        parts.append(row("View Details", "Builds an actual filled PDF preview of the selected row."))
-        parts.append(row("Edit", "Opens the full form for the selected row (Ctrl+E, or "
-                          "double-click a data cell)."))
-        parts.append(row("Export...", "Turn one or more rows into PDFs (Ctrl+Shift+E) \u2013 "
-                          "see Export dialog below."))
+        parts.append(
+            row(
+                "Show More",
+                "Read-only listing of EVERY field on the selected row, "
+                "not just the few columns the table has room for.",
+            )
+        )
+        parts.append(
+            row("View Details", "Builds an actual filled PDF preview of the selected row.")
+        )
+        parts.append(
+            row(
+                "Edit",
+                "Opens the full form for the selected row (Ctrl+E, or "
+                "double-click a data cell).",
+            )
+        )
+        parts.append(
+            row(
+                "Export...",
+                "Turn one or more rows into PDFs (Ctrl+Shift+E) \u2013 " "see Export dialog below.",
+            )
+        )
         parts.append(row("Select All", "Selects every row the current search is showing."))
-        parts.append(row("Remove Selected", "Clears the selected row(s) (Delete key). "
-                          "Undoable with Ctrl+Z."))
-        parts.append(row("Mass Edit Dates...", "Set or clear a date field across many rows at "
-                          "once (Ctrl+Shift+D) \u2013 see below."))
-        parts.append(row("Refresh", "Reloads from the workbook on disk (F5) \u2013 use this "
-                          "after editing the sheet directly in Excel."))
+        parts.append(
+            row(
+                "Remove Selected",
+                "Clears the selected row(s) (Delete key). " "Undoable with Ctrl+Z.",
+            )
+        )
+        parts.append(
+            row(
+                "Mass Edit Dates...",
+                "Set or clear a date field across many rows at "
+                "once (Ctrl+Shift+D) \u2013 see below.",
+            )
+        )
+        parts.append(
+            row(
+                "Refresh",
+                "Reloads from the workbook on disk (F5) \u2013 use this "
+                "after editing the sheet directly in Excel.",
+            )
+        )
 
         parts.append(sub("Editing the grid like a spreadsheet"))
-        parts.append("<p>Tag, System, Type, and every date column can be edited right in the "
-                      "table \u2013 click a cell and just start typing (or press F2/Enter first "
-                      "if you'd rather not overwrite what's there), then Enter or Tab to move on. "
-                      "Double-clicking a cell still opens the full Edit form instead, same as "
-                      "always, so nothing about that changed.</p>")
+        parts.append(
+            "<p>Tag, System, Type, and every date column can be edited right in the "
+            "table \u2013 click a cell and just start typing (or press F2/Enter first "
+            "if you'd rather not overwrite what's there), then Enter or Tab to move on. "
+            "Double-clicking a cell still opens the full Edit form instead, same as "
+            "always, so nothing about that changed.</p>"
+        )
         parts.append("<p>For editing many rows at once, the same shortcuts Excel uses:</p>")
         for keys, desc in [
             ("Ctrl+C", "copy the focused cell's value"),
-            ("Ctrl+V", "paste \u2013 with one row selected, pastes into just that cell; with "
-                       "several rows selected, broadcasts the SAME copied value into that same "
-                       "column on every one of them (the main mass-edit move). Pasting a real "
-                       "multi-cell block \u2013 copied from Excel itself, say \u2013 walks it "
-                       "across the visible editable columns and rows starting from wherever "
-                       "you click"),
-            ("Ctrl+D", "fill the top selected row's value in that column down through the rest "
-                       "of the selection"),
+            (
+                "Ctrl+V",
+                "paste \u2013 with one row selected, pastes into just that cell; with "
+                "several rows selected, broadcasts the SAME copied value into that same "
+                "column on every one of them (the main mass-edit move). Pasting a real "
+                "multi-cell block \u2013 copied from Excel itself, say \u2013 walks it "
+                "across the visible editable columns and rows starting from wherever "
+                "you click",
+            ),
+            (
+                "Ctrl+D",
+                "fill the top selected row's value in that column down through the rest "
+                "of the selection",
+            ),
             ("Backspace", "clear that column's value on every selected row"),
         ]:
             parts.append(f"<p style='margin:2px 0;'><b>{keys}</b> \u2013 {desc}</p>")
-        parts.append("<p style='margin-top:6px;'>Tag/Equip # is exempt from all four mass-edit "
-                      "shortcuts (it has to stay unique per row, so it's only ever edited one "
-                      "cell at a time, with a duplicate check) \u2013 editing it in place also "
-                      "carries that row's Installed/Submitted/Accepted/Export status over to "
-                      "the new value automatically, so nothing appears to reset.</p>")
+        parts.append(
+            "<p style='margin-top:6px;'>Tag/Equip # is exempt from all four mass-edit "
+            "shortcuts (it has to stay unique per row, so it's only ever edited one "
+            "cell at a time, with a duplicate check) \u2013 editing it in place also "
+            "carries that row's Installed/Submitted/Accepted/Export status over to "
+            "the new value automatically, so nothing appears to reset.</p>"
+        )
 
         parts.append(sub("Status checkboxes (Installed / Submitted / Accepted / Export)"))
-        parts.append("<p>Each row has its own checkboxes right in the table \u2013 click one to "
-                      "flip it immediately, no need to select the row first. <b>Installed</b>, "
-                      "<b>Submitted</b>, and <b>Accepted</b> track the equipment's real-world "
-                      "progress; <b>Export</b> is a separate \u201cqueue this row\u201d flag used "
-                      "by the Export dialog's default mode. The <b>Row #</b> cell colors itself "
-                      "automatically: plain once nothing's checked, <b>yellow</b> once Submitted, "
-                      "<b>green</b> once Accepted (Accepted wins if both are checked).</p>")
-        parts.append(row("Bulk Status \u25be", "Mark or unmark Installed/Submitted/Accepted, or "
-                          "add/remove the Export queue flag, on every currently-selected row at once."))
-        parts.append(row("Queue All Shown for Export", "Checks the Export box on every row the "
-                          "current search/filter is showing \u2013 a fast way to build a batch."))
-        parts.append(row("Clear Export Queue (Shown)", "Unchecks Export on every row currently shown."))
+        parts.append(
+            "<p>Each row has its own checkboxes right in the table \u2013 click one to "
+            "flip it immediately, no need to select the row first. <b>Installed</b>, "
+            "<b>Submitted</b>, and <b>Accepted</b> track the equipment's real-world "
+            "progress; <b>Export</b> is a separate \u201cqueue this row\u201d flag used "
+            "by the Export dialog's default mode. The <b>Row #</b> cell colors itself "
+            "automatically: plain once nothing's checked, <b>yellow</b> once Submitted, "
+            "<b>green</b> once Accepted (Accepted wins if both are checked).</p>"
+        )
+        parts.append(
+            row(
+                "Bulk Status \u25be",
+                "Mark or unmark Installed/Submitted/Accepted, or "
+                "add/remove the Export queue flag, on every currently-selected row at once.",
+            )
+        )
+        parts.append(
+            row(
+                "Queue All Shown for Export",
+                "Checks the Export box on every row the "
+                "current search/filter is showing \u2013 a fast way to build a batch.",
+            )
+        )
+        parts.append(
+            row("Clear Export Queue (Shown)", "Unchecks Export on every row currently shown.")
+        )
 
         parts.append(sub("Mass Edit Dates"))
-        parts.append("<p>The guided way to set or clear a date field across many rows \u2013 pick "
-                      "the field (Test Equipment Calibration Date, QA Rep Date, ...), pick a "
-                      "scope (selected rows, or everything currently shown), then either set a "
-                      "date or tick \u201cClear this date instead\u201d to blank it out. Same "
-                      "underlying action as copy/paste in the grid, just with a form around it. "
-                      "New rows always start with every date blank - this is never done "
-                      "automatically.</p>")
+        parts.append(
+            "<p>The guided way to set or clear a date field across many rows \u2013 pick "
+            "the field (Test Equipment Calibration Date, QA Rep Date, ...), pick a "
+            "scope (selected rows, or everything currently shown), then either set a "
+            "date or tick \u201cClear this date instead\u201d to blank it out. Same "
+            "underlying action as copy/paste in the grid, just with a form around it. "
+            "New rows always start with every date blank - this is never done "
+            "automatically.</p>"
+        )
 
         parts.append(sub("Export dialog"))
-        parts.append("<p>Three ways to pick which rows get turned into PDFs, in order of how "
-                      "the dialog defaults: <b>(1) Only rows checked in the Export column</b> "
-                      "\u2013 the app-side queue described above, and the default; "
-                      "<b>(2) Only rows flagged \u201cExport to PDF = Y\u201d in Excel</b> \u2013 "
-                      "the sheet's own long-standing flag column, for anyone who still prefers "
-                      "setting it there; <b>(3) Every row with a Tag/Equip # filled in</b>. "
-                      "\u201cUncheck those rows' Export boxes once exported\u201d (mode 1 only) "
-                      "empties the queue as it's used.</p>")
-        parts.append("<p><b>Dates:</b> \u201cInclude today's date in each filename\u201d appends "
-                      "it to every output file. Sign-off dates themselves - QA Rep Date / Client "
-                      "Rep Date for transmitters, QC Rep Date for valves - are real columns now "
-                      "for both equipment types; set those directly in the grid (or with Mass "
-                      "Edit Dates) before exporting and they'll appear on the PDF the normal way, "
-                      "no separate export-time option needed.</p>")
+        parts.append(
+            "<p>Three ways to pick which rows get turned into PDFs, in order of how "
+            "the dialog defaults: <b>(1) Only rows checked in the Export column</b> "
+            "\u2013 the app-side queue described above, and the default; "
+            "<b>(2) Only rows flagged \u201cExport to PDF = Y\u201d in Excel</b> \u2013 "
+            "the sheet's own long-standing flag column, for anyone who still prefers "
+            "setting it there; <b>(3) Every row with a Tag/Equip # filled in</b>. "
+            "\u201cUncheck those rows' Export boxes once exported\u201d (mode 1 only) "
+            "empties the queue as it's used.</p>"
+        )
+        parts.append(
+            "<p><b>Dates:</b> \u201cInclude today's date in each filename\u201d appends "
+            "it to every output file. Sign-off dates themselves - QA Rep Date / Client "
+            "Rep Date for transmitters, QC Rep Date for valves - are real columns now "
+            "for both equipment types; set those directly in the grid (or with Mass "
+            "Edit Dates) before exporting and they'll appear on the PDF the normal way, "
+            "no separate export-time option needed.</p>"
+        )
 
         parts.append(sub("Populating Wizard"))
         parts.append("<p>For bulk-entering a batch of similar equipment fast:</p>")
-        parts.append(row("1. Setup", "Pick the Series and equipment type, then Area Code + Tag "
-                          "Type + System \u2013 these combine with a Sequence you type per item "
-                          "to build the Tag/Equip # (29103 + FIT + 1011 = 29103-FIT-1011)."))
-        parts.append(row("2. Repetition", "Tick any field that should carry the SAME value into "
-                          "every entry this session (Make, Test Equipment, sign-off name, ...). "
-                          "Leave a field unticked and it resets to blank after every save \u2013 "
-                          "use that for anything that genuinely changes per item."))
-        parts.append(row("3. Entering", "Type the Sequence, fill in whatever isn't repeating, "
-                          "\u201cSave & Next\u201d writes the row and immediately opens a fresh "
-                          "one with the repeating fields still filled in. Keeps going until you "
-                          "click Stop."))
+        parts.append(
+            row(
+                "1. Setup",
+                "Pick the Series and equipment type, then Area Code + Tag "
+                "Type + System \u2013 these combine with a Sequence you type per item "
+                "to build the Tag/Equip # (29103 + FIT + 1011 = 29103-FIT-1011).",
+            )
+        )
+        parts.append(
+            row(
+                "2. Repetition",
+                "Tick any field that should carry the SAME value into "
+                "every entry this session (Make, Test Equipment, sign-off name, ...). "
+                "Leave a field unticked and it resets to blank after every save \u2013 "
+                "use that for anything that genuinely changes per item.",
+            )
+        )
+        parts.append(
+            row(
+                "3. Entering",
+                "Type the Sequence, fill in whatever isn't repeating, "
+                "\u201cSave & Next\u201d writes the row and immediately opens a fresh "
+                "one with the repeating fields still filled in. Keeps going until you "
+                "click Stop.",
+            )
+        )
         parts.append(row("Edit Template", "Go back and change which fields repeat, mid-batch."))
-        parts.append(row("Save as Draft & Close", "Stashes the whole batch \u2013 setup, "
-                          "repeating values, and the entry you were mid-typing \u2013 as ONE "
-                          "resumable draft. Reopening the Wizard offers to resume it. Saving "
-                          "another draft later overwrites this one (it's a single slot, not a "
-                          "library)."))
+        parts.append(
+            row(
+                "Save as Draft & Close",
+                "Stashes the whole batch \u2013 setup, "
+                "repeating values, and the entry you were mid-typing \u2013 as ONE "
+                "resumable draft. Reopening the Wizard offers to resume it. Saving "
+                "another draft later overwrites this one (it's a single slot, not a "
+                "library).",
+            )
+        )
 
         parts.append(sub("Import Datasheet PDF"))
-        parts.append("<p>Pre-fills a new row straight from an engineering data sheet PDF "
-                      "instead of retyping it by hand \u2013 sidebar \u2192 \u201cImport "
-                      "Datasheet PDF...\u201d, or Ctrl+Shift+I. Currently recognizes the "
-                      "CNOOC/Oilsands-style \u201cDS-\u201d data sheets: Control Valve, Temp "
-                      "Trans Element and TW, and Vortex Flowmeter \u2013 anything else isn't "
-                      "recognized and needs to be entered by hand, same as always.</p>")
-        parts.append(row("Pick file(s)", "One PDF can hold several instruments (each spanning "
-                          "its own two pages) \u2013 all of them get picked up and listed."))
-        parts.append(row("Choose a series", "Defaults to whichever existing series' number "
-                          "matches most of the detected tags' own area code, if one matches; "
-                          "pick a different one, or add a new series first, if not."))
-        parts.append(row("Review & Add Checked", "Opens each ticked record through the normal "
-                          "Add New form, pre-filled \u2013 nothing is saved until that form's "
-                          "own Save button is clicked, so every field gets a final look first. "
-                          "Closing a form without saving just skips that one record."))
-        parts.append("<p>Only fields the data sheet gives a direct, unambiguous answer for are "
-                      "pre-filled \u2013 serial numbers, field test results, and sign-offs all "
-                      "start blank, same as any new row, since none of that exists yet on a "
-                      "pre-purchase data sheet. Signal Type, and Valve Type for valves, are "
-                      "best-guesses rather than a direct read (the data sheet's own wording "
-                      "doesn't map onto those pick-lists one-to-one) \u2013 worth a second look "
-                      "before saving each one. A couple of very wide range values on the "
-                      "Temperature Transmitter sheets specifically (Instrument Range, "
-                      "Calibration Range) can come back blank rather than guessed at, if the "
-                      "PDF's own text layer has scrambled them past reliably reading back.</p>")
+        parts.append(
+            "<p>Pre-fills a new row straight from an engineering data sheet PDF "
+            "instead of retyping it by hand \u2013 sidebar \u2192 \u201cImport "
+            "Datasheet PDF...\u201d, or Ctrl+Shift+I. Currently recognizes the "
+            "CNOOC/Oilsands-style \u201cDS-\u201d data sheets: Control Valve, "
+            "On/Off Valve, Temp Trans Element and TW, Vortex Flowmeter, Pressure "
+            "Transmitter, and Guided Wave Radar Level Transmitter \u2013 anything "
+            "else isn't recognized and needs to be entered by hand, same as "
+            "always.</p>"
+        )
+        parts.append(
+            row(
+                "Pick file(s)",
+                "One PDF can hold several instruments (each spanning "
+                "its own two pages) \u2013 all of them get picked up and listed.",
+            )
+        )
+        parts.append(
+            row(
+                "Choose a series",
+                "Defaults to whichever existing series' number "
+                "matches most of the detected tags' own area code, if one matches; "
+                "pick a different one, or add a new series first, if not.",
+            )
+        )
+        parts.append(
+            row(
+                "Review & Add Checked",
+                "Opens each ticked record through the normal "
+                "Add New form, pre-filled \u2013 nothing is saved until that form's "
+                "own Save button is clicked, so every field gets a final look first. "
+                "Closing a form without saving just skips that one record.",
+            )
+        )
+        parts.append(
+            "<p>Only fields the data sheet gives a direct, unambiguous answer for are "
+            "pre-filled \u2013 serial numbers, field test results, and sign-offs all "
+            "start blank, same as any new row, since none of that exists yet on a "
+            "pre-purchase data sheet. Signal Type, and Valve Type for valves, are "
+            "best-guesses rather than a direct read (the data sheet's own wording "
+            "doesn't map onto those pick-lists one-to-one) \u2013 worth a second look "
+            "before saving each one. A couple of very wide range values on the "
+            "Temperature Transmitter sheets specifically (Instrument Range, "
+            "Calibration Range) can come back blank rather than guessed at, if the "
+            "PDF's own text layer has scrambled them past reliably reading back.</p>"
+        )
 
         parts.append(sub("Keyboard Shortcuts"))
         shortcuts = [
@@ -889,11 +1093,13 @@ class MainWindow(QMainWindow):
         ]
         for keys, desc in shortcuts:
             parts.append(f"<p style='margin:2px 0;'><b>{keys}</b> \u2013 {desc}</p>")
-        parts.append("<p style='margin-top:6px;'>Undo/Redo cover status checkbox changes, cell "
-                      "edits (single or mass), Add New, Edit, and Remove Selected \u2013 each "
-                      "one, going back up to 50 steps for this session. It doesn't cover typing "
-                      "inside an open Edit form (Cancel there just discards unsaved changes "
-                      "instead).</p>")
+        parts.append(
+            "<p style='margin-top:6px;'>Undo/Redo cover status checkbox changes, cell "
+            "edits (single or mass), Add New, Edit, and Remove Selected \u2013 each "
+            "one, going back up to 50 steps for this session. It doesn't cover typing "
+            "inside an open Edit form (Cancel there just discards unsaved changes "
+            "instead).</p>"
+        )
 
         parts.append("<hr style='margin-top:18px;'>")
         parts.append(h("WORKBOOK INSTRUCTIONS (from the Instructions sheet)"))
@@ -913,14 +1119,15 @@ class MainWindow(QMainWindow):
         return "".join(html_parts)
 
     def apply_theme(self):
-        
         theme = da.get_setting("theme") or "light"
         app = QApplication.instance()
         title_build = self.findChild(QLabel, "SidebarTitle")
-            
+        logo_build = self.findChild(QLabel, "SidebarLogo")
         app.setStyleSheet(DARK_QSS if theme == "dark" else LIGHT_QSS)
         if title_build is not None:
             title_build.setStyleSheet("color: white;" if theme == "dark" else "color: black;")
+        if logo_build is not None:
+            self._set_logo_pixmap(logo_build)
 
 
 # =============================================================================
@@ -1007,13 +1214,14 @@ class DashboardPage(QWidget):
             "The fastest way to log new equipment is typing straight into "
             "Excel - great for bulk entry, autofill, and copy/paste. This "
             "app's Add New / Edit forms are best for one-off edits, quick "
-            "lookups, PDF exports, and status tracking.")
+            "lookups, PDF exports, and status tracking."
+        )
         tip.setObjectName("StatLabel")
         tip.setWordWrap(True)
         card_layout.addWidget(tip)
 
         row = QHBoxLayout()
-        self.excel_sheets_btn = make_button("\U0001F4C4 Excel Sheets", "Primary")
+        self.excel_sheets_btn = make_button("\U0001f4c4 Excel Sheets", "Primary")
         self.excel_sheets_btn.clicked.connect(self._show_excel_sheet_menu)
         row.addWidget(self.excel_sheets_btn)
         row.addStretch()
@@ -1038,7 +1246,8 @@ class DashboardPage(QWidget):
                 added_any = True
                 action = submenu.addAction(da.series_display_label(series_number))
                 action.triggered.connect(
-                    lambda checked=False, sn=series_number, ek=equip_key: self._open_sheet(sn, ek))
+                    lambda checked=False, sn=series_number, ek=equip_key: self._open_sheet(sn, ek)
+                )
             if not added_any:
                 none_action = submenu.addAction("(none yet)")
                 none_action.setEnabled(False)
@@ -1112,10 +1321,17 @@ class ExcelLikeTableWidget(QTableWidget):
 
 class IndexPage(QWidget):
     STATUS_FIELDS = ["installed", "submitted", "accepted", "export"]
-    STATUS_LABELS = {"installed": "Installed", "submitted": "Submitted",
-                      "accepted": "Accepted", "export": "Export"}
-    STATUS_OBJECT_NAMES = {"submitted": "SubmittedCheck", "accepted": "AcceptedCheck",
-                            "export": "ExportCheck"}
+    STATUS_LABELS = {
+        "installed": "Installed",
+        "submitted": "Submitted",
+        "accepted": "Accepted",
+        "export": "Export",
+    }
+    STATUS_OBJECT_NAMES = {
+        "submitted": "SubmittedCheck",
+        "accepted": "AcceptedCheck",
+        "export": "ExportCheck",
+    }
 
     def __init__(self, main_window, series_number, equip_key, filters=None):
         super().__init__()
@@ -1130,7 +1346,9 @@ class IndexPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        title = QLabel(f"{da.series_display_label(series_number)} \u2013 {self.etype['label']} Index")
+        title = QLabel(
+            f"{da.series_display_label(series_number)} \u2013 {self.etype['label']} Index"
+        )
         title.setObjectName("PageTitle")
         layout.addWidget(title)
 
@@ -1145,8 +1363,9 @@ class IndexPage(QWidget):
         add_btn.setToolTip("Add a brand-new row (Ctrl+N)")
         add_btn.clicked.connect(self.add_new)
         more_btn = make_button("Show More", "Ghost")
-        more_btn.setToolTip("See every field on the selected row, not just the "
-                             "columns shown here")
+        more_btn.setToolTip(
+            "See every field on the selected row, not just the " "columns shown here"
+        )
         more_btn.clicked.connect(self.show_more)
         view_btn = make_button("View Details", "Ghost")
         view_btn.setToolTip("Build a filled PDF preview of the selected row")
@@ -1158,8 +1377,9 @@ class IndexPage(QWidget):
         export_btn.setToolTip("Turn rows into PDFs (Ctrl+Shift+E)")
         export_btn.clicked.connect(self.open_export)
         select_all_btn = make_button("Select All", "Ghost")
-        select_all_btn.setToolTip("Select every row currently shown (not just "
-                                   "the ones on screen without scrolling)")
+        select_all_btn.setToolTip(
+            "Select every row currently shown (not just " "the ones on screen without scrolling)"
+        )
         select_all_btn.clicked.connect(self.select_all_in_view)
         remove_btn = make_button("Remove Selected", "Danger")
         remove_btn.setToolTip("Clear the selected row(s) (Delete). Undoable with Ctrl+Z.")
@@ -1193,12 +1413,15 @@ class IndexPage(QWidget):
         status_label = QLabel("Bulk actions:")
         status_label.setObjectName("FieldLabel")
         bulk_btn = make_button("Bulk Status \u25be", "Ghost")
-        bulk_btn.setToolTip("Mark/unmark Installed, Submitted, or Accepted on "
-                             "every currently-selected row at once")
+        bulk_btn.setToolTip(
+            "Mark/unmark Installed, Submitted, or Accepted on "
+            "every currently-selected row at once"
+        )
         bulk_btn.setMenu(self._build_bulk_status_menu())
         queue_btn = make_button("Queue All Shown for Export", "Primary")
-        queue_btn.setToolTip("Check the Export box on every row the current "
-                              "search/filter is showing")
+        queue_btn.setToolTip(
+            "Check the Export box on every row the current " "search/filter is showing"
+        )
         queue_btn.clicked.connect(self.queue_all_shown_for_export)
         clear_queue_btn = make_button("Clear Export Queue (Shown)", "Ghost")
         clear_queue_btn.setToolTip("Uncheck the Export box on every row currently shown")
@@ -1222,10 +1445,18 @@ class IndexPage(QWidget):
         search_row.addWidget(self.count_label)
         layout.addLayout(search_row)
 
-        self.columns = (["row"] + self.etype["summary_fields"] + list(self.etype.get("date_fields", []))
-                         + list(self.STATUS_FIELDS))
-        self.headers = (["Row"] + self.etype["summary_labels"] + list(self.etype.get("date_labels", []))
-                         + [self.STATUS_LABELS[f] for f in self.STATUS_FIELDS])
+        self.columns = (
+            ["row"]
+            + self.etype["summary_fields"]
+            + list(self.etype.get("date_fields", []))
+            + list(self.STATUS_FIELDS)
+        )
+        self.headers = (
+            ["Row"]
+            + self.etype["summary_labels"]
+            + list(self.etype.get("date_labels", []))
+            + [self.STATUS_LABELS[f] for f in self.STATUS_FIELDS]
+        )
         n_summary = len(self.etype["summary_fields"])
         n_dates = len(self.etype.get("date_fields", []))
         self._n_summary = n_summary
@@ -1233,13 +1464,17 @@ class IndexPage(QWidget):
         # Every plain-text column (Tag/System/Type + the date columns) is
         # directly editable right in the grid, Excel-style - {column_index:
         # field_id}. Row # and the status checkboxes are never in here.
-        self._editable_columns = {i: fid for i, fid in enumerate(self.columns) if 1 <= i <= n_summary + n_dates}
+        self._editable_columns = {
+            i: fid for i, fid in enumerate(self.columns) if 1 <= i <= n_summary + n_dates
+        }
 
         self.table = ExcelLikeTableWidget(0, len(self.columns), index_page=self)
         self.table.setHorizontalHeaderLabels(self.headers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditKeyPressed | QAbstractItemView.AnyKeyPressed)
+        self.table.setEditTriggers(
+            QAbstractItemView.EditKeyPressed | QAbstractItemView.AnyKeyPressed
+        )
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setStretchLastSection(False)
@@ -1257,12 +1492,14 @@ class IndexPage(QWidget):
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         layout.addWidget(self.table, stretch=1)
 
-        tip = QLabel("Tip: click a column header to sort, type to search, "
-                     "Ctrl/Shift-click rows to select more than one. Tag, System, Type, "
-                     "and date cells are editable right here - click one and type, or "
-                     "Ctrl+C / Ctrl+V to copy a value onto every selected row, Ctrl+D to "
-                     "fill down, Backspace to clear. Row # turns yellow once Submitted, "
-                     "green once Accepted. Ctrl+Z undoes the last change.")
+        tip = QLabel(
+            "Tip: click a column header to sort, type to search, "
+            "Ctrl/Shift-click rows to select more than one. Tag, System, Type, "
+            "and date cells are editable right here - click one and type, or "
+            "Ctrl+C / Ctrl+V to copy a value onto every selected row, Ctrl+D to "
+            "fill down, Backspace to clear. Row # turns yellow once Submitted, "
+            "green once Accepted. Ctrl+Z undoes the last change."
+        )
         tip.setObjectName("FieldLabel")
         tip.setWordWrap(True)
         layout.addWidget(tip)
@@ -1274,7 +1511,9 @@ class IndexPage(QWidget):
     # ----------------------------------------------------------------- data
     def reload(self, reselect_row=None):
         try:
-            self.all_rows = da.read_index_rows_filtered(self.series_number, self.equip_key, self.filters)
+            self.all_rows = da.read_index_rows_filtered(
+                self.series_number, self.equip_key, self.filters
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Couldn't read workbook", str(exc))
             self.all_rows = []
@@ -1293,8 +1532,10 @@ class IndexPage(QWidget):
             for r in range(self.table.rowCount()):
                 item = self.table.item(r, 0)
                 if item and item.sort_value in targets:
-                    sm.select(self.table.model().index(r, 0),
-                              QItemSelectionModel.Select | QItemSelectionModel.Rows)
+                    sm.select(
+                        self.table.model().index(r, 0),
+                        QItemSelectionModel.Select | QItemSelectionModel.Rows,
+                    )
                     if first_item is None:
                         first_item = item
             if first_item is not None:
@@ -1304,8 +1545,12 @@ class IndexPage(QWidget):
         query = self.search_edit.text().strip().lower()
         rows = self.all_rows
         if query:
-            rows = [r for r in rows if query in
-                    " ".join(str(r.get(f) or "") for f in self.etype["summary_fields"]).lower()]
+            rows = [
+                r
+                for r in rows
+                if query
+                in " ".join(str(r.get(f) or "") for f in self.etype["summary_fields"]).lower()
+            ]
 
         self.table.blockSignals(True)
         self.table.setSortingEnabled(False)
@@ -1338,15 +1583,22 @@ class IndexPage(QWidget):
 
             for i, field in enumerate(self.STATUS_FIELDS):
                 col = 1 + n_summary + n_dates + i
-                self.table.setItem(r, col, QTableWidgetItem(""))  # keeps row height/selection consistent
-                widget = self._build_status_widget(row_num, key_value, field, bool(entry.get(field)))
+                self.table.setItem(
+                    r, col, QTableWidgetItem("")
+                )  # keeps row height/selection consistent
+                widget = self._build_status_widget(
+                    row_num, key_value, field, bool(entry.get(field))
+                )
                 self.table.setCellWidget(r, col, widget)
         self.table.setSortingEnabled(True)
         self.table.blockSignals(False)
 
         total, shown = len(self.all_rows), len(rows)
-        self.count_label.setText(f"{shown} of {total}" if shown != total
-                                  else f"{total} record{'s' if total != 1 else ''}")
+        self.count_label.setText(
+            f"{shown} of {total}"
+            if shown != total
+            else f"{total} record{'s' if total != 1 else ''}"
+        )
 
     def _build_status_widget(self, row_num, key_value, field, checked):
         box = QCheckBox()
@@ -1356,8 +1608,10 @@ class IndexPage(QWidget):
         box.setToolTip(f"{self.STATUS_LABELS[field]} \u2013 click to toggle for this row only")
         box.setChecked(checked)
         box.toggled.connect(
-            lambda is_checked, rn=row_num, kv=key_value, f=field, b=box:
-                self._on_status_checkbox_toggled(rn, kv, f, b, is_checked))
+            lambda is_checked, rn=row_num, kv=key_value, f=field, b=box: self._on_status_checkbox_toggled(
+                rn, kv, f, b, is_checked
+            )
+        )
         wrapper = QWidget()
         wlayout = QHBoxLayout(wrapper)
         wlayout.setContentsMargins(0, 0, 0, 0)
@@ -1384,7 +1638,9 @@ class IndexPage(QWidget):
         self._refresh_row_color(row_num)
         self.main_window.statusBar().showMessage(
             f"{self.STATUS_LABELS[field]} {'checked' if checked else 'unchecked'} "
-            f"\u2013 {key_value}", 2500)
+            f"\u2013 {key_value}",
+            2500,
+        )
         self.main_window.refresh_sidebar_and_dashboard()
 
     def _record_status_undo(self, key_value, field, previous, new_value):
@@ -1460,15 +1716,20 @@ class IndexPage(QWidget):
             cleaned = new_value.strip()
             if not cleaned:
                 QMessageBox.warning(
-                    self, "Can't be blank",
+                    self,
+                    "Can't be blank",
                     f"{self._header_for(field)} can't be blank. Use Remove Selected "
-                    "to clear this row entirely instead.")
+                    "to clear this row entirely instead.",
+                )
                 self._revert_cell_text(row_num, field, old_value)
                 return
-            dup_row = da.find_duplicate_row(self.series_number, self.equip_key, cleaned, exclude_row=row_num)
+            dup_row = da.find_duplicate_row(
+                self.series_number, self.equip_key, cleaned, exclude_row=row_num
+            )
             if dup_row is not None:
-                QMessageBox.warning(self, "Duplicate",
-                                     f'"{cleaned}" is already used on row {dup_row}.')
+                QMessageBox.warning(
+                    self, "Duplicate", f'"{cleaned}" is already used on row {dup_row}.'
+                )
                 self._revert_cell_text(row_num, field, old_value)
                 return
             new_value = cleaned
@@ -1485,7 +1746,8 @@ class IndexPage(QWidget):
         entry[field] = new_value
         self._record_single_cell_edit_undo(row_num, field, old_value, new_value)
         self.main_window.statusBar().showMessage(
-            f"Saved {self._header_for(field)} on row {row_num}", 2500)
+            f"Saved {self._header_for(field)} on row {row_num}", 2500
+        )
         self.main_window.refresh_sidebar_and_dashboard()
 
         if field == key_field:
@@ -1553,7 +1815,7 @@ class IndexPage(QWidget):
             return
 
         self.table.blockSignals(True)
-        for row_num, field, old_value, new_value in before:
+        for row_num, field, _old_value, new_value in before:
             entry = self._entry_by_row.get(row_num)
             if entry is not None:
                 entry[field] = new_value
@@ -1574,11 +1836,15 @@ class IndexPage(QWidget):
         mw, sn, ek = self.main_window, self.series_number, self.equip_key
 
         def do_undo():
-            da.save_fields_bulk(sn, ek, [(row_num, field, old) for row_num, field, old, new in before])
+            da.save_fields_bulk(
+                sn, ek, [(row_num, field, old) for row_num, field, old, new in before]
+            )
             mw.refresh_current_view()
 
         def do_redo():
-            da.save_fields_bulk(sn, ek, [(row_num, field, new) for row_num, field, old, new in before])
+            da.save_fields_bulk(
+                sn, ek, [(row_num, field, new) for row_num, field, old, new in before]
+            )
             mw.refresh_current_view()
 
         n = len(before)
@@ -1598,9 +1864,11 @@ class IndexPage(QWidget):
             return
         col = self.table.currentColumn()
         if col not in self._editable_columns:
-            QMessageBox.information(self, "Can't paste here",
-                                     "That column isn't editable. Click a Tag, System, "
-                                     "Type, or date cell first.")
+            QMessageBox.information(
+                self,
+                "Can't paste here",
+                "That column isn't editable. Click a Tag, System, " "Type, or date cell first.",
+            )
             return
         field = self._editable_columns[col]
         key_field = self.etype["key_field"]
@@ -1621,9 +1889,12 @@ class IndexPage(QWidget):
             # of rows, paste.
             value = lines[0]
             if field == key_field and len(selected_rows) > 1:
-                QMessageBox.warning(self, "Can't do that",
-                                     f"{self._header_for(field)} has to be unique per row - "
-                                     "pasting the same value onto more than one row isn't allowed.")
+                QMessageBox.warning(
+                    self,
+                    "Can't do that",
+                    f"{self._header_for(field)} has to be unique per row - "
+                    "pasting the same value onto more than one row isn't allowed.",
+                )
                 return
             updates = [(self.table.item(r, 0).sort_value, field, value) for r in selected_rows]
             self._apply_cell_updates(updates)
@@ -1656,9 +1927,12 @@ class IndexPage(QWidget):
             return
         field = self._editable_columns[col]
         if field == self.etype["key_field"]:
-            QMessageBox.warning(self, "Can't do that",
-                                 f"{self._header_for(field)} has to be unique per row - "
-                                 "fill down isn't allowed here.")
+            QMessageBox.warning(
+                self,
+                "Can't do that",
+                f"{self._header_for(field)} has to be unique per row - "
+                "fill down isn't allowed here.",
+            )
             return
         selected_rows = sorted({idx.row() for idx in self.table.selectionModel().selectedIndexes()})
         if len(selected_rows) < 2:
@@ -1674,9 +1948,12 @@ class IndexPage(QWidget):
             return
         field = self._editable_columns[col]
         if field == self.etype["key_field"]:
-            QMessageBox.warning(self, "Can't do that",
-                                 f"{self._header_for(field)} can't be blanked this way - "
-                                 "use Remove Selected to clear a whole row instead.")
+            QMessageBox.warning(
+                self,
+                "Can't do that",
+                f"{self._header_for(field)} can't be blanked this way - "
+                "use Remove Selected to clear a whole row instead.",
+            )
             return
         selected_rows = sorted({idx.row() for idx in self.table.selectionModel().selectedIndexes()})
         updates = [(self.table.item(r, 0).sort_value, field, "") for r in selected_rows]
@@ -1706,8 +1983,9 @@ class IndexPage(QWidget):
             QMessageBox.information(self, "Select a row", "Select a row first.")
             return None
         if len(sel) > 1:
-            QMessageBox.information(self, "Select one row",
-                                     "This action works on a single row - select just one.")
+            QMessageBox.information(
+                self, "Select one row", "This action works on a single row - select just one."
+            )
             return None
         item = self.table.item(sel[0].row(), 0)
         return item.sort_value
@@ -1730,8 +2008,9 @@ class IndexPage(QWidget):
     # --------------------------------------------------------------- actions
     def add_new(self):
         row_num = da.find_first_blank_row(self.series_number, self.equip_key)
-        dlg = EditDialog(self, self.series_number, self.equip_key, row_num,
-                          is_new=True, prefill=self.filters)
+        dlg = EditDialog(
+            self, self.series_number, self.equip_key, row_num, is_new=True, prefill=self.filters
+        )
         if dlg.exec() == QDialog.Accepted:
             self._record_add_undo(row_num)
             self.reload(reselect_row=row_num)
@@ -1871,8 +2150,9 @@ class IndexPage(QWidget):
     def queue_all_shown_for_export(self):
         shown = self.visible_row_entries()
         if not shown:
-            QMessageBox.information(self, "Nothing to queue",
-                                     "Nothing shown to add to the export queue.")
+            QMessageBox.information(
+                self, "Nothing to queue", "Nothing shown to add to the export queue."
+            )
             return
         before = {e.get(self.etype["key_field"]): bool(e.get("export")) for e in shown}
         keys = [(self.series_number, self.equip_key, kv) for kv in before]
@@ -1917,18 +2197,21 @@ class IndexPage(QWidget):
 
         key_field = self.etype["summary_fields"][0]
         by_row = {e["row"]: e for e in self.all_rows}
-        preview_keys = [str(by_row[rn].get(key_field) or f"row {rn}")
-                         for rn in row_nums[:5] if rn in by_row]
+        preview_keys = [
+            str(by_row[rn].get(key_field) or f"row {rn}") for rn in row_nums[:5] if rn in by_row
+        ]
         preview = ", ".join(preview_keys)
         if len(row_nums) > 5:
             preview += f", +{len(row_nums) - 5} more"
 
         reply = QMessageBox.question(
-            self, "Remove rows",
+            self,
+            "Remove rows",
             f"Remove {len(row_nums)} row(s)?\n\n{preview}\n\n"
             "This clears their data from the workbook. It doesn't touch any "
             "other row, and the row number(s) become free for the next 'Add "
-            "New'. Press Ctrl+Z right after if this was a mistake.")
+            "New'. Press Ctrl+Z right after if this was a mistake.",
+        )
         if reply != QMessageBox.Yes:
             return
 
@@ -2004,9 +2287,17 @@ class IndexPage(QWidget):
         if item is None:
             # Right-clicked empty space below the last row - only the
             # actions that don't depend on a selection make sense.
-            for a in (show_more_action, view_action, edit_action, add_queue_action,
-                      rm_queue_action, mark_installed, mark_submitted, mark_accepted,
-                      remove_action):
+            for a in (
+                show_more_action,
+                view_action,
+                edit_action,
+                add_queue_action,
+                rm_queue_action,
+                mark_installed,
+                mark_submitted,
+                mark_accepted,
+                remove_action,
+            ):
                 a.setEnabled(False)
 
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
@@ -2076,8 +2367,13 @@ class RowDetailDialog(QDialog):
         titles.setdefault("control", "Status")
         sections = list(dict.fromkeys(f["section"] for f in schema.LOG_COLUMNS))
         for section in sections:
-            fields_here = [f for f in schema.LOG_COLUMNS if f["section"] == section
-                            and f["id"] != "export_flag" and f["id"] != "yanda_qa_signature"]
+            fields_here = [
+                f
+                for f in schema.LOG_COLUMNS
+                if f["section"] == section
+                and f["id"] != "export_flag"
+                and f["id"] != "yanda_qa_signature"
+            ]
             if not fields_here:
                 continue
             box = QGroupBox(titles.get(section, section.title()))
@@ -2115,8 +2411,9 @@ class RowDetailDialog(QDialog):
         outer.addWidget(footer)
 
     def _open_edit(self):
-        dlg = EditDialog(self.parent(), self.series_number, self.equip_key,
-                          self.row_num, is_new=False)
+        dlg = EditDialog(
+            self.parent(), self.series_number, self.equip_key, self.row_num, is_new=False
+        )
         if dlg.exec() == QDialog.Accepted:
             self.opened_edit = True
             self.accept()
@@ -2175,9 +2472,11 @@ class MassEditDatesDialog(QDialog):
         date_row.addStretch()
         layout.addLayout(date_row)
 
-        note = QLabel("New rows always start with every date blank - this is the fast way to "
-                       "fill (or clear) one in bulk once you actually know it, without opening "
-                       "each row one at a time.")
+        note = QLabel(
+            "New rows always start with every date blank - this is the fast way to "
+            "fill (or clear) one in bulk once you actually know it, without opening "
+            "each row one at a time."
+        )
         note.setObjectName("FieldLabel")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -2205,8 +2504,11 @@ class MassEditDatesDialog(QDialog):
         if field is None:
             return
         scope = self.scope_combo.currentData()
-        rows = (self.page.selected_row_nums() if scope == "selected"
-                else [e["row"] for e in self.page.visible_row_entries()])
+        rows = (
+            self.page.selected_row_nums()
+            if scope == "selected"
+            else [e["row"] for e in self.page.visible_row_entries()]
+        )
         if not rows:
             QMessageBox.information(self, "No rows", "No rows in that scope.")
             return
@@ -2214,8 +2516,8 @@ class MassEditDatesDialog(QDialog):
         action = "Clear" if self.clear_check.isChecked() else f"Set to {value}"
         label = self.field_combo.currentText()
         reply = QMessageBox.question(
-            self, "Mass Edit Dates",
-            f"{action} \u2013 {label} \u2013 on {len(rows)} row(s)?")
+            self, "Mass Edit Dates", f"{action} \u2013 {label} \u2013 on {len(rows)} row(s)?"
+        )
         if reply != QMessageBox.Yes:
             return
         self.page.apply_mass_date(field, rows, value)
@@ -2246,8 +2548,9 @@ class EditDialog(QDialog):
             for fid, val in (prefill or {}).items():
                 effective.setdefault(fid, val)
 
-        self.setWindowTitle(("Add New " if is_new else "Edit ") + self.etype["label"]
-                             + f" \u2013 Row {row_num}")
+        self.setWindowTitle(
+            ("Add New " if is_new else "Edit ") + self.etype["label"] + f" \u2013 Row {row_num}"
+        )
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -2400,22 +2703,31 @@ class EditDialog(QDialog):
         key_value = values.get(key_field, "").strip()
 
         if not key_value:
-            key_label = next(f["label"] for f in self.etype["schema"].LOG_COLUMNS
-                              if f["id"] == key_field)
-            QMessageBox.warning(self, "Missing required field",
-                                 f'"{key_label}" can\'t be blank - the Index list, the '
-                                 f'row-selection, and the PDF filename are all built from it.')
+            key_label = next(
+                f["label"] for f in self.etype["schema"].LOG_COLUMNS if f["id"] == key_field
+            )
+            QMessageBox.warning(
+                self,
+                "Missing required field",
+                f'"{key_label}" can\'t be blank - the Index list, the '
+                f"row-selection, and the PDF filename are all built from it.",
+            )
             return
 
-        dup_row = da.find_duplicate_row(self.series_number, self.equip_key, key_value,
-                                         exclude_row=self.row_num)
+        dup_row = da.find_duplicate_row(
+            self.series_number, self.equip_key, key_value, exclude_row=self.row_num
+        )
         if dup_row is not None:
-            key_label = next(f["label"] for f in self.etype["schema"].LOG_COLUMNS
-                              if f["id"] == key_field)
-            QMessageBox.warning(self, f"Duplicate {key_label}",
-                                 f'"{key_value}" is already used on row {dup_row}. Each '
-                                 f'{key_label} must be unique - Installed/Submitted status '
-                                 f'and PDF filenames are both keyed off it.')
+            key_label = next(
+                f["label"] for f in self.etype["schema"].LOG_COLUMNS if f["id"] == key_field
+            )
+            QMessageBox.warning(
+                self,
+                f"Duplicate {key_label}",
+                f'"{key_value}" is already used on row {dup_row}. Each '
+                f"{key_label} must be unique - Installed/Submitted status "
+                f"and PDF filenames are both keyed off it.",
+            )
             return
 
         try:
@@ -2456,7 +2768,9 @@ class SettingsDialog(QDialog):
         export_label = QLabel("Default Export Options")
         export_label.setStyleSheet("font-size: 14px; font-weight: 700;")
         layout.addWidget(export_label)
-        hint = QLabel("Used to prefill the Export dialog each time - can still be changed per export.")
+        hint = QLabel(
+            "Used to prefill the Export dialog each time - can still be changed per export."
+        )
         hint.setObjectName("FieldLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -2468,7 +2782,9 @@ class SettingsDialog(QDialog):
 
         self.sig_check = QCheckBox("Include signature stamp by default")
         self.sig_check.setChecked(settings.get("default_include_signature", True))
-        self.sig_check.toggled.connect(lambda v: self._save_setting_safe("default_include_signature", v))
+        self.sig_check.toggled.connect(
+            lambda v: self._save_setting_safe("default_include_signature", v)
+        )
         layout.addWidget(self.sig_check)
 
         layout.addSpacing(16)
@@ -2490,7 +2806,8 @@ class SettingsDialog(QDialog):
             "Rename gives a series a friendlier label everywhere it's shown. "
             "Remove un-registers it from the app and archives its sheets in "
             "the workbook (hidden, not deleted) - nothing is ever "
-            "permanently destroyed by this button.")
+            "permanently destroyed by this button."
+        )
         series_hint.setObjectName("FieldLabel")
         series_hint.setWordWrap(True)
         layout.addWidget(series_hint)
@@ -2615,8 +2932,10 @@ class SignatureManagerDialog(QDialog):
         add_label = QLabel("Add a new signature")
         add_label.setStyleSheet("font-size: 14px; font-weight: 700;")
         layout.addWidget(add_label)
-        hint = QLabel("Name it, then choose a PNG or JPG image - it's copied into "
-                      "the assets/ folder under that name.")
+        hint = QLabel(
+            "Name it, then choose a PNG or JPG image - it's copied into "
+            "the assets/ folder under that name."
+        )
         hint.setObjectName("FieldLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -2697,7 +3016,8 @@ class SignatureManagerDialog(QDialog):
             QMessageBox.warning(self, "Name required", "Type a name for this signature first.")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose a signature image", "", "Image files (*.png *.jpg *.jpeg)")
+            self, "Choose a signature image", "", "Image files (*.png *.jpg *.jpeg)"
+        )
         if not path:
             return
         try:
@@ -2731,8 +3051,9 @@ class ExportDialog(QDialog):
         self.equip_key = equip_key
         self.filters = dict(filters or {})
         self.etype = da.EQUIPMENT_TYPES[equip_key]
-        self.setWindowTitle(f"Export {self.etype['label']}s \u2013 "
-                             f"{da.series_display_label(series_number)}")
+        self.setWindowTitle(
+            f"Export {self.etype['label']}s \u2013 " f"{da.series_display_label(series_number)}"
+        )
         self.resize(500, 680)
         settings = da.load_settings()
 
@@ -2745,8 +3066,10 @@ class ExportDialog(QDialog):
 
         if self.filters:
             filt_text = ", ".join(f"{k} = {v}" for k, v in self.filters.items())
-            filt_label = QLabel(f"\U0001F50E Only exporting rows where {filt_text} "
-                                 f"(matches the filter this Index view is currently showing)")
+            filt_label = QLabel(
+                f"\U0001f50e Only exporting rows where {filt_text} "
+                f"(matches the filter this Index view is currently showing)"
+            )
             filt_label.setObjectName("Breadcrumb")
             filt_label.setWordWrap(True)
             layout.addWidget(filt_label)
@@ -2755,10 +3078,15 @@ class ExportDialog(QDialog):
         which_label.setStyleSheet("font-weight: 700;")
         layout.addWidget(which_label)
 
-        checked_count = sum(1 for r in da.read_index_rows_filtered(series_number, equip_key, self.filters)
-                             if r.get("export"))
+        checked_count = sum(
+            1
+            for r in da.read_index_rows_filtered(series_number, equip_key, self.filters)
+            if r.get("export")
+        )
         self.mode_group = QButtonGroup(self)
-        selected_radio = QRadioButton(f"Only rows checked in the Export column ({checked_count} checked)")
+        selected_radio = QRadioButton(
+            f"Only rows checked in the Export column ({checked_count} checked)"
+        )
         selected_radio.setChecked(True)
         flagged_radio = QRadioButton('Only rows flagged "Export to PDF = Y" in Excel')
         all_radio = QRadioButton(f'Every row with a {self.etype["summary_labels"][0]} filled in')
@@ -2767,9 +3095,11 @@ class ExportDialog(QDialog):
         self.mode_group.addButton(all_radio, 2)
         layout.addWidget(selected_radio)
         if checked_count == 0:
-            hint = QLabel("Nothing's checked yet - tick the Export column on the rows you "
-                           "want, back in the Index table, or use \u201cQueue All Shown for "
-                           "Export\u201d for a quick start.")
+            hint = QLabel(
+                "Nothing's checked yet - tick the Export column on the rows you "
+                "want, back in the Index table, or use \u201cQueue All Shown for "
+                "Export\u201d for a quick start."
+            )
             hint.setObjectName("FieldLabel")
             hint.setWordWrap(True)
             layout.addWidget(hint)
@@ -2779,15 +3109,19 @@ class ExportDialog(QDialog):
         layout.addSpacing(4)
         self.clear_after_check = QCheckBox("Uncheck those rows' Export boxes once exported")
         self.clear_after_check.setChecked(True)
-        self.clear_after_check.setToolTip("Only applies to the 'checked in the Export column' mode above")
+        self.clear_after_check.setToolTip(
+            "Only applies to the 'checked in the Export column' mode above"
+        )
         layout.addWidget(self.clear_after_check)
 
         layout.addSpacing(10)
         suffix_label = QLabel("Filename suffix")
         suffix_label.setStyleSheet("font-weight: 700;")
         layout.addWidget(suffix_label)
-        suffix_hint = QLabel('e.g. "DEV." makes "29103-PIT-1021 DEV..pdf" - leave blank '
-                              'for just the tag on its own.')
+        suffix_hint = QLabel(
+            'e.g. "DEV." makes "29103-PIT-1021 DEV..pdf" - leave blank '
+            "for just the tag on its own."
+        )
         suffix_hint.setObjectName("FieldLabel")
         suffix_hint.setWordWrap(True)
         layout.addWidget(suffix_hint)
@@ -2812,9 +3146,11 @@ class ExportDialog(QDialog):
         folder_label = QLabel("Output folder")
         folder_label.setStyleSheet("font-weight: 700;")
         layout.addWidget(folder_label)
-        folder_hint = QLabel("Files always land inside output_pdfs/ next to the workbook. "
-                              "Optionally put this run into its own subfolder there - it's "
-                              "created automatically if it doesn't exist.")
+        folder_hint = QLabel(
+            "Files always land inside output_pdfs/ next to the workbook. "
+            "Optionally put this run into its own subfolder there - it's "
+            "created automatically if it doesn't exist."
+        )
         folder_hint.setObjectName("FieldLabel")
         folder_hint.setWordWrap(True)
         layout.addWidget(folder_hint)
@@ -2834,7 +3170,8 @@ class ExportDialog(QDialog):
 
         self.filename_date_check = QCheckBox("Include today's date in each filename")
         self.filename_date_check.setToolTip(
-            f"e.g. \"29103-PIT-1021 DEV. {datetime.date.today().isoformat()}.pdf\"")
+            f'e.g. "29103-PIT-1021 DEV. {datetime.date.today().isoformat()}.pdf"'
+        )
         layout.addWidget(self.filename_date_check)
 
         self.sign_date_check = None
@@ -2843,8 +3180,12 @@ class ExportDialog(QDialog):
             "Sign-off dates come from real columns now, the same for both equipment types - "
             "edit them in the Index grid or with Mass Edit Dates (Ctrl+Shift+D) before "
             "exporting, and they'll appear on the PDF automatically."
-            + (" (YANDA QC Representative - Date, in this case.)" if equip_key == "valve" else
-               " (QA Rep Date / Client Rep Date, in this case.)"))
+            + (
+                " (YANDA QC Representative - Date, in this case.)"
+                if equip_key == "valve"
+                else " (QA Rep Date / Client Rep Date, in this case.)"
+            )
+        )
         sign_off_hint.setObjectName("FieldLabel")
         sign_off_hint.setWordWrap(True)
         layout.addWidget(sign_off_hint)
@@ -2871,24 +3212,31 @@ class ExportDialog(QDialog):
         mode = {0: "selected", 1: "flagged", 2: "all"}[self.mode_group.checkedId()]
         try:
             written = da.run_export(
-                self.series_number, self.equip_key, mode=mode,
-                suffix=self.suffix_edit.text(), flatten=self.flatten_check.isChecked(),
+                self.series_number,
+                self.equip_key,
+                mode=mode,
+                suffix=self.suffix_edit.text(),
+                flatten=self.flatten_check.isChecked(),
                 include_signature=self.sig_check.isChecked(),
                 subfolder=self.subfolder_edit.text().strip() or None,
-                merge=self.merge_check.isChecked(), filters=self.filters or None,
+                merge=self.merge_check.isChecked(),
+                filters=self.filters or None,
                 clear_after_selected=self.clear_after_check.isChecked(),
-                include_date_in_filename=self.filename_date_check.isChecked())
+                include_date_in_filename=self.filename_date_check.isChecked(),
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
         if not written:
-            QMessageBox.information(self, "Nothing exported", "No rows matched - nothing was exported.")
+            QMessageBox.information(
+                self, "Nothing exported", "No rows matched - nothing was exported."
+            )
             return
         folder = da.HERE / "output_pdfs" / (self.subfolder_edit.text().strip() or "")
-        QMessageBox.information(self, "Export complete",
-                                 f"Wrote {len(written)} file(s) to:\n{folder.resolve()}")
+        QMessageBox.information(
+            self, "Export complete", f"Wrote {len(written)} file(s) to:\n{folder.resolve()}"
+        )
         self.accept()
-
 
 
 # =============================================================================
@@ -2903,17 +3251,40 @@ class ExportDialog(QDialog):
 # =============================================================================
 WIZARD_DEFAULT_STICKY = {
     "transmitter": {
-        "customer_ref", "project", "location", "contract_no", "system_number",
-        "make", "signal_type", "local_display",
-        "te1_make", "te1_model", "te1_serial", "te1_caldate",
-        "te2_make", "te2_model", "te2_serial", "te2_caldate",
-        "te3_make", "te3_model", "te3_serial", "te3_caldate",
+        "customer_ref",
+        "project",
+        "location",
+        "contract_no",
+        "system_number",
+        "make",
+        "signal_type",
+        "local_display",
+        "te1_make",
+        "te1_model",
+        "te1_serial",
+        "te1_caldate",
+        "te2_make",
+        "te2_model",
+        "te2_serial",
+        "te2_caldate",
+        "te3_make",
+        "te3_model",
+        "te3_serial",
+        "te3_caldate",
         "yanda_qa_name",
     },
     "valve": {
-        "customer_name", "project_name", "contract_no", "location", "system",
-        "equip_make", "equip_model", "equip_serial", "equip_caldate",
-        "qc_rep_name", "commissioning_rep_name",
+        "customer_name",
+        "project_name",
+        "contract_no",
+        "location",
+        "system",
+        "equip_make",
+        "equip_model",
+        "equip_serial",
+        "equip_caldate",
+        "qc_rep_name",
+        "commissioning_rep_name",
     },
 }
 
@@ -2943,9 +3314,11 @@ class DatasheetImportDialog(QDialog):
         body_layout.setContentsMargins(20, 0, 20, 16)
 
         n = len(records)
-        intro = QLabel(f"Found {n} recognizable data sheet{'s' if n != 1 else ''}. Pick which "
-                        "ones to bring in - each opens the normal Add New form, pre-filled, so "
-                        "you can check every field before anything is actually saved.")
+        intro = QLabel(
+            f"Found {n} recognizable data sheet{'s' if n != 1 else ''}. Pick which "
+            "ones to bring in - each opens the normal Add New form, pre-filled, so "
+            "you can check every field before anything is actually saved."
+        )
         intro.setWordWrap(True)
         body_layout.addWidget(intro)
 
@@ -2998,7 +3371,8 @@ class DatasheetImportDialog(QDialog):
             "everything else (serial numbers, field test results, sign-offs) starts blank, the "
             "same as any new row. Signal Type, and Valve Type for valves, are best-guesses "
             "worth a second look rather than a direct read - double-check those specifically "
-            "before saving each one.")
+            "before saving each one."
+        )
         note.setObjectName("FieldLabel")
         note.setWordWrap(True)
         body_layout.addWidget(note)
@@ -3027,16 +3401,16 @@ class DatasheetImportDialog(QDialog):
             return
         checked = [rec for rec, box in zip(self.records, self.checkboxes) if box.isChecked()]
         if not checked:
-            QMessageBox.information(self, "Nothing checked",
-                                     "Check at least one record to import.")
+            QMessageBox.information(self, "Nothing checked", "Check at least one record to import.")
             return
 
         added, skipped = 0, 0
         for rec in checked:
             equip_key = rec["equip_key"]
             row_num = da.find_first_blank_row(series_number, equip_key)
-            dlg = EditDialog(self, series_number, equip_key, row_num, is_new=True,
-                              prefill=rec["fields"])
+            dlg = EditDialog(
+                self, series_number, equip_key, row_num, is_new=True, prefill=rec["fields"]
+            )
             dlg.setWindowTitle(f"Review & Add \u2013 {rec['tag']} ({rec['kind_label']})")
             if dlg.exec() == QDialog.Accepted:
                 self._record_add_undo(series_number, equip_key, row_num, rec["tag"])
@@ -3045,8 +3419,10 @@ class DatasheetImportDialog(QDialog):
                 skipped += 1
 
         self.main_window.refresh_sidebar_and_dashboard()
-        msg = (f"Added {added} of {len(checked)} record(s) into "
-               f"{da.series_display_label(series_number)}.")
+        msg = (
+            f"Added {added} of {len(checked)} record(s) into "
+            f"{da.series_display_label(series_number)}."
+        )
         if skipped:
             msg += f"\n{skipped} closed without saving, so nothing was added for those."
         QMessageBox.information(self, "Import complete", msg)
@@ -3119,7 +3495,8 @@ class PopulatingWizardDialog(QDialog):
             "Set up the tag pattern for this batch. Area Code and Tag Type combine "
             "with a sequence you type per item to build the full Tag / Equip # "
             "automatically \u2013 e.g. Area 29103 + Type FIT + Sequence 1011 = "
-            "29103-FIT-1011.")
+            "29103-FIT-1011."
+        )
         intro.setObjectName("FieldLabel")
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -3205,7 +3582,8 @@ class PopulatingWizardDialog(QDialog):
             f"\u2713 A saved draft from {saved_at} is available ({n} entr"
             f"{'y' if n == 1 else 'ies'} already added that session) \u2013 "
             f"click \u201cResume Draft\u201d below or just fill in Next normally "
-            f"to start a fresh batch instead.")
+            f"to start a fresh batch instead."
+        )
         self.draft_banner.setVisible(True)
         resume_btn = make_button("Resume Draft", "Success")
         resume_btn.clicked.connect(self._resume_draft)
@@ -3229,8 +3607,9 @@ class PopulatingWizardDialog(QDialog):
             self.equip_key = d["equip_key"]
             self.etype = da.EQUIPMENT_TYPES[self.equip_key]
         except KeyError:
-            QMessageBox.warning(self, "Couldn't resume",
-                                 "That draft's series/equipment type no longer exists.")
+            QMessageBox.warning(
+                self, "Couldn't resume", "That draft's series/equipment type no longer exists."
+            )
             return
         idx = self.series_combo.findData(self.series_number)
         if idx >= 0:
@@ -3252,9 +3631,12 @@ class PopulatingWizardDialog(QDialog):
     # ------------------------------------------------------------ Page 2
     def _go_to_repeat_page(self):
         if not self.type_edit.text().strip():
-            QMessageBox.warning(self, "Tag Type needed",
-                                 "Enter a Tag Type first (e.g. FIT, PIT, TIT, PV, FV) - "
-                                 "it's part of every tag this batch will create.")
+            QMessageBox.warning(
+                self,
+                "Tag Type needed",
+                "Enter a Tag Type first (e.g. FIT, PIT, TIT, PV, FV) - "
+                "it's part of every tag this batch will create.",
+            )
             return
         self.series_number = self.series_combo.currentData()
         self.equip_key = self.equip_combo.currentData()
@@ -3276,7 +3658,8 @@ class PopulatingWizardDialog(QDialog):
             "Tick any field that should carry the SAME value into every entry this "
             "session (Make, Test Equipment, sign-off name, ...). Leave a field unticked "
             "and it resets to blank after every save - use that for anything that "
-            "genuinely changes per item (Serial Number, K-Factor, ...).")
+            "genuinely changes per item (Serial Number, K-Factor, ...)."
+        )
         intro.setObjectName("FieldLabel")
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -3303,8 +3686,12 @@ class PopulatingWizardDialog(QDialog):
         self.checklist_boxes = {}
         defaults = WIZARD_DEFAULT_STICKY.get(self.equip_key, set())
         for section in sections:
-            fields_here = [f for f in schema.LOG_COLUMNS if f["section"] == section
-                            and f["id"] not in ("export_flag", "yanda_qa_signature", key_field)]
+            fields_here = [
+                f
+                for f in schema.LOG_COLUMNS
+                if f["section"] == section
+                and f["id"] not in ("export_flag", "yanda_qa_signature", key_field)
+            ]
             if not fields_here:
                 continue
             box = QGroupBox(titles.get(section, section.title()))
@@ -3321,10 +3708,15 @@ class PopulatingWizardDialog(QDialog):
         scroll.setWidget(inner)
         layout.addWidget(scroll, stretch=1)
 
-        check_all_btn.clicked.connect(lambda: [cb.setChecked(True) for cb in self.checklist_boxes.values()])
-        uncheck_all_btn.clicked.connect(lambda: [cb.setChecked(False) for cb in self.checklist_boxes.values()])
+        check_all_btn.clicked.connect(
+            lambda: [cb.setChecked(True) for cb in self.checklist_boxes.values()]
+        )
+        uncheck_all_btn.clicked.connect(
+            lambda: [cb.setChecked(False) for cb in self.checklist_boxes.values()]
+        )
         defaults_btn.clicked.connect(
-            lambda: [cb.setChecked(fid in defaults) for fid, cb in self.checklist_boxes.items()])
+            lambda: [cb.setChecked(fid in defaults) for fid, cb in self.checklist_boxes.items()]
+        )
 
         footer = QHBoxLayout()
         back_btn = make_button("\u2190 Back", "Ghost")
@@ -3416,8 +3808,11 @@ class PopulatingWizardDialog(QDialog):
         self.widgets = {}
         section_boxes = {}
         for section in sections:
-            fields_here = [f for f in schema.LOG_COLUMNS if f["section"] == section
-                            and f["id"] not in ("export_flag", "yanda_qa_signature")]
+            fields_here = [
+                f
+                for f in schema.LOG_COLUMNS
+                if f["section"] == section and f["id"] not in ("export_flag", "yanda_qa_signature")
+            ]
             if not fields_here:
                 continue
             box = QGroupBox(titles.get(section, section.title()))
@@ -3433,7 +3828,11 @@ class PopulatingWizardDialog(QDialog):
                 self.widgets[field["id"]] = widget
                 is_key = field["id"] == key_field
                 is_sticky = field["id"] in self.sticky_fields
-                suffix = "  (auto from Sequence)" if is_key else ("  \u21bb repeats" if is_sticky else "")
+                suffix = (
+                    "  (auto from Sequence)"
+                    if is_key
+                    else ("  \u21bb repeats" if is_sticky else "")
+                )
                 label = QLabel(field["label"] + suffix)
                 label.setObjectName("RequiredLabel" if is_key else "FieldLabel")
                 label.setWordWrap(True)
@@ -3468,6 +3867,7 @@ class PopulatingWizardDialog(QDialog):
             b = section_boxes.get(sec)
             if b:
                 scroll.ensureWidgetVisible(b, ymargin=10)
+
         section_picker.currentIndexChanged.connect(jump)
 
         footer = QFrame()
@@ -3553,13 +3953,17 @@ class PopulatingWizardDialog(QDialog):
         key_field = self._key_field()
         key_value = values.get(key_field, "").strip()
         if not key_value:
-            QMessageBox.warning(self, "Missing Tag/Equip #",
-                                 "Type a sequence above so the Tag/Equip # can be built.")
+            QMessageBox.warning(
+                self,
+                "Missing Tag/Equip #",
+                "Type a sequence above so the Tag/Equip # can be built.",
+            )
             return
         dup_row = da.find_duplicate_row(self.series_number, self.equip_key, key_value)
         if dup_row is not None:
-            QMessageBox.warning(self, "Duplicate",
-                                 f'"{key_value}" is already used on row {dup_row}.')
+            QMessageBox.warning(
+                self, "Duplicate", f'"{key_value}" is already used on row {dup_row}.'
+            )
             return
         row_num = da.find_first_blank_row(self.series_number, self.equip_key)
         try:
@@ -3574,21 +3978,28 @@ class PopulatingWizardDialog(QDialog):
 
         self.entries_this_session += 1
         self.count_label.setText(f"Entries added this session: {self.entries_this_session}")
-        self.main_window.statusBar().showMessage(
-            f"Wizard saved row {row_num} ({key_value})", 3000)
+        self.main_window.statusBar().showMessage(f"Wizard saved row {row_num} ({key_value})", 3000)
         self.main_window.refresh_sidebar_and_dashboard()
         self._reset_entry_form()
 
     def _entry_form_has_content(self):
-        return any(read_field_widget(w).strip() for fid, w in self.widgets.items()
-                   if fid != self._key_field()) or self.sequence_edit.text().strip()
+        return (
+            any(
+                read_field_widget(w).strip()
+                for fid, w in self.widgets.items()
+                if fid != self._key_field()
+            )
+            or self.sequence_edit.text().strip()
+        )
 
     def _edit_template(self):
         if self._entry_form_has_content():
             reply = QMessageBox.question(
-                self, "Edit template",
+                self,
+                "Edit template",
                 "Going back to change which fields repeat will clear whatever's typed "
-                "in the current (unsaved) entry. Continue?")
+                "in the current (unsaved) entry. Continue?",
+            )
             if reply != QMessageBox.Yes:
                 return
         page = self._build_repeat_page()
@@ -3615,22 +4026,26 @@ class PopulatingWizardDialog(QDialog):
             QMessageBox.critical(self, "Couldn't save draft", str(exc))
             return
         QMessageBox.information(
-            self, "Draft saved",
+            self,
+            "Draft saved",
             f"{self.entries_this_session} entr{'y' if self.entries_this_session == 1 else 'ies'} "
             "already saved this session stay in the workbook as-is. This batch's setup and "
             "the entry you were partway through are saved as ONE resumable draft - reopen the "
             "Populating Wizard any time to pick up where you left off. Saving another draft "
-            "later will overwrite this one.")
+            "later will overwrite this one.",
+        )
         self.accept()
 
     def reject(self):
         if self.stack.currentWidget() is self.page_entry and self._entry_form_has_content():
             reply = QMessageBox.question(
-                self, "Stop the wizard?",
+                self,
+                "Stop the wizard?",
                 f"{self.entries_this_session} entr{'y' if self.entries_this_session == 1 else 'ies'} "
                 "already saved this session will stay in the workbook. Anything currently "
                 "typed in this unsaved entry will be lost unless you use \u201cSave as Draft\u201d "
-                "instead. Stop anyway?")
+                "instead. Stop anyway?",
+            )
             if reply != QMessageBox.Yes:
                 return
         super().reject()

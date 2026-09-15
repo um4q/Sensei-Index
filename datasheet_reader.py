@@ -71,6 +71,7 @@ DatasheetRecord is a plain dict:
         "source_page": 0,                # 0-based index of the page the data table was on
     }
 """
+
 import re
 from pathlib import Path
 
@@ -105,6 +106,8 @@ def _detect_kind(text):
         return "pit"
     if "GUIDED WAVE RADAR" in t or "LEVEL XMTR" in t:
         return "lit"
+    if "DP TRANSMITTER" in t and "LEVEL" in t:
+        return "lit_dp"
     return None
 
 
@@ -115,6 +118,7 @@ _KIND_LABELS = {
     "tit": "Temperature Transmitter",
     "pit": "Pressure Transmitter",
     "lit": "Guided Wave Radar Level Transmitter",
+    "lit_dp": "DP Level Transmitter",
 }
 
 
@@ -164,7 +168,7 @@ def _row_label_value(text, row_num, label, stop_text=None):
         # <capital letter>"), and if that "marker" sits right at the
         # very start, applying it would wipe out the entire value rather
         # than trim a trailing intruder.
-        if m2 and val[:m2.start()].strip():
+        if m2 and val[: m2.start()].strip():
             cut_at = m2.start()
     val = val[:cut_at]
     return val.strip(" .:\t")
@@ -178,8 +182,16 @@ def _row_label_value(text, row_num, label, stop_text=None):
 # text layer sometimes renders "Work" as "W ork" (a stray internal
 # space).
 _HEADER_BLEED_PREFIXES = (
-    "Construction Work", "Construction W ork", "Amb. Temp", "Project Name",
-    "Plant Name", "Area Name", "Unit Name", "Sour Service", "Atm. Press", "SIL",
+    "Construction Work",
+    "Construction W ork",
+    "Amb. Temp",
+    "Project Name",
+    "Plant Name",
+    "Area Name",
+    "Unit Name",
+    "Sour Service",
+    "Atm. Press",
+    "SIL",
 )
 
 
@@ -245,6 +257,46 @@ def _looks_garbled(value):
     return bool(re.match(r"^to-?\d", value.strip(), re.IGNORECASE))
 
 
+def _decode_tit_instrument_range(raw_row_text):
+    """Row 23 (Instrument Range) on every TIT sheet in this template
+    family uses a PT-100 element per IEC 60751, whose full-scale range is
+    a fixed -200 to 600 degC no matter which specific instrument the
+    sheet is for - confirmed by rendering the actual PDF page and reading
+    it directly (bypassing pypdf's text layer entirely) on three separate
+    examples spanning three different tags, all showing the identical
+    value. The text layer renders this one cell's "to" token ahead of the
+    "-200" and butts "600" straight up against it with no separating
+    space, which is what turns it into "to-200600\u00baC" once
+    reconstructed - garbled, but it turns out always garbled the exact
+    same way, so it's decodable rather than just blankable."""
+    compact = (raw_row_text or "").replace(" ", "")
+    if re.match(r"^to-200600", compact, re.IGNORECASE):
+        return "-200 to 600 \u00baC"
+    return None
+
+
+def _decode_tit_calibrated_range(raw_row_text):
+    """Row 24 (Calibrated Range) has the same "to"-printed-first rendering
+    bug as row 23, but this one is genuinely instrument-specific, so it
+    can't be hardcoded the same way - "to-50400\u00baC" style text needs the
+    actual digit run split back into its low/high halves. Checked against
+    the rendered PDF on four examples spanning three different
+    instruments (two different tags, one of them at two different area
+    codes), every one split as exactly 2 digits after the minus sign for
+    the low value and the remaining digits for the high value. That exact
+    shape is what's matched here, deliberately - a different digit count
+    has no visual confirmation behind it, and guessing a split for those
+    would risk being confidently wrong, which is worse than staying
+    blank."""
+    compact = (raw_row_text or "").replace(" ", "")
+    m = re.match(r"^to-(\d{2})(\d{3})(\D*)$", compact, re.IGNORECASE)
+    if not m:
+        return None
+    lo, hi, unit = m.groups()
+    unit = unit.strip() or "\u00baC"
+    return f"-{lo} to {hi} {unit}"
+
+
 def _fix_hyphen_spacing(tag):
     return re.sub(r"\s+-", "-", tag or "").strip()
 
@@ -276,6 +328,25 @@ def _extract_common(text):
         if m:
             candidate = _first_segment(m.group(1))
             line_no = "" if _is_header_bleed(candidate) else candidate
+    if not re.match(r"^\d+-[A-Z]", tag or ""):
+        # A handful of sheets (seen on the DP-style Level Transmitter
+        # template) render row 1's own value blank and the tag instead
+        # crammed onto the SAME line as "Project Name" with no separating
+        # whitespace before it - "Project Name29203-LIT -0210 OILSANDS" -
+        # which the normal column-gap logic can't isolate since there's no
+        # gap to find (the "value" it ends up grabbing is that whole
+        # trailing mess, not literally empty, so a blank-check alone
+        # wouldn't catch this - checking the shape of a real tag does).
+        # "OILSANDS" is this project's constant Project Name value, so
+        # it's a safe, specific anchor to pull the tag from between the
+        # two known labels.
+        m = re.search(r"Project Name(.+?)\s*OILSANDS", text)
+        if m:
+            tag = _fix_hyphen_spacing(m.group(1).strip())
+    if not re.match(r"^\d+-\d+[A-Z]-\d", pid or ""):
+        m = re.search(r"Plant Name(.+?)\s*KINOSIS", text)
+        if m:
+            pid = m.group(1).strip()
     return tag, pid, service, line_no
 
 
@@ -287,8 +358,9 @@ def _extract_valve(text, doc_no):
     travel_value = travel_nums[-1] if travel_nums else ""
 
     trim_plug = _first_segment(_row_label_value(text, 55, "Plug / Ball / Disk Material"))
-    trim_seat = _first_segment(_row_label_value(text, 56, "Seat Material",
-                                                 stop_text="Coil Rating / Power Supply"))
+    trim_seat = _first_segment(
+        _row_label_value(text, 56, "Seat Material", stop_text="Coil Rating / Power Supply")
+    )
 
     ansi_line = _first_segment(_row_label_value(text, 36, "ANSI Class"))
     ansi_m = re.search(r"\d+", ansi_line)
@@ -337,7 +409,7 @@ def _extract_valve(text, doc_no):
         "body_style": body_style,
         "signal_type": signal_type,
         "valve_type": valve_type,
-        "comments": f"See engineering datasheet {doc_no} for full spec." if doc_no else "",
+        "comments": "",
     }
     guessed = {"valve_type": True, "signal_type": True}
     return tag, fields, guessed
@@ -361,17 +433,16 @@ def _extract_onoff_valve(text, doc_no):
     it with either would misrepresent what the datasheet actually says."""
     tag, pid, service, line_no = _extract_common(text)
 
-    trim_plug = _first_segment(_label_value_in_range(
-        text, "Plug / Ball / Disk Material", 52, 58))
-    trim_seat = _first_segment(_label_value_in_range(
-        text, "Seat / Ring Material", 53, 59))
+    trim_plug = _first_segment(_label_value_in_range(text, "Plug / Ball / Disk Material", 52, 58))
+    trim_seat = _first_segment(_label_value_in_range(text, "Seat / Ring Material", 53, 59))
 
     size_line = _label_value_in_range(text, "Size", 31, 37)
     ansi_m = re.search(r"(\d+)\s*#", size_line)
     ansi_rating = ansi_m.group(1) if ansi_m else ""
 
-    leak_value = (_label_value_in_range(text, "ANSI / FCI Leakage Class", 85, 106)
-                  or _label_value_in_range(text, "Leakage Class", 85, 106))
+    leak_value = _label_value_in_range(
+        text, "ANSI / FCI Leakage Class", 85, 106
+    ) or _label_value_in_range(text, "Leakage Class", 85, 106)
     leak_m = re.search(r"\b(VI|IV|V|III|II|I)\b", leak_value)
     valve_class = leak_m.group(1) if leak_m else ""
 
@@ -420,7 +491,7 @@ def _extract_onoff_valve(text, doc_no):
         "body_style": body_style,
         "signal_type": signal_type,
         "valve_type": valve_type,
-        "comments": f"See engineering datasheet {doc_no} for full spec." if doc_no else "",
+        "comments": "",
     }
     guessed = {"valve_type": True, "signal_type": True}
     return tag, fields, guessed
@@ -433,9 +504,12 @@ def _extract_transmitter(text, kind, doc_no):
         make = _first_segment(_row_label_value(text, 62, "Manufacturer"))
         model = _first_segment(_row_label_value(text, 63, "Model No."))
         transmitter_type = "Temperature Transmitter"
-        cal_range = _extract_range(_row_label_value(text, 24, "Calibrated Range"))
-        inst_range = _extract_range(_row_label_value(text, 23, "Instrument Range"))
-        local_display = "Yes" if "LCD Display" in text or "Integral Meter" in text else ""
+        cal_row_raw = _row_label_value(text, 24, "Calibrated Range")
+        inst_row_raw = _row_label_value(text, 23, "Instrument Range")
+        cal_range = _decode_tit_calibrated_range(cal_row_raw) or _extract_range(cal_row_raw)
+        inst_range = _decode_tit_instrument_range(inst_row_raw) or _extract_range(inst_row_raw)
+        meter_row = _row_label_value(text, 59, "Integral Meter")
+        local_display = "Yes" if ("LCD Display" in meter_row or "Yes" in meter_row) else ""
     elif kind == "fit":
         make = _first_segment(_row_label_value(text, 62, "Manufacturer"))
         model = _first_segment(_row_label_value(text, 63, "Model No."))
@@ -451,7 +525,21 @@ def _extract_transmitter(text, kind, doc_no):
         transmitter_type = "Pressure Transmitter"
         cal_range = _extract_range(_row_label_value(text, 19, "Calibrated Range"))
         inst_range = _extract_range(_row_label_value(text, 20, "Instrument Range @ Accuracy"))
-        local_display = "Yes" if "LCD Display" in text or "Integral Meter" in text else ""
+        meter_row = _row_label_value(text, 54, "Integral Meter")
+        local_display = "Yes" if ("LCD Display" in meter_row or "Yes" in meter_row) else ""
+    elif kind == "lit_dp":
+        # A differently-badged Level Transmitter using the same DP
+        # (differential pressure) sensor template as PIT, just configured
+        # for level service instead of pressure - close to PIT's layout
+        # but Calibrated/Instrument Range are one row further down and in
+        # the opposite order.
+        make = _first_segment(_row_label_value(text, 60, "Manufacturer"))
+        model = _first_segment(_row_label_value(text, 61, "Model No."))
+        transmitter_type = "Level Transmitter"
+        cal_range = _extract_range(_row_label_value(text, 21, "Calibrated Range"))
+        inst_range = _extract_range(_row_label_value(text, 20, "Instrument Range"))
+        meter_row = _row_label_value(text, 54, "Integral Meter")
+        local_display = "Yes" if ("LCD Display" in meter_row or "Yes" in meter_row) else ""
     else:  # lit
         make = _first_segment(_row_label_value(text, 48, "Manufacturer"))
         model = _first_segment(_row_label_value(text, 50, "Reference Probe Model Number"))
@@ -479,7 +567,7 @@ def _extract_transmitter(text, kind, doc_no):
         "instrument_range": inst_range,
         "local_display": local_display,
         "signal_type": signal_type,
-        "remarks": f"See engineering datasheet {doc_no} for full spec." if doc_no else "",
+        "remarks": "",
     }
     guessed = {"signal_type": True}
     return tag, fields, guessed
@@ -509,17 +597,19 @@ def read_datasheet_pdf(path):
             kind_label = _KIND_LABELS[kind]
         if not tag:
             continue
-        records.append({
-            "equip_key": equip_key,
-            "tag": tag,
-            "doc_no": doc_no,
-            "kind_label": kind_label,
-            "area_code": _area_code(tag),
-            "fields": fields,
-            "guessed": guessed,
-            "source_file": str(path),
-            "source_page": i,
-        })
+        records.append(
+            {
+                "equip_key": equip_key,
+                "tag": tag,
+                "doc_no": doc_no,
+                "kind_label": kind_label,
+                "area_code": _area_code(tag),
+                "fields": fields,
+                "guessed": guessed,
+                "source_file": str(path),
+                "source_page": i,
+            }
+        )
     return records
 
 
@@ -536,6 +626,7 @@ def read_datasheet_pdfs(paths):
 if __name__ == "__main__":
     import sys
     import json
+
     for p in sys.argv[1:]:
         for rec in read_datasheet_pdf(p):
             print(json.dumps(rec, indent=2, ensure_ascii=False))

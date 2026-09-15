@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# Command-line export output
+output_pdfs/
+
+# Runtime scratch output ("View Details" preview PDFs)
+data/temp_previews/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+.venv/
+venv/

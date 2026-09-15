@@ -18,6 +18,7 @@ export_to_pdf.py / export_valve_to_pdf.py modules (imported below). This file
 never re-implements that logic - it just calls it with a specific sheet name
 and row number instead of running the whole command-line script.
 """
+
 import datetime
 import json
 import os
@@ -47,10 +48,10 @@ if getattr(sys, "frozen", False):
 else:
     HERE = Path(__file__).resolve().parent
 
-WORKBOOK_PATH = HERE / "Equipment_Inspection_Tracker.xlsx"
-CONFIG_PATH = HERE / "series_registry.json"
-TEMP_DIR = HERE / "temp_previews"
-
+DATA_DIR = HERE / "data"
+WORKBOOK_PATH = DATA_DIR / "Equipment_Inspection_Tracker.xlsx"
+CONFIG_PATH = DATA_DIR / "series_registry.json"
+TEMP_DIR = DATA_DIR / "temp_previews"
 
 
 _wb_cache = {False: None, True: None, "mtime": None}
@@ -161,8 +162,20 @@ EQUIPMENT_TYPES = {
         "summary_labels": ["Tag", "System #", "Type"],
         "group_fields": ["system_number"],
         "group_labels": ["System"],
-        "date_fields": ["te1_caldate", "te2_caldate", "te3_caldate", "yanda_qa_date", "client_date"],
-        "date_labels": ["TE1 Cal. Date", "TE2 Cal. Date", "TE3 Cal. Date", "QA Rep Date", "Client Rep Date"],
+        "date_fields": [
+            "te1_caldate",
+            "te2_caldate",
+            "te3_caldate",
+            "yanda_qa_date",
+            "client_date",
+        ],
+        "date_labels": [
+            "TE1 Cal. Date",
+            "TE2 Cal. Date",
+            "TE3 Cal. Date",
+            "QA Rep Date",
+            "Client Rep Date",
+        ],
     },
     "valve": {
         "label": "Valve",
@@ -179,8 +192,8 @@ EQUIPMENT_TYPES = {
 }
 
 ASSETS_DIR = HERE / "assets"
-SETTINGS_PATH = HERE / "app_settings.json"
-STATUS_PATH = HERE / "equipment_status.json"
+SETTINGS_PATH = DATA_DIR / "app_settings.json"
+STATUS_PATH = DATA_DIR / "equipment_status.json"
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +283,7 @@ def _archived_sheet_name(original_name, wb):
     base, n = candidate, 2
     while candidate in wb.sheetnames:
         suffix = f"-{n}"
-        candidate = base[:31 - len(suffix)] + suffix
+        candidate = base[: 31 - len(suffix)] + suffix
         n += 1
     return candidate
 
@@ -331,6 +344,7 @@ def format_date_for_display(raw_text):
     if _looks_like_excel_serial(raw_text):
         try:
             from openpyxl.utils.datetime import from_excel
+
             return from_excel(int(raw_text)).strftime("%Y-%m-%d")
         except Exception:
             return raw_text
@@ -423,7 +437,7 @@ def save_row(series_number, equip_key, row_num, values):
             col = field_to_col.get(fid)
             if col is None:
                 continue
-            ws.cell(row=row_num, column=col).value = (val if val != "" else None)
+            ws.cell(row=row_num, column=col).value = val if val != "" else None
 
 
 def save_fields_bulk(series_number, equip_key, updates):
@@ -445,7 +459,7 @@ def save_fields_bulk(series_number, equip_key, updates):
             col = field_to_col.get(fid)
             if col is None:
                 continue
-            ws.cell(row=row_num, column=col).value = (val if val != "" else None)
+            ws.cell(row=row_num, column=col).value = val if val != "" else None
 
 
 # ---------------------------------------------------------------------------
@@ -522,8 +536,8 @@ def generate_preview_pdf(series_number, equip_key, row_num):
     export_mod = etype["export_module"]
     sheet_name = get_sheet_name(series_number, equip_key)
 
-    TEMP_DIR.mkdir(exist_ok=True)
-    for old in TEMP_DIR.glob("*.pdf"):          # keep the temp folder from growing forever
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    for old in TEMP_DIR.glob("*.pdf"):  # keep the temp folder from growing forever
         try:
             old.unlink()
         except OSError:
@@ -540,8 +554,9 @@ def generate_preview_pdf(series_number, equip_key, row_num):
     out_path = TEMP_DIR / f"{safe_name} PREVIEW.pdf"
 
     if equip_key == "valve":
-        export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, values, out_path,
-                             flatten=False, add_signature=True)
+        export_mod.fill_pdf(
+            export_mod.DEFAULT_TEMPLATE, values, out_path, flatten=False, add_signature=True
+        )
     else:
         export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, values, out_path, flatten=False)
 
@@ -625,11 +640,13 @@ def register_existing_series(new_number, transmitter_sheet, valve_sheet):
     cfg = load_config()
     if any(s["number"] == new_number for s in cfg["series"]):
         raise ValueError(f"Series {new_number} already exists.")
-    cfg["series"].append({
-        "number": new_number,
-        "transmitter_sheet": transmitter_sheet,
-        "valve_sheet": valve_sheet,
-    })
+    cfg["series"].append(
+        {
+            "number": new_number,
+            "transmitter_sheet": transmitter_sheet,
+            "valve_sheet": valve_sheet,
+        }
+    )
     save_config(cfg)
 
 
@@ -720,7 +737,7 @@ def series_full_summary(series_number):
 # draft overwrites whatever was there before, and the wizard tells you
 # that plainly before it lets you do so.
 # ---------------------------------------------------------------------------
-DRAFTS_PATH = HERE / "wizard_draft.json"
+DRAFTS_PATH = DATA_DIR / "wizard_draft.json"
 
 
 def load_wizard_draft():
@@ -792,8 +809,7 @@ SIGNATURE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 def list_signatures():
     ASSETS_DIR.mkdir(exist_ok=True)
-    return sorted(p.name for p in ASSETS_DIR.iterdir()
-                  if p.suffix.lower() in SIGNATURE_EXTENSIONS)
+    return sorted(p.name for p in ASSETS_DIR.iterdir() if p.suffix.lower() in SIGNATURE_EXTENSIONS)
 
 
 def add_signature(source_path, display_name):
@@ -811,6 +827,7 @@ def add_signature(source_path, display_name):
     # too - not just a superficial extension check.
     try:
         from reportlab.lib.utils import ImageReader
+
         ImageReader(str(source_path))
     except Exception as exc:
         raise ValueError(f"That file doesn't look like a valid image ({exc}).") from exc
@@ -1017,9 +1034,19 @@ def distinct_group_values(series_number, equip_key, group_field, filters=None):
 # export_valve_to_pdf.py's own main() does, but driven by explicit GUI
 # parameters instead of argv, and able to target a subfolder of output_pdfs/.
 # ---------------------------------------------------------------------------
-def run_export(series_number, equip_key, mode, suffix, flatten, include_signature,
-                subfolder=None, merge=False, filters=None, clear_after_selected=True,
-                include_date_in_filename=False):
+def run_export(
+    series_number,
+    equip_key,
+    mode,
+    suffix,
+    flatten,
+    include_signature,
+    subfolder=None,
+    merge=False,
+    filters=None,
+    clear_after_selected=True,
+    include_date_in_filename=False,
+):
     """mode:
         'selected' - only rows whose Export checkbox is checked in the app
                      (the DEFAULT mode - see ExportDialog). Nothing to do
@@ -1070,13 +1097,18 @@ def run_export(series_number, equip_key, mode, suffix, flatten, include_signatur
     field_to_col = export_mod.load_column_map(ws)
 
     if mode == "selected":
-        checked_rows = [r["row"] for r in read_index_rows_filtered(series_number, equip_key, filters)
-                         if r.get("export")]
+        checked_rows = [
+            r["row"]
+            for r in read_index_rows_filtered(series_number, equip_key, filters)
+            if r.get("export")
+        ]
         rows = export_mod.rows_to_export(ws, field_to_col, checked_rows, False)
     else:
         rows = export_mod.rows_to_export(ws, field_to_col, [], mode == "all")
         if filters:
-            allowed_rows = {r["row"] for r in read_index_rows_filtered(series_number, equip_key, filters)}
+            allowed_rows = {
+                r["row"] for r in read_index_rows_filtered(series_number, equip_key, filters)
+            }
             rows = [r for r in rows if r in allowed_rows]
 
     if not rows:
@@ -1088,7 +1120,9 @@ def run_export(series_number, equip_key, mode, suffix, flatten, include_signatur
     used_names = set()
     for row_num in rows:
         values = export_mod.build_values_for_row(ws, field_to_col, row_num)
-        key_val = export_mod.cell_to_str(ws.cell(row=row_num, column=key_col).value) if key_col else ""
+        key_val = (
+            export_mod.cell_to_str(ws.cell(row=row_num, column=key_col).value) if key_col else ""
+        )
         tag_part = export_mod.sanitize(key_val, f"Row{row_num}")
         base_name = f"{tag_part} {suffix}" if suffix else tag_part
         base_name = f"{base_name}{filename_date}"
@@ -1101,11 +1135,21 @@ def run_export(series_number, equip_key, mode, suffix, flatten, include_signatur
         out_path = out_dir / f"{name}.pdf"
 
         if equip_key == "valve":
-            export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, values, out_path, flatten=flatten,
-                                 add_signature=include_signature)
+            export_mod.fill_pdf(
+                export_mod.DEFAULT_TEMPLATE,
+                values,
+                out_path,
+                flatten=flatten,
+                add_signature=include_signature,
+            )
         else:
-            export_mod.fill_pdf(export_mod.DEFAULT_TEMPLATE, values, out_path, flatten=flatten,
-                                 add_signature=include_signature)
+            export_mod.fill_pdf(
+                export_mod.DEFAULT_TEMPLATE,
+                values,
+                out_path,
+                flatten=flatten,
+                add_signature=include_signature,
+            )
         written.append(out_path)
 
     if merge and written:
@@ -1123,7 +1167,11 @@ def run_export(series_number, equip_key, mode, suffix, flatten, include_signatur
         key_col = field_to_col.get(etype["key_field"])
         keys = []
         for row_num in rows:
-            key_val = export_mod.cell_to_str(ws.cell(row=row_num, column=key_col).value) if key_col else ""
+            key_val = (
+                export_mod.cell_to_str(ws.cell(row=row_num, column=key_col).value)
+                if key_col
+                else ""
+            )
             if key_val:
                 keys.append((series_number, equip_key, key_val))
         if keys:
@@ -1253,11 +1301,15 @@ def create_desktop_shortcut(shortcut_name="InstINDEX"):
         "$WshShell = New-Object -ComObject WScript.Shell;"
         f'$Shortcut = $WshShell.CreateShortcut("{shortcut_path}");'
         f'$Shortcut.TargetPath = "{target}";'
-        f'$Shortcut.Arguments = \'{arguments}\';'
+        f"$Shortcut.Arguments = '{arguments}';"
         f'$Shortcut.WorkingDirectory = "{HERE}";'
         f'$Shortcut.IconLocation = "{target}";'
         "$Shortcut.Save()"
     )
-    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-                    check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return shortcut_path

@@ -34,56 +34,82 @@ FIELD_MAP = {
     "signal_type": "Text17",
     "k_factor": "Text18",
     "scale_factor": "Text19",
-
-    "vi_1": "Dropdown1", "vi_2": "Dropdown2", "vi_3": "Dropdown3", "vi_4": "Dropdown4",
-    "vi_5": "Dropdown5", "vi_6": "Dropdown6", "vi_7": "Dropdown7", "vi_8": "Dropdown8",
-    "vi_9": "Dropdown9", "vi_10": "Dropdown10", "vi_11": "Dropdown11", "vi_12": "Dropdown12",
-
+    "vi_1": "Dropdown1",
+    "vi_2": "Dropdown2",
+    "vi_3": "Dropdown3",
+    "vi_4": "Dropdown4",
+    "vi_5": "Dropdown5",
+    "vi_6": "Dropdown6",
+    "vi_7": "Dropdown7",
+    "vi_8": "Dropdown8",
+    "vi_9": "Dropdown9",
+    "vi_10": "Dropdown10",
+    "vi_11": "Dropdown11",
+    "vi_12": "Dropdown12",
     "proc_1_vdc": "Text20",
     # proc_2 .. proc_14 are each three independent checkboxes (Pass/Fail/N/A) -
     # handled specially via PROC_CHECKBOXES below, verified directly against
     # a fully-checked sample (test123.pdf) field-by-field.
-
-    "te1_make": "Make", "te1_model": "Model", "te1_serial": "Serial", "te1_caldate": "Calibration Date",
-    "te2_make": "Make (1)", "te2_model": "Model (1)", "te2_serial": "Serial (1)",
+    "te1_make": "Make",
+    "te1_model": "Model",
+    "te1_serial": "Serial",
+    "te1_caldate": "Calibration Date",
+    "te2_make": "Make (1)",
+    "te2_model": "Model (1)",
+    "te2_serial": "Serial (1)",
     "te2_caldate": "Calibration Date (1)",
-    "te3_make": "Text66", "te3_model": "Text67", "te3_serial": "Text68", "te3_caldate": "Text69",
-
-    "tr_0_input_up": "Upscale", "tr_0_input_down": "Downscale",
-    "tr_0_output_up": "Upscale (1)", "tr_0_output_down": "Downscale (1)",
-    "tr_0_localdisplay_up": "Upscale (2)", "tr_0_localdisplay_down": "Downscale (2)",
-    "tr_0_dcs_up": "Upscale (3)", "tr_0_dcs_down": "Downscale (3)",
-
-    "tr_25_input_up": "Upscale (4)", "tr_25_input_down": "Downscale (4)",
-    "tr_25_output_up": "Upscale (5)", "tr_25_output_down": "Downscale (5)",
-    "tr_25_localdisplay_up": "Upscale (6)", "tr_25_localdisplay_down": "Downscale (6)",
-    "tr_25_dcs_up": "Upscale (7)", "tr_25_dcs_down": "Downscale (7)",
-
-    "tr_50_input_up": "Text87", "tr_50_input_down": "Text88",
-    "tr_50_output_up": "Text89", "tr_50_output_down": "Text90",
-    "tr_50_localdisplay_up": "Text91", "tr_50_localdisplay_down": "Text92",
-    "tr_50_dcs_up": "Text93", "tr_50_dcs_down": "Text94",
-
-    "tr_75_input_up": "Text95", "tr_75_input_down": "Text96",
-    "tr_75_output_up": "Text97", "tr_75_output_down": "Text98",
-    "tr_75_localdisplay_up": "Text99", "tr_75_localdisplay_down": "Text100",
-    "tr_75_dcs_up": "Text101", "tr_75_dcs_down": "Text102",
-
-    "tr_100_input_up": "Text103", "tr_100_input_down": "Text104",
-    "tr_100_output_up": "Text105", "tr_100_output_down": "Text106",
-    "tr_100_localdisplay_up": "Text107", "tr_100_localdisplay_down": "Text108",
-    "tr_100_dcs_up": "Text109", "tr_100_dcs_down": "Text110",
-
+    "te3_make": "Text66",
+    "te3_model": "Text67",
+    "te3_serial": "Text68",
+    "te3_caldate": "Text69",
+    "tr_0_input_up": "Upscale",
+    "tr_0_input_down": "Downscale",
+    "tr_0_output_up": "Upscale (1)",
+    "tr_0_output_down": "Downscale (1)",
+    "tr_0_localdisplay_up": "Upscale (2)",
+    "tr_0_localdisplay_down": "Downscale (2)",
+    "tr_0_dcs_up": "Upscale (3)",
+    "tr_0_dcs_down": "Downscale (3)",
+    "tr_25_input_up": "Upscale (4)",
+    "tr_25_input_down": "Downscale (4)",
+    "tr_25_output_up": "Upscale (5)",
+    "tr_25_output_down": "Downscale (5)",
+    "tr_25_localdisplay_up": "Upscale (6)",
+    "tr_25_localdisplay_down": "Downscale (6)",
+    "tr_25_dcs_up": "Upscale (7)",
+    "tr_25_dcs_down": "Downscale (7)",
+    "tr_50_input_up": "Text87",
+    "tr_50_input_down": "Text88",
+    "tr_50_output_up": "Text89",
+    "tr_50_output_down": "Text90",
+    "tr_50_localdisplay_up": "Text91",
+    "tr_50_localdisplay_down": "Text92",
+    "tr_50_dcs_up": "Text93",
+    "tr_50_dcs_down": "Text94",
+    "tr_75_input_up": "Text95",
+    "tr_75_input_down": "Text96",
+    "tr_75_output_up": "Text97",
+    "tr_75_output_down": "Text98",
+    "tr_75_localdisplay_up": "Text99",
+    "tr_75_localdisplay_down": "Text100",
+    "tr_75_dcs_up": "Text101",
+    "tr_75_dcs_down": "Text102",
+    "tr_100_input_up": "Text103",
+    "tr_100_input_down": "Text104",
+    "tr_100_output_up": "Text105",
+    "tr_100_output_down": "Text106",
+    "tr_100_localdisplay_up": "Text107",
+    "tr_100_localdisplay_down": "Text108",
+    "tr_100_dcs_up": "Text109",
+    "tr_100_dcs_down": "Text110",
     "system_results": None,  # no fillable field on the original for this
-
     # remarks is handled specially - split across 7 single-line fields, see REMARKS_LINE_FIELDS.
-
     "yanda_qa_name": "Name",
     "yanda_qa_date": "Date",
-    "yanda_qa_signature": None,   # hand-signed / Bluebeam signature on the original
+    "yanda_qa_signature": None,  # hand-signed / Bluebeam signature on the original
     "client_name": "Name (1)",
     "client_date": "Date (1)",
-    "client_signature": None,     # hand-signed / Bluebeam signature on the original
+    "client_signature": None,  # hand-signed / Bluebeam signature on the original
 }
 
 # Every Part 4 procedure item (2 through 14) is three independent checkboxes

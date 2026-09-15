@@ -22,6 +22,7 @@ FLATTEN THE OUTPUT (bakes the values into the page, no longer fillable):
 
 Requires: pip install openpyxl pypdf reportlab
 """
+
 import argparse
 import datetime
 import re
@@ -35,18 +36,23 @@ from reportlab.pdfgen import canvas as rl_canvas
 from reportlab.lib.pagesizes import letter
 import io
 
-from transmitter_schema import LOG_COLUMNS, by_id
-from transmitter_field_map import FIELD_MAP, PROC_CHECKBOXES, CHECKBOX_ON, CHECKBOX_OFF, REMARKS_LINE_FIELDS
+from transmitter_schema import LOG_COLUMNS
+from transmitter_field_map import FIELD_MAP, PROC_CHECKBOXES, CHECKBOX_ON, REMARKS_LINE_FIELDS
 
 # Frozen-aware: when bundled into an .exe by PyInstaller, __file__ points
 # inside a temp extraction folder that's wiped on exit - sys.executable's
 # folder is the exe's real, persistent location.
-HERE = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) \
+HERE = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
-DEFAULT_TEMPLATE = HERE / "Transmitter_Inspection_Test_Record_TEMPLATE.pdf"
+)
+DEFAULT_TEMPLATE = HERE / "templates" / "Transmitter_Inspection_Test_Record_TEMPLATE.pdf"
 DEFAULT_OUTPUT_DIR = HERE / "output_pdfs"
-HEADER_ROW = 3          # row with column labels in the Log sheet (combined workbook has a nav-button row above it)
-FIRST_DATA_ROW = 4      # first row that may contain real (or example) data
+HEADER_ROW = (
+    3  # row with column labels in the Log sheet (combined workbook has a nav-button row above it)
+)
+FIRST_DATA_ROW = 4  # first row that may contain real (or example) data
 SHEET_NAME = "Transmitter Log"
 
 # Yanda QA Representative signature stamp - placed on Part 8, page 2, just
@@ -94,8 +100,10 @@ def load_column_map(ws):
         else:
             field_to_col[field["id"]] = col
     if missing:
-        print("WARNING: these expected columns were not found in the Log sheet header "
-              f"(row {HEADER_ROW}) and will be left blank on export:")
+        print(
+            "WARNING: these expected columns were not found in the Log sheet header "
+            f"(row {HEADER_ROW}) and will be left blank on export:"
+        )
         for m in missing:
             print("   -", m)
     return field_to_col
@@ -141,8 +149,10 @@ def build_values_for_row(ws, field_to_col, row_num):
             allowed = field["choices"]
             match = next((c for c in allowed if c.lower() == raw.lower()), None)
             if match is None:
-                print(f"   ! row {row_num}: '{raw}' is not a valid value for "
-                      f"\"{field['label']}\" (expected one of {allowed}) - leaving blank.")
+                print(
+                    f"   ! row {row_num}: '{raw}' is not a valid value for "
+                    f"\"{field['label']}\" (expected one of {allowed}) - leaving blank."
+                )
                 continue
             raw = match
 
@@ -174,14 +184,22 @@ def stamp_signature(writer):
     """Overlays the Yanda QA Representative signature image onto page 2,
     just above the Signature: line in Part 8."""
     if not SIGNATURE_IMAGE.exists():
-        print(f"   ! Signature image not found at {SIGNATURE_IMAGE} - skipping signature stamp. "
-              f"Make sure the 'assets' folder is in the same directory as this script.")
+        print(
+            f"   ! Signature image not found at {SIGNATURE_IMAGE} - skipping signature stamp. "
+            f"Make sure the 'assets' folder is in the same directory as this script."
+        )
         return
     buf = io.BytesIO()
     c = rl_canvas.Canvas(buf, pagesize=letter)
-    c.drawImage(str(SIGNATURE_IMAGE), SIGNATURE_X, SIGNATURE_Y,
-                width=SIGNATURE_W, height=SIGNATURE_H,
-                mask="auto", preserveAspectRatio=True)
+    c.drawImage(
+        str(SIGNATURE_IMAGE),
+        SIGNATURE_X,
+        SIGNATURE_Y,
+        width=SIGNATURE_W,
+        height=SIGNATURE_H,
+        mask="auto",
+        preserveAspectRatio=True,
+    )
     c.save()
     buf.seek(0)
     overlay_reader = PdfReader(buf)
@@ -194,12 +212,14 @@ def ensure_default_resources(writer):
     breaks --flatten (it can't find a /Helv font to render the flattened
     text with). Populate a real Helvetica font resource instead."""
     acro = writer._root_object["/AcroForm"]
-    helv = DictionaryObject({
-        NameObject("/Type"): NameObject("/Font"),
-        NameObject("/Subtype"): NameObject("/Type1"),
-        NameObject("/BaseFont"): NameObject("/Helvetica"),
-        NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
-    })
+    helv = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+            NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
+        }
+    )
     helv_ref = writer._add_object(helv)
     font_dict = DictionaryObject({NameObject("/Helv"): helv_ref})
     dr = DictionaryObject({NameObject("/Font"): font_dict})
@@ -238,27 +258,59 @@ def fill_pdf(template_path, values, out_path, flatten=False, add_signature=True)
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("excel_path", nargs="?", default=str(HERE / "Equipment_Inspection_Tracker.xlsx"),
-                     help="Path to the log workbook (default: Transmitter_Inspection_Log.xlsx next to this script)")
-    ap.add_argument("--template", default=str(DEFAULT_TEMPLATE), help="Path to the blank fillable PDF template")
-    ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Folder to write filled PDFs into")
-    ap.add_argument("--rows", default="", help="Comma-separated Excel row numbers to export "
-                                                 "(overrides the Export to PDF Y/N flag), e.g. --rows 4,7,12")
-    ap.add_argument("--all", action="store_true", help="Export every row that has a Tag filled in, "
-                                                          "ignoring the Export to PDF Y/N flag")
-    ap.add_argument("--merge", action="store_true", help="Also write one combined PDF of everything exported")
-    ap.add_argument("--flatten", action="store_true", help="Flatten the filled fields into static page content "
-                                                              "(no longer editable/fillable afterward)")
-    ap.add_argument("--sheet", default=SHEET_NAME,
-                     help=f"Which sheet to read from, e.g. 'Transmitter Log 100' or "
-                          f"'Transmitter Log 200' (default: '{SHEET_NAME}')")
-    ap.add_argument("--suffix", default="DEV.",
-                     help='Text to append to the filename after the Tag, e.g. --suffix "JUG" '
-                          'produces "29103-PIT-1021 JUG.pdf". Pass --suffix "" for just "<tag>.pdf". '
-                          'Default: "DEV." (matches this script\'s original behavior).')
-    ap.add_argument("--no-signature", action="store_true",
-                     help="Skip the Yanda QA Representative signature stamp entirely")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "excel_path",
+        nargs="?",
+        default=str(HERE / "data" / "Equipment_Inspection_Tracker.xlsx"),
+        help="Path to the log workbook (default: data/Equipment_Inspection_Tracker.xlsx next to this script)",
+    )
+    ap.add_argument(
+        "--template", default=str(DEFAULT_TEMPLATE), help="Path to the blank fillable PDF template"
+    )
+    ap.add_argument(
+        "--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Folder to write filled PDFs into"
+    )
+    ap.add_argument(
+        "--rows",
+        default="",
+        help="Comma-separated Excel row numbers to export "
+        "(overrides the Export to PDF Y/N flag), e.g. --rows 4,7,12",
+    )
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help="Export every row that has a Tag filled in, " "ignoring the Export to PDF Y/N flag",
+    )
+    ap.add_argument(
+        "--merge", action="store_true", help="Also write one combined PDF of everything exported"
+    )
+    ap.add_argument(
+        "--flatten",
+        action="store_true",
+        help="Flatten the filled fields into static page content "
+        "(no longer editable/fillable afterward)",
+    )
+    ap.add_argument(
+        "--sheet",
+        default=SHEET_NAME,
+        help=f"Which sheet to read from, e.g. 'Transmitter Log 100' or "
+        f"'Transmitter Log 200' (default: '{SHEET_NAME}')",
+    )
+    ap.add_argument(
+        "--suffix",
+        default="DEV.",
+        help='Text to append to the filename after the Tag, e.g. --suffix "JUG" '
+        'produces "29103-PIT-1021 JUG.pdf". Pass --suffix "" for just "<tag>.pdf". '
+        'Default: "DEV." (matches this script\'s original behavior).',
+    )
+    ap.add_argument(
+        "--no-signature",
+        action="store_true",
+        help="Skip the Yanda QA Representative signature stamp entirely",
+    )
     args = ap.parse_args()
 
     excel_path = Path(args.excel_path)
@@ -274,16 +326,20 @@ def main():
 
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     if args.sheet not in wb.sheetnames:
-        sys.exit(f"ERROR: workbook has no '{args.sheet}' sheet. "
-                  f"Available sheets: {', '.join(wb.sheetnames)}")
+        sys.exit(
+            f"ERROR: workbook has no '{args.sheet}' sheet. "
+            f"Available sheets: {', '.join(wb.sheetnames)}"
+        )
     ws = wb[args.sheet]
 
     field_to_col = load_column_map(ws)
     rows = rows_to_export(ws, field_to_col, explicit_rows, args.all)
 
     if not rows:
-        print("No rows to export. Mark a row's \"Export to PDF (Y/N)\" column as Y, "
-              "or pass --rows 4,7,... , or pass --all.")
+        print(
+            'No rows to export. Mark a row\'s "Export to PDF (Y/N)" column as Y, '
+            "or pass --rows 4,7,... , or pass --all."
+        )
         return
 
     print(f"Exporting {len(rows)} row(s): {rows}")
@@ -303,8 +359,13 @@ def main():
             n += 1
         used_names.add(name)
         out_path = output_dir / f"{name}.pdf"
-        fill_pdf(template_path, values, out_path, flatten=args.flatten,
-                  add_signature=not args.no_signature)
+        fill_pdf(
+            template_path,
+            values,
+            out_path,
+            flatten=args.flatten,
+            add_signature=not args.no_signature,
+        )
         written.append(out_path)
         print(f"   -> {out_path}")
 

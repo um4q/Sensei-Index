@@ -22,13 +22,15 @@ FIELDS = []
 
 
 def _add(id_, label, section, ftype="text", choices=None):
-    FIELDS.append({
-        "id": id_,
-        "label": label,
-        "section": section,
-        "ftype": ftype,
-        "choices": choices or [],
-    })
+    FIELDS.append(
+        {
+            "id": id_,
+            "label": label,
+            "section": section,
+            "ftype": ftype,
+            "choices": choices or [],
+        }
+    )
 
 
 # ---------------------------------------------------------------- Header ---
@@ -91,7 +93,7 @@ PROCEDURE_ITEMS = [
     (11, "Graphic display matches with function."),
     (12, "Construction QA/QC Documents Verified."),
     (13, "Is loop left energized and ready for service."),
-    (14, "Place \"pre-commissioned\" tag on instrument."),
+    (14, 'Place "pre-commissioned" tag on instrument.'),
 ]
 for num, text in PROCEDURE_ITEMS:
     _add(f"proc_{num}", f"{num}. {text}", "part4", "choice", PASS_FAIL_NA)
@@ -173,6 +175,7 @@ SECTION_TITLES = {
 if __name__ == "__main__":
     print(f"Total fields: {len(FIELDS)}")
     from collections import Counter
+
     c = Counter(f["section"] for f in FIELDS)
     for sec, n in c.items():
         print(f"  {sec}: {n}")
