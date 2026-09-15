@@ -1,9 +1,17 @@
 name: Build Windows Installer
 
-# Manual only, on purpose - this compiles a full PySide6 app with
-# PyInstaller and then runs Inno Setup, which takes real CI minutes.
-# Trigger it from the Actions tab (or the API/CLI) when a setup.exe
-# build is actually wanted, rather than on every push.
+# Deliberately NOT triggered on every push - this compiles a full PySide6
+# app with PyInstaller and then runs Inno Setup, which takes real CI
+# minutes. workflow_dispatch (the Actions tab, or the API/CLI) is the
+# normal way to ask for a build.
+#
+# workflow_dispatch on its own only works once a workflow file has been
+# merged to the repo's default branch though - GitHub won't let you
+# dispatch a workflow that only exists on a feature branch. The `push`
+# trigger below, scoped to this branch and to changes under this app's
+# own packaging/ folder (or to this workflow file itself), exists only to
+# get a build running from this branch before it's merged; it's narrow
+# enough that it won't fire on ordinary source-code commits.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +19,12 @@ on:
         description: "Display version shown in Add/Remove Programs (e.g. 4.0.0)"
         required: false
         default: "4.0.0"
+  push:
+    branches:
+      - claude/gracious-brahmagupta-rbw3mo
+    paths:
+      - "Sensei_Index_4.0/packaging/**"
+      - ".github/workflows/build-windows-installer.yml"
 
 jobs:
   build:
