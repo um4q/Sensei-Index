@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
 import data_access as da
 import datasheet_reader
 from theme import LIGHT_QSS, DARK_QSS
-from run_view import RunView
 
 
 APP_TITLE = "Sensei Index 4.0"
@@ -345,7 +344,7 @@ class MainWindow(QMainWindow):
         self.dashboard_page = None
         self.current_dynamic_page = None
         self._rebuild_sidebar_tree()
-        self.show_run()
+        self.show_dashboard()
         self._install_shortcuts()
 
     # -------------------------------------------------------------- keybinds
@@ -521,10 +520,6 @@ class MainWindow(QMainWindow):
     def _rebuild_sidebar_tree(self):
         self.tree.clear()
 
-        run_item = QTreeWidgetItem(["\u25b8  The Run"])
-        run_item.setData(0, self.NAV_ROLE, ("run",))
-        self.tree.addTopLevelItem(run_item)
-
         dash_item = QTreeWidgetItem(["\u2302  Dashboard"])
         dash_item.setData(0, self.NAV_ROLE, ("dashboard",))
         self.tree.addTopLevelItem(dash_item)
@@ -558,16 +553,14 @@ class MainWindow(QMainWindow):
                         sys_parent.addChild(leaf)
             series_item.setExpanded(True)
 
-        run_item.setSelected(True)
+        dash_item.setSelected(True)
 
     def _on_tree_item_clicked(self, item, _column):
         nav = item.data(0, self.NAV_ROLE)
         if nav is None:
             item.setExpanded(not item.isExpanded())
             return
-        if nav[0] == "run":
-            self.show_run()
-        elif nav[0] == "dashboard":
+        if nav[0] == "dashboard":
             self.show_dashboard()
         elif nav[0] == "series":
             item.setExpanded(not item.isExpanded())
@@ -606,8 +599,6 @@ class MainWindow(QMainWindow):
             # matter what's on screen) - don't leave a dead page showing.
             self.show_dashboard()
             return
-        if isinstance(current, RunView):
-            return  # nothing dashboard-specific to do; Run reloads its own data
         if self.stack.currentWidget() is self.dashboard_page and self.dashboard_page is not None:
             self.show_dashboard()
 
@@ -619,9 +610,9 @@ class MainWindow(QMainWindow):
         may have since been navigated away from and deleted, and calling a
         method on a deleted Qt widget raises. The underlying data is
         already updated either way; this only makes sure a currently-visible
-        table (Index or Run) doesn't show stale checkboxes/stages."""
-        page = self.current_dynamic_page
-        if page is not None and hasattr(page, "reload"):
+        table doesn't show stale checkboxes."""
+        page = self._active_index_page()
+        if page is not None:
             page.reload()
         self.refresh_sidebar_and_dashboard()
 
@@ -640,10 +631,6 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(widget)
         self.stack.setCurrentWidget(widget)
         self.current_dynamic_page = widget
-
-    def show_run(self):
-        page = RunView(self)
-        self._set_dynamic_page(page)
 
     def show_dashboard(self):
         page = DashboardPage(self)
