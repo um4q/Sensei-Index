@@ -1431,3 +1431,187 @@ def append_journal(tag, what):
 
 def read_journal(limit=200):
     return _load_journal()[:limit]
+
+
+# ---------------------------------------------------------------------------
+# The engineering-grade instrument index (plate 6a) - one series+equipment
+# type's rows, with every "index" field (loop/drawing refs, ranges w/
+# units, doc/ECN state) alongside the existing summary fields, in the one
+# shape index_view.IndexView needs. Builds on read_index_rows_with_status()
+# exactly like the old Index view did; this only adds the extra columns
+# that view never had a reason to read.
+# ---------------------------------------------------------------------------
+def compute_priorities():
+    """The four data-backed priority counts the header's priorities strip
+    (plate 5b) shows, computed fresh from equipment_status.json + the
+    date columns every time - no separate storage, same as that plate's
+    own build note describes."""
+    needs_install_signoff = 0
+    missing_signoff_dates = 0
+    queued_for_export = 0
+    awaiting_acceptance = 0
+    for series_number in list_series():
+        for equip_key, etype in EQUIPMENT_TYPES.items():
+            try:
+                rows = read_index_rows_with_status(series_number, equip_key)
+            except KeyError:
+                continue
+            qa_field = "yanda_qa_date" if equip_key == "transmitter" else "qc_date"
+            for r in rows:
+                if r["installed"] and not r["submitted"]:
+                    needs_install_signoff += 1
+                if r["submitted"] and not (r.get(qa_field) or "").strip():
+                    missing_signoff_dates += 1
+                if r.get("export"):
+                    queued_for_export += 1
+                if r["submitted"] and not r["accepted"]:
+                    awaiting_acceptance += 1
+    return {
+        "needs_install_signoff": needs_install_signoff,
+        "missing_signoff_dates": missing_signoff_dates,
+        "queued_for_export": queued_for_export,
+        "awaiting_acceptance": awaiting_acceptance,
+    }
+
+
+def read_engineering_index_rows(series_number, equip_key):
+    etype = EQUIPMENT_TYPES[equip_key]
+    schema = etype["schema"]
+    export_mod = etype["export_module"]
+    sheet_name = get_sheet_name(series_number, equip_key)
+    wb = _get_cached_workbook(data_only=False)
+    ws = wb[sheet_name]
+    field_to_col = export_mod.load_column_map(ws)
+
+    index_fields = [f["id"] for f in schema.by_section("index")]
+    serial_field = "serial_number" if equip_key == "transmitter" else "valve_serial"
+    qa_date_field = "yanda_qa_date" if equip_key == "transmitter" else "qc_date"
+    desc_field = "service" if equip_key == "transmitter" else "system"
+    kind_field = etype["summary_fields"][-1]
+    key_field = etype["key_field"]
+
+    extra_ids = index_fields + [serial_field, qa_date_field, desc_field, kind_field,
+                                 "pid_number", "line_number", "make", "model",
+                                 "calibration_range", "instrument_range"]
+    cols = {fid: field_to_col.get(fid) for fid in extra_ids}
+    key_col = field_to_col.get(key_field)
+
+    store = _load_status_store()
+    rows = []
+    for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
+        raw_key = ws.cell(row=r, column=key_col).value if key_col else None
+        if raw_key in (None, ""):
+            continue
+        key_val = export_mod.cell_to_str(raw_key)
+        entry = {"row": r, "key_value": key_val}
+        for fid, col in cols.items():
+            entry[fid] = export_mod.cell_to_str(ws.cell(row=r, column=col).value) if col else ""
+        status = _normalized_status(store.get(_status_key(series_number, equip_key, key_val)))
+        entry["stage"] = stage_from_status(status)
+        entry["queued"] = bool(status["export"])
+        entry["serial"] = entry.pop(serial_field)
+        entry["qa_date"] = entry.pop(qa_date_field)
+        entry["desc"] = entry.pop(desc_field)
+        entry["kind"] = entry.pop(kind_field)
+        entry["open_ecns"] = ecns_for_tag(key_val)
+        rows.append(entry)
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Documents & ECN (plate 6b) - "three stores, all local and all small," per
+# that plate's own build note: a document register, an ECN list, and a
+# per-record revision log written by the existing UndoManager actions (every
+# save already knows what changed, so the history costs one append per
+# save - see UndoManager.push()'s optional tag= kwarg in gui_app.py).
+# ---------------------------------------------------------------------------
+DOCUMENTS_PATH = HERE / "documents.json"
+ECN_PATH = HERE / "ecn.json"
+REVISIONS_PATH = HERE / "revision_log.json"
+
+
+def _load_json_list(path):
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def load_documents():
+    """[{doc_no, title, rev, status, issued, transmittal, tags: [...]}]"""
+    return _load_json_list(DOCUMENTS_PATH)
+
+
+def save_documents(docs):
+    _write_json(DOCUMENTS_PATH, docs)
+
+
+def documents_for_tag(tag):
+    return [d for d in load_documents() if tag in d.get("tags", [])]
+
+
+def load_ecns():
+    """[{id, raised, author, narrative, affected_tags: [...], resolution}]"""
+    return _load_json_list(ECN_PATH)
+
+
+def save_ecns(ecns):
+    _write_json(ECN_PATH, ecns)
+
+
+def ecns_for_tag(tag, open_only=True):
+    ecns = load_ecns()
+    out = [e for e in ecns if tag in e.get("affected_tags", [])]
+    if open_only:
+        out = [e for e in out if not e.get("resolution")]
+    return out
+
+
+def acknowledge_ecn(ecn_id, who, range_changed=False, affected_records=None):
+    """Stamps the ECN resolved. affected_records, if given, is an iterable
+    of (series_number, equip_key, key_value) - when the ECN changed a
+    range, each of those has its acceptance reset to pending so nobody
+    exports a PDF against a superseded data sheet (plate 6b's build
+    note)."""
+    ecns = load_ecns()
+    entry = next((e for e in ecns if e.get("id") == ecn_id), None)
+    if entry is None:
+        raise KeyError(f"No ECN '{ecn_id}'")
+    entry["resolution"] = f"Acknowledged by {who} on {datetime.date.today().isoformat()}"
+    save_ecns(ecns)
+    if range_changed and affected_records:
+        bulk_set_status(list(affected_records), accepted=False)
+
+
+def _load_revisions():
+    if not REVISIONS_PATH.exists():
+        return {}
+    try:
+        with open(REVISIONS_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def append_revision(tag, who, what, ecn_id=None):
+    """One entry in that tag's own revision-history timeline (plate 6b).
+    Keyed by tag alone (not series+equip_key) since a tag is unique across
+    the workbook by construction (find_duplicate_row already enforces
+    this) and the timeline is meant to read the same way regardless of
+    which series view a person opened the record from."""
+    revisions = _load_revisions()
+    entries = revisions.setdefault(tag, [])
+    entries.insert(0, {
+        "date": datetime.date.today().isoformat(),
+        "who": who,
+        "what": what,
+        "ecn_id": ecn_id,
+    })
+    _write_json(REVISIONS_PATH, revisions)
+
+
+def read_revisions(tag):
+    return _load_revisions().get(tag, [])

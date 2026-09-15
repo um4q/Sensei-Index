@@ -31,6 +31,7 @@ import data_access as da
 import datasheet_reader
 import theme
 from theme import LIGHT_QSS, DARK_QSS, HIGH_CONTRAST_QSS
+from index_view import IndexView
 
 
 APP_TITLE = "Sensei Index 3.0"
@@ -62,15 +63,25 @@ class UndoManager:
         self._undo_stack = []
         self._redo_stack = []
 
-    def push(self, description, undo_fn, redo_fn):
+    def push(self, description, undo_fn, redo_fn, tag=None):
         """Call this AFTER an action already happened, with undo_fn/redo_fn
         being zero-argument callables that reverse / redo it. Doing
         anything new always clears the redo stack - once you've made a
-        fresh change, "redo" the old branch no longer makes sense."""
+        fresh change, "redo" the old branch no longer makes sense.
+
+        tag, when given, also appends one line to that tag's permanent
+        revision-history timeline (plate 6b's Documents & ECN view) -
+        "every save already knows what changed, so the history costs one
+        append per save." Undo/redo themselves don't get their own
+        revision lines; they replay the original action's effect, and
+        that's still the one line that matters for a QA record."""
         self._undo_stack.append(UndoAction(description, undo_fn, redo_fn))
         if len(self._undo_stack) > self.MAX_DEPTH:
             self._undo_stack.pop(0)
         self._redo_stack.clear()
+        if tag:
+            who = da.get_setting("crew_name") or "Unnamed crew member"
+            da.append_revision(tag, who, description)
 
     def can_undo(self):
         return bool(self._undo_stack)
@@ -324,11 +335,18 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setAttribute(Qt.WA_StyledBackground, True)
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_sidebar())
+        root.addWidget(self._build_header_bar())
+        root.addWidget(self._build_priorities_strip())
+
+        body_wrap = QWidget()
+        body = QHBoxLayout(body_wrap)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self._build_series_rail())
 
         content_wrap = QWidget()
         content_wrap.setAttribute(Qt.WA_StyledBackground, True)
@@ -337,14 +355,14 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(28, 24, 28, 24)
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack)
-        root.addWidget(content_wrap, stretch=1)
+        body.addWidget(content_wrap, stretch=1)
+        root.addWidget(body_wrap, stretch=1)
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready", 3000)
 
         self.dashboard_page = None
         self.current_dynamic_page = None
-        self._rebuild_sidebar_tree()
         self.show_dashboard()
         self._install_shortcuts()
 
@@ -370,8 +388,9 @@ class MainWindow(QMainWindow):
             bind("Ctrl+N", self._shortcut_add_new),
             bind("Ctrl+E", self._shortcut_edit_selected),
             bind("Ctrl+F", self._shortcut_focus_search),
+            bind("Ctrl+K", self._shortcut_focus_global_search),
+            bind("Ctrl+P", self.toggle_priorities_strip),
             bind("Ctrl+Shift+E", self._shortcut_open_export),
-            bind("Ctrl+Shift+D", self._shortcut_mass_edit_dates),
             bind("Delete", self._shortcut_remove_selected),
             bind("F5", self._shortcut_refresh),
             bind("Ctrl+,", self.open_settings),
@@ -381,7 +400,7 @@ class MainWindow(QMainWindow):
 
     def _active_index_page(self):
         page = self.current_dynamic_page
-        return page if isinstance(page, IndexPage) else None
+        return page if isinstance(page, IndexView) else None
 
     def _shortcut_add_new(self):
         page = self._active_index_page()
@@ -398,6 +417,10 @@ class MainWindow(QMainWindow):
         if page:
             page.search_edit.setFocus()
             page.search_edit.selectAll()
+
+    def _shortcut_focus_global_search(self):
+        self.global_search.setFocus()
+        self.global_search.selectAll()
 
     def _shortcut_remove_selected(self):
         page = self._active_index_page()
@@ -417,11 +440,6 @@ class MainWindow(QMainWindow):
         if page:
             page.open_export()
 
-    def _shortcut_mass_edit_dates(self):
-        page = self._active_index_page()
-        if page:
-            page.open_mass_edit_dates()
-
     def undo_action(self):
         desc = self.undo_stack.undo()
         if desc:
@@ -436,152 +454,223 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Nothing to redo", 2000)
 
-    # ---------------------------------------------------------------- sidebar
-   
-    def _build_sidebar(self):
-        sidebar = QFrame()
-        sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(290)
-        layout = QVBoxLayout(sidebar)
+    # ---------------------------------------------------------- header bar
+    def _build_header_bar(self):
+        """Plate 1b: the navy app header - logo, wordmark, a global Ctrl+K
+        tag finder, and the actions that used to live at the bottom of the
+        old tree sidebar."""
+        bar = QFrame()
+        bar.setObjectName("AppHeaderBar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setSpacing(16)
+
+        logo_label = QLabel()
+        self._set_logo_pixmap(logo_label)
+        logo_label.setObjectName("SidebarLogo")
+        layout.addWidget(logo_label)
+
+        wordmark = QLabel("SENSEI INDEX")
+        wordmark.setObjectName("AppWordmark")
+        layout.addWidget(wordmark)
+
+        self.global_search = QLineEdit()
+        self.global_search.setObjectName("GlobalSearch")
+        self.global_search.setPlaceholderText("Find any tag, system or series")
+        self.global_search.setAccessibleName("Find any tag, across every series (Ctrl+K)")
+        self.global_search.setMaximumWidth(520)
+        self.global_search.returnPressed.connect(self._run_global_search)
+        layout.addWidget(self.global_search, stretch=1)
+
+        for text, tip, handler in [
+            ("Import datasheet…", "Pre-fill a new row from an engineering data sheet PDF (Ctrl+Shift+I)",
+             self.open_datasheet_import),
+            ("Wizard", "Bulk-enter a batch of similar equipment (Ctrl+Shift+W)", self.open_populating_wizard),
+            ("Settings", "Theme, default export options, series, signatures (Ctrl+,)", self.open_settings),
+            ("Help", "What every button and shortcut does", self.show_instructions),
+        ]:
+            btn = make_button(text, "HeaderPillButton")
+            btn.setToolTip(tip)
+            btn.setAccessibleName(text)
+            btn.clicked.connect(handler)
+            layout.addWidget(btn)
+
+        return bar
+
+    def _run_global_search(self):
+        query = self.global_search.text().strip()
+        if not query:
+            return
+        for series_number in da.list_series():
+            for equip_key in da.EQUIPMENT_TYPES:
+                try:
+                    rows = da.read_index_rows(series_number, equip_key)
+                except KeyError:
+                    continue
+                key_field = da.EQUIPMENT_TYPES[equip_key]["key_field"]
+                for r in rows:
+                    if str(r.get(key_field, "")).lower() == query.lower():
+                        self.show_index(series_number, equip_key)
+                        page = self.current_dynamic_page
+                        if hasattr(page, "search_edit"):
+                            page.search_edit.setText(query)
+                        self.statusBar().showMessage(
+                            f"Found {query} – {da.series_display_label(series_number)}", 3000)
+                        return
+        self.statusBar().showMessage(f"No tag matching '{query}'", 3000)
+
+    # --------------------------------------------------------- priorities
+    def _build_priorities_strip(self):
+        """Plate 5b: one 40px line, four data-backed chips ordered by
+        urgency, computed fresh from equipment_status.json + the date
+        columns - no separate storage."""
+        strip = QFrame()
+        strip.setObjectName("PrioritiesStrip")
+        layout = QHBoxLayout(strip)
+        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setSpacing(10)
+
+        kicker = QLabel("PRIORITIES")
+        kicker.setObjectName("PrioritiesKicker")
+        layout.addWidget(kicker)
+
+        self._priority_chip_row = QHBoxLayout()
+        self._priority_chip_row.setSpacing(8)
+        layout.addLayout(self._priority_chip_row)
+        layout.addStretch()
+
+        collapse_btn = make_button("Collapse ⌃P", "Link")
+        collapse_btn.setAccessibleName("Collapse the priorities strip (Ctrl+P)")
+        collapse_btn.clicked.connect(self.toggle_priorities_strip)
+        layout.addWidget(collapse_btn)
+
+        self.priorities_strip = strip
+        self._refresh_priorities_strip()
+        return strip
+
+    def _refresh_priorities_strip(self):
+        strip = self.priorities_strip
+        while self._priority_chip_row.count():
+            item = self._priority_chip_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        p = da.compute_priorities()
+        chips = [
+            (f"Sign off {p['needs_install_signoff']} installs", p["needs_install_signoff"], "urgent"),
+            (f"{p['missing_signoff_dates']} missing sign-off dates", p["missing_signoff_dates"], None),
+            (f"{p['queued_for_export']} queued to export", p["queued_for_export"], None),
+            (f"{p['awaiting_acceptance']} awaiting client acceptance", p["awaiting_acceptance"], None),
+        ]
+        for label, count, kind in chips:
+            if count == 0:
+                continue
+            btn = QPushButton(label)
+            btn.setObjectName("PriorityChip")
+            btn.setAccessibleName(f"{label}, not done")
+            if kind == "urgent":
+                btn.setProperty("urgent", "true")
+            self._priority_chip_row.addWidget(btn)
+        strip.style().unpolish(strip)
+        strip.style().polish(strip)
+
+    def toggle_priorities_strip(self):
+        self.priorities_strip.setVisible(not self.priorities_strip.isVisible())
+
+    # -------------------------------------------------------- series rail
+    def _build_series_rail(self):
+        rail = QFrame()
+        rail.setObjectName("SeriesRail")
+        rail.setFixedWidth(276)
+        layout = QVBoxLayout(rail)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(30, 12, 16, 0)  # match whatever padding your sidebar already uses
-     
-        header_row.setSpacing(0)
+        overview_label = QLabel("OVERVIEW")
+        overview_label.setObjectName("RailSectionLabel")
+        overview_label.setContentsMargins(16, 14, 16, 8)
+        layout.addWidget(overview_label)
 
-        logo_label = QLabel()
-        logo_label.setObjectName("SidebarLogo")
-        self._set_logo_pixmap(logo_label)
-        header_row.addWidget(logo_label)
+        self.dashboard_row_btn = make_button("Dashboard", "RailRow")
+        self.dashboard_row_btn.clicked.connect(self.show_dashboard)
+        layout.addWidget(self.dashboard_row_btn)
 
+        series_label = QLabel("SERIES")
+        series_label.setObjectName("RailSectionLabel")
+        series_label.setContentsMargins(16, 14, 16, 8)
+        layout.addWidget(series_label)
 
-        title = QLabel("Sensei Index 4.0")
-        title.setObjectName("SidebarTitle")
-        header_row.addWidget(title)
-        header_row.addStretch()
+        self.rail_series_area = QVBoxLayout()
+        self.rail_series_area.setSpacing(0)
+        layout.addLayout(self.rail_series_area)
+        layout.addStretch()
 
-        layout.addLayout(header_row)
-        subtitle = QLabel("K1B Equipment Tracker · The Run")
-        subtitle.setObjectName("SidebarSubtitle")
-        layout.addWidget(subtitle)
-
-        self.tree = QTreeWidget()
-        self.tree.setObjectName("SidebarTree")
-        self.tree.setHeaderHidden(True)
-        self.tree.setIndentation(12)
-        self.tree.itemClicked.connect(self._on_tree_item_clicked)
-        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
-        layout.addWidget(self.tree, stretch=1)
-
-        add_series_btn = make_button("+ Add New Series", "SidebarFooterButton")
+        add_series_btn = make_button("+ Add new series", "RailFooterButton")
         add_series_btn.clicked.connect(self.add_series)
-        layout.addWidget(add_series_btn)
+        margin_wrap = QVBoxLayout()
+        margin_wrap.setContentsMargins(12, 10, 12, 10)
+        margin_wrap.addWidget(add_series_btn)
+        layout.addLayout(margin_wrap)
 
-        wizard_btn = make_button("\U0001F9D9  Populating Wizard", "SidebarFooterButton")
-        wizard_btn.setToolTip("Bulk-enter a batch of similar equipment "
-                               "(Ctrl+Shift+W)")
-        wizard_btn.setAccessibleName("Populating Wizard")
-        wizard_btn.clicked.connect(self.open_populating_wizard)
-        layout.addWidget(wizard_btn)
+        self._rail_row_buttons = {}
+        self._rebuild_series_rail()
+        return rail
 
-        datasheet_btn = make_button("\U0001F4C4  Import Datasheet PDF...", "SidebarFooterButton")
-        datasheet_btn.setToolTip("Pre-fill a new row from an engineering data "
-                                  "sheet PDF instead of retyping it (Ctrl+Shift+I)")
-        datasheet_btn.setAccessibleName("Import Datasheet PDF")
-        datasheet_btn.clicked.connect(self.open_datasheet_import)
-        layout.addWidget(datasheet_btn)
-
-        drive_btn = make_button("\u2601  Connect to Drive", "SidebarFooterButton")
-        drive_btn.setToolTip("Cloud backup / sync - not built yet")
-        drive_btn.setAccessibleName("Connect to Drive")
-        drive_btn.clicked.connect(self.connect_to_drive)
-        layout.addWidget(drive_btn)
-
-        settings_btn = make_button("\u2699  Settings", "SidebarFooterButton")
-        settings_btn.setToolTip("Theme, default export options, series, "
-                                 "signatures (Ctrl+,)")
-        settings_btn.setAccessibleName("Settings")
-        settings_btn.clicked.connect(self.open_settings)
-        layout.addWidget(settings_btn)
-
-        instructions_btn = make_button("\u2139  Instructions", "SidebarFooterButton")
-        instructions_btn.setToolTip("What every button and shortcut does")
-        instructions_btn.setAccessibleName("Instructions")
-        instructions_btn.clicked.connect(self.show_instructions)
-        layout.addWidget(instructions_btn)
-        layout.addSpacing(8)
-
-        return sidebar
-    
- 
-
-    def _rebuild_sidebar_tree(self):
-        self.tree.clear()
-
-        dash_item = QTreeWidgetItem(["\u2302  Dashboard"])
-        dash_item.setData(0, self.NAV_ROLE, ("dashboard",))
-        self.tree.addTopLevelItem(dash_item)
+    def _rebuild_series_rail(self):
+        while self.rail_series_area.count():
+            item = self.rail_series_area.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._rail_row_buttons = {}
 
         for series_number in da.list_series():
-            series_item = QTreeWidgetItem([da.series_display_label(series_number)])
-            series_item.setData(0, self.NAV_ROLE, ("series", series_number))
-            self.tree.addTopLevelItem(series_item)
+            summary = da.series_full_summary(series_number)
+            total = sum(v["total"] for v in summary.values())
+            accepted = sum(v["accepted"] for v in summary.values())
+            label = da.series_display_label(series_number)
 
-            for equip_key, etype in da.EQUIPMENT_TYPES.items():
-                try:
-                    count, by_system = da.series_type_summary(
-                        series_number, equip_key, etype["group_fields"][0])
-                except KeyError:
-                    continue
-                type_item = QTreeWidgetItem([f"{etype['label']}s  ({count})"])
-                type_item.setData(0, self.NAV_ROLE, ("index", series_number, equip_key, None))
-                series_item.addChild(type_item)
+            row = QPushButton()
+            row.setObjectName("RailRow")
+            row.setCheckable(True)
+            row.setContextMenuPolicy(Qt.CustomContextMenu)
+            row.customContextMenuRequested.connect(
+                lambda pos, sn=series_number, w=row: self._rail_row_context_menu(w, sn))
 
-                if by_system:
-                    sys_parent = QTreeWidgetItem(["By System"])
-                    sys_parent.setData(0, self.NAV_ROLE, None)
-                    type_item.addChild(sys_parent)
-                    for system_value, n in by_system.items():
-                        leaf_text = f"{system_value}  ({n})"
-                        leaf = QTreeWidgetItem([leaf_text])
-                        leaf.setToolTip(0, leaf_text)
-                        leaf.setData(0, self.NAV_ROLE,
-                                     ("index", series_number, equip_key,
-                                      {etype["group_fields"][0]: system_value}))
-                        sys_parent.addChild(leaf)
-            series_item.setExpanded(True)
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(13, 8, 13, 8)
+            row_layout.setSpacing(4)
+            top = QHBoxLayout()
+            name_lbl = QLabel(label)
+            name_lbl.setStyleSheet("font-size:14px;")
+            top.addWidget(name_lbl)
+            top.addStretch()
+            count_lbl = QLabel(f"{accepted} / {total}")
+            count_lbl.setStyleSheet("font-size:13px;color:#5d5d60;")
+            top.addWidget(count_lbl)
+            row_layout.addLayout(top)
 
-        dash_item.setSelected(True)
+            track = QFrame()
+            track.setFixedHeight(4)
+            track.setStyleSheet("background:#d4d4d7;")
+            track_layout = QHBoxLayout(track)
+            track_layout.setContentsMargins(0, 0, 0, 0)
+            frac = (accepted / total) if total else 0
+            fill = QFrame()
+            fill.setStyleSheet("background:#416180;")
+            track_layout.addWidget(fill, stretch=max(1, int(frac * 100)))
+            track_layout.addStretch(max(1, 100 - int(frac * 100)))
+            row_layout.addWidget(track)
 
-    def _on_tree_item_clicked(self, item, _column):
-        nav = item.data(0, self.NAV_ROLE)
-        if nav is None:
-            item.setExpanded(not item.isExpanded())
-            return
-        if nav[0] == "dashboard":
-            self.show_dashboard()
-        elif nav[0] == "series":
-            item.setExpanded(not item.isExpanded())
-        elif nav[0] == "index":
-            _, series_number, equip_key, filters = nav
-            self.show_index(series_number, equip_key, filters)
+            row.setAccessibleName(f"{label}, {accepted} of {total} accepted")
+            row.clicked.connect(lambda _c=False, sn=series_number: self.show_index(sn, "transmitter"))
+            self.rail_series_area.addWidget(row)
+            self._rail_row_buttons[series_number] = row
 
-    def _on_tree_context_menu(self, pos):
-        item = self.tree.itemAt(pos)
-        if item is None:
-            return
-        nav = item.data(0, self.NAV_ROLE)
-        if not (nav and nav[0] == "series"):
-            return  # only series tabs get a context menu (not Dashboard, types, or systems)
-        series_number = nav[1]
-
+    def _rail_row_context_menu(self, row_widget, series_number):
         menu = QMenu(self)
         rename_action = menu.addAction("Rename...")
         remove_action = menu.addAction("Remove...")
-        chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+        chosen = menu.exec(row_widget.mapToGlobal(row_widget.rect().center()))
         if chosen == rename_action:
             rename_series_flow(self, series_number)
             self.refresh_sidebar_and_dashboard()
@@ -589,12 +678,28 @@ class MainWindow(QMainWindow):
             remove_series_flow(self, series_number)
             self.refresh_sidebar_and_dashboard()
 
+    def _update_rail_active_state(self):
+        current = self.current_dynamic_page
+        active_series = getattr(current, "series_number", None)
+        for series_number, btn in self._rail_row_buttons.items():
+            active = series_number == active_series
+            btn.setChecked(active)
+            btn.setProperty("active", "true" if active else "false")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        self.dashboard_row_btn.setProperty(
+            "active", "true" if isinstance(current, DashboardPage) else "false")
+        self.dashboard_row_btn.style().unpolish(self.dashboard_row_btn)
+        self.dashboard_row_btn.style().polish(self.dashboard_row_btn)
+
     def refresh_sidebar_and_dashboard(self):
         """Call after anything that changes counts (save, add/remove/rename
         series, deleting rows, ...)."""
-        self._rebuild_sidebar_tree()
+        self._rebuild_series_rail()
+        self._refresh_priorities_strip()
+        self._update_rail_active_state()
         current = self.current_dynamic_page
-        if isinstance(current, IndexPage) and current.series_number not in da.list_series():
+        if isinstance(current, IndexView) and current.series_number not in da.list_series():
             # The series being viewed just got removed out from under it
             # (via Settings, which stays reachable from the sidebar no
             # matter what's on screen) - don't leave a dead page showing.
@@ -632,6 +737,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(widget)
         self.stack.setCurrentWidget(widget)
         self.current_dynamic_page = widget
+        if hasattr(self, "_rail_row_buttons"):
+            self._update_rail_active_state()
 
     def show_dashboard(self):
         page = DashboardPage(self)
@@ -639,8 +746,90 @@ class MainWindow(QMainWindow):
         self._set_dynamic_page(page)
 
     def show_index(self, series_number, equip_key, filters=None):
-        page = IndexPage(self, series_number, equip_key, filters)
+        page = IndexView(self, series_number, equip_key)
         self._set_dynamic_page(page)
+
+    # ------------------------------------------------- IndexView callbacks
+    # IndexView (index_view.py) never imports this module - it calls back
+    # through these instead, so the two files can't form an import cycle.
+    def add_new_row(self, series_number, equip_key):
+        row_num = da.find_first_blank_row(series_number, equip_key)
+        dlg = EditDialog(self, series_number, equip_key, row_num, is_new=True)
+        if dlg.exec() == QDialog.Accepted:
+            try:
+                values = da.read_full_row(series_number, equip_key, row_num)
+                tag = values.get(da.EQUIPMENT_TYPES[equip_key]["key_field"])
+            except Exception:
+                values, tag = None, None
+
+            def do_undo():
+                da.delete_rows(series_number, equip_key, [row_num])
+                self.refresh_current_view()
+
+            def do_redo():
+                if values is not None:
+                    da.save_row(series_number, equip_key, row_num, values)
+                self.refresh_current_view()
+
+            self.undo_stack.push(f"add row {row_num}", do_undo, do_redo, tag=tag)
+            self.refresh_sidebar_and_dashboard()
+            self.statusBar().showMessage(f"Added row {row_num}", 3000)
+
+    def edit_row(self, series_number, equip_key, row_num):
+        try:
+            before_values = da.read_full_row(series_number, equip_key, row_num)
+        except Exception:
+            before_values = None
+        dlg = EditDialog(self, series_number, equip_key, row_num, is_new=False)
+        if dlg.exec() == QDialog.Accepted:
+            try:
+                after_values = da.read_full_row(series_number, equip_key, row_num)
+            except Exception:
+                after_values = None
+            tag = (after_values or before_values or {}).get(
+                da.EQUIPMENT_TYPES[equip_key]["key_field"])
+
+            def do_undo():
+                if before_values is not None:
+                    da.save_row(series_number, equip_key, row_num, before_values)
+                self.refresh_current_view()
+
+            def do_redo():
+                if after_values is not None:
+                    da.save_row(series_number, equip_key, row_num, after_values)
+                self.refresh_current_view()
+
+            self.undo_stack.push(f"edit row {row_num}", do_undo, do_redo, tag=tag)
+            self.refresh_sidebar_and_dashboard()
+            self.statusBar().showMessage(f"Saved row {row_num}", 3000)
+
+    def view_row(self, series_number, equip_key, row_num):
+        dlg = RowDetailDialog(self, series_number, equip_key, row_num)
+        if dlg.exec() == QDialog.Accepted and dlg.opened_edit:
+            self.refresh_sidebar_and_dashboard()
+
+    def open_export_for(self, series_number, equip_key, filters=None):
+        dlg = ExportDialog(self, series_number, equip_key, filters)
+        dlg.exec()
+        self.refresh_sidebar_and_dashboard()
+
+    def remove_rows(self, series_number, equip_key, row_nums):
+        etype = da.EQUIPMENT_TYPES[equip_key]
+        before = {r: da.read_full_row(series_number, equip_key, r) for r in row_nums}
+        cleared_keys = da.delete_rows(series_number, equip_key, row_nums)
+
+        def do_undo():
+            for r, vals in before.items():
+                da.save_row(series_number, equip_key, r, vals)
+            self.refresh_current_view()
+
+        def do_redo():
+            da.delete_rows(series_number, equip_key, row_nums)
+            self.refresh_current_view()
+
+        n = len(row_nums)
+        self.undo_stack.push(f"remove {n} row{'s' if n != 1 else ''}", do_undo, do_redo)
+        self.statusBar().showMessage(f"Removed {n} row(s)", 3000)
 
     # --------------------------------------------------------------- actions
     def add_series(self):
