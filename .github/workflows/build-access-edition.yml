@@ -74,6 +74,34 @@ jobs:
         working-directory: ${{ env.APP_DIR }}
         run: python -m pytest tests -v
 
+      - name: Migrate the real Equipment_Inspection_Tracker.xlsx into the built .accdb
+        # Runs BEFORE the real-Access smoke test below on purpose - that
+        # step adds its own "CI Series"/"CI Test Zone" test data and
+        # takes/restores backups, which would trip migrate_from_excel.py's
+        # own "refuses to run against a non-empty database" guard if this
+        # ran after it. tests/test_migrate_from_excel.py already proves
+        # the migration LOGIC is sound (SQLite-backed, same real workbook)
+        # - this is what proves it against genuine Access: hundreds of
+        # real INSERTs/UPDATEs in a loop is exactly the kind of thing a
+        # SQLite stand-in can't validate on its own.
+        working-directory: ${{ env.APP_DIR }}
+        shell: pwsh
+        run: |
+          python migrate_from_excel.py
+          python -c @"
+          import access_data_access as da
+          import data_access as excel_da
+
+          assert da.list_series() == excel_da.list_series(), (da.list_series(), excel_da.list_series())
+          assert da.list_series(), 'no series migrated - migrate_from_excel.py found nothing'
+          for series_number in da.list_series():
+              for equip_key in da.EQUIPMENT_TYPES:
+                  src = len(excel_da.read_index_rows(series_number, equip_key))
+                  dst = len(da.read_index_rows(series_number, equip_key))
+                  assert src == dst, (series_number, equip_key, src, dst)
+          print('MIGRATION AGAINST REAL ACCESS VERIFIED -', sum(da.count_all_by_type().values()), 'total row(s)')
+          "@
+
       - name: Run a real-Access smoke test against the built .accdb
         # No explicit conn argument anywhere below - access_data_access.py/
         # access_electrical_data_access.py take none (they manage their own

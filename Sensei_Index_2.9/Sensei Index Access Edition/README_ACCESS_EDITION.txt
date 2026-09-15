@@ -68,6 +68,28 @@ FIRST-TIME SETUP
    or not; only the ~60 Python modules themselves are baked into the
    .exe, none of the data files are.
 
+ALREADY USING THE EXCEL EDITION? MIGRATE YOUR REAL DATA IN
+------------------------------------------------------------------
+A fresh SenseiIndex.accdb starts completely empty - it has no idea
+Equipment_Inspection_Tracker.xlsx/Electrical_Inspection_Tracker.xlsx
+even exist. migrate_from_excel.py does a ONE-TIME copy of every real
+row (both editions' full field set, every series/zone with its display
+name, and each row's own Installed/Submitted/Accepted/Export status)
+out of those workbooks and into SenseiIndex.accdb - read-only on the
+Excel side, never touches either .xlsx file:
+
+    python migrate_from_excel.py --dry-run   # preview what would move, writes nothing
+    python migrate_from_excel.py             # actually move it
+
+Run this ONCE, right after getting a fresh SenseiIndex.accdb and before
+using the Access Edition for anything else - it refuses to run a
+second time against a database that already has series/zones in it
+(would duplicate every row - see the script's own docstring for why,
+and --force if you really mean it). Verified in this repo's own CI
+against the real, checked-in Equipment_Inspection_Tracker.xlsx (see
+tests/test_migrate_from_excel.py and build-access-edition.yml's own
+migration step) - not just a synthetic example file.
+
 WHAT'S HERE
 ---------------
     access_schema.py                  - table/column definitions, derived from the Excel edition's own schema.py files
@@ -76,6 +98,7 @@ WHAT'S HERE
     access_electrical_data_access.py  - Electrical domain module (the other 7 kinds)
     access_gui_app.py                 - the app itself - see below, this is gui_app.py, not a rewrite
     build_access_database.py          - one-time SenseiIndex.accdb generator (Windows only)
+    migrate_from_excel.py             - one-time real-data migration from the Excel edition (see above)
     SenseiIndexAccessEdition.spec     - PyInstaller spec for the standalone .exe (Windows only, see its own docstring)
     tests/                            - SQLite-backed logic tests (see below - what these do and don't prove)
     SHAREPOINT_CLOUD_SETUP.txt        - how to host the database in the cloud for multi-user access
