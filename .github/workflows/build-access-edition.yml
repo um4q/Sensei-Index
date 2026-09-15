@@ -135,7 +135,21 @@ jobs:
           log = eda.read_electrical_activity_log(limit=5)
           assert log, 'read_electrical_activity_log (real Access TOP-N syntax) returned nothing'
 
-          da.add_series(999, 'CI Series')
+          # add_series()'s 2nd positional arg is source_number - an
+          # EXISTING series number to copy a display name FROM, not a
+          # literal name string - da.add_series(999, 'CI Series') passed
+          # a str where a LONG series_number was expected, and real
+          # Access's own ODBC driver raises 'Data type mismatch in
+          # criteria expression' comparing a str against that column
+          # (SQLite is loosely typed and wouldn't catch this - it
+          # surfaced here for the first time only because the migration
+          # step above gave the Series table real rows to type-check
+          # against; an empty table let the driver skip evaluating the
+          # comparison at all, so this same bug shipped invisibly in
+          # every prior CI run). set_series_name() is the real way to
+          # give a series a literal display name.
+          da.add_series(999)
+          da.set_series_name(999, 'CI Series')
           t_row = da.find_first_blank_row(999, 'transmitter')
           da.save_row(999, 'transmitter', t_row, {'tag': 'CI-TIT-001', 'system_number': 'CI-SYS'})
           assert da.read_full_row(999, 'transmitter', t_row)['tag'] == 'CI-TIT-001'
