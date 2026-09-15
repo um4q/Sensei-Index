@@ -1,0 +1,139 @@
+name: Build Sensei Index Access Edition Windows exe
+
+# Same reasoning as build-windows-exe.yml (PyInstaller can't cross-compile,
+# so this runs on a real windows-latest runner) - a standalone sibling
+# workflow rather than folding this into build-access-edition.yml, so a
+# slow full exe build only runs when this file or the Access Edition
+# folder itself actually changes, same "keep it separate, keep each one
+# fast and focused" reasoning build-windows-exe.yml already follows for
+# the Excel edition's own exe.
+#
+# Builds a REAL SenseiIndex.accdb first (same steps build-access-
+# edition.yml uses) so the exe smoke-test below launches against actual
+# data, not a missing-file crash that would tell us nothing about the
+# exe itself.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit to build from"
+        required: false
+        default: ""
+  push:
+    branches:
+      - claude/new-session-rcv1yz
+    paths:
+      - "Sensei_Index_2.9/Sensei Index Access Edition/**"
+      - ".github/workflows/build-access-edition-exe.yml"
+
+permissions:
+  contents: write
+
+env:
+  APP_DIR: "Sensei_Index_2.9/Sensei Index Access Edition"
+  EXCEL_EDITION_DIR: "Sensei_Index_2.9/Sensei Index 2.9"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install app + build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r "$env:APP_DIR\requirements.txt"
+          pip install pyinstaller pytest
+
+      - name: Install Microsoft Access Database Engine Redistributable
+        shell: pwsh
+        run: |
+          $url = "https://download.microsoft.com/download/3/5/C/35C84C36-661A-44E6-9324-8786B8DBE231/accessdatabaseengine_X64.exe"
+          $installer = "$env:RUNNER_TEMP\accessdatabaseengine_X64.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $p = Start-Process -FilePath $installer -ArgumentList "/quiet", "/norestart" -PassThru -Wait
+          if ($p.ExitCode -ne 0) {
+            throw "Access Database Engine installer exited with code $($p.ExitCode)"
+          }
+          Write-Host "Access Database Engine installed."
+
+      - name: Build a real SenseiIndex.accdb for the smoke test below
+        working-directory: ${{ env.APP_DIR }}
+        run: python build_access_database.py
+
+      - name: Build Sensei Index Access Edition.exe
+        working-directory: ${{ env.APP_DIR }}
+        run: pyinstaller --clean --noconfirm SenseiIndexAccessEdition.spec
+
+      - name: Smoke-test the built exe actually launches against real data
+        working-directory: ${{ env.APP_DIR }}
+        shell: pwsh
+        run: |
+          $exe = "dist\Sensei Index Access Edition.exe"
+          if (-not (Test-Path $exe)) { throw "Build did not produce $exe" }
+          # Real distribution shape: the exe + SenseiIndex.accdb sit
+          # together, with the sibling "Sensei Index 2.9" folder (assets/,
+          # PDF templates) one level up - see the .spec's own docstring.
+          # dist/ already IS "next to" the sibling folder (dist's parent
+          # is APP_DIR, whose own sibling is EXCEL_EDITION_DIR), so no
+          # copying of that sibling folder is needed - only the .accdb.
+          Copy-Item -Force "SenseiIndex.accdb" "dist\SenseiIndex.accdb"
+          $p = Start-Process -FilePath $exe -WorkingDirectory "dist" -PassThru
+          Start-Sleep -Seconds 12
+          if ($p.HasExited) {
+            $code = $p.ExitCode
+            Write-Host "Process exited early with code $code"
+            if (Test-Path "dist\crash_log.txt") {
+              Write-Host "----- crash_log.txt -----"
+              Get-Content "dist\crash_log.txt" | Write-Host
+            }
+            throw "Exe exited on its own within 12s (code $code) - see crash_log.txt above if present"
+          }
+          Write-Host "Exe is still running after 12s (PID $($p.Id)) - clean startup against real Access data."
+          Stop-Process -Id $p.Id -Force
+
+      - name: Upload built exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sensei-Index-Access-Edition-exe
+          path: ${{ env.APP_DIR }}/dist/Sensei Index Access Edition.exe
+          if-no-files-found: error
+
+      - name: Upload crash log (only if the smoke test failed and left one)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-log-if-any
+          path: ${{ env.APP_DIR }}/dist/crash_log.txt
+          if-no-files-found: ignore
+
+      # Same blob-storage-is-blocked-from-the-dev-sandbox workaround
+      # build-windows-exe.yml/build-access-edition.yml already use - see
+      # either one's own comment for the full reasoning.
+      - name: Push the built exe to a delivery branch (git-fetchable, unlike the artifact's blob storage)
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -e
+          rm -rf /tmp/access-exe-delivery
+          mkdir -p /tmp/access-exe-delivery
+          cp "dist/Sensei Index Access Edition.exe" /tmp/access-exe-delivery/
+          cd /tmp/access-exe-delivery
+          git init -q
+          git config user.name "sensei-access-exe-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -q -b access-exe-delivery
+          git add "Sensei Index Access Edition.exe"
+          git commit -q -m "Sensei Index Access Edition.exe built from ${{ github.sha }}"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push -f origin access-exe-delivery

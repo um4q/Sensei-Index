@@ -57,6 +57,17 @@ FIRST-TIME SETUP
 
 3. python access_gui_app.py
 
+   Or, if you'd rather not install Python at all: use the standalone
+   "Sensei Index Access Edition.exe" instead (built by .github/workflows/
+   build-access-edition-exe.yml on real Windows, same PyInstaller
+   approach "Sensei Index 2.9"'s own Sensei Index 2.95.exe already uses -
+   see SenseiIndexAccessEdition.spec's own docstring). Drop the .exe into
+   THIS folder, next to SenseiIndex.accdb, and run it same as any other
+   program - the sibling "Sensei Index 2.9" folder (assets/, the PDF
+   templates) still needs to stay present one level up either way, exe
+   or not; only the ~60 Python modules themselves are baked into the
+   .exe, none of the data files are.
+
 WHAT'S HERE
 ---------------
     access_schema.py                  - table/column definitions, derived from the Excel edition's own schema.py files
@@ -65,6 +76,7 @@ WHAT'S HERE
     access_electrical_data_access.py  - Electrical domain module (the other 7 kinds)
     access_gui_app.py                 - the app itself - see below, this is gui_app.py, not a rewrite
     build_access_database.py          - one-time SenseiIndex.accdb generator (Windows only)
+    SenseiIndexAccessEdition.spec     - PyInstaller spec for the standalone .exe (Windows only, see its own docstring)
     tests/                            - SQLite-backed logic tests (see below - what these do and don't prove)
     SHAREPOINT_CLOUD_SETUP.txt        - how to host the database in the cloud for multi-user access
 

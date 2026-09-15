@@ -53,6 +53,12 @@ Sensei_Index_2.9/Sensei Index 2.9/crash_log.txt
 # previews/crash log follow the same pattern the Excel edition's own
 # equivalents already do.
 Sensei_Index_2.9/Sensei Index Access Edition/SenseiIndex.accdb
+# PyInstaller's own build output (SenseiIndexAccessEdition.spec's own
+# source stays tracked) - same "built by CI on real Windows, delivered
+# via access-exe-delivery branch, not committed here" reasoning as
+# "Sensei Index 2.9"/build//dist/ above.
+Sensei_Index_2.9/Sensei Index Access Edition/build/
+Sensei_Index_2.9/Sensei Index Access Edition/dist/
 Sensei_Index_2.9/Sensei Index Access Edition/temp_previews/
 Sensei_Index_2.9/Sensei Index Access Edition/electrical_temp_previews/
 Sensei_Index_2.9/Sensei Index Access Edition/output_pdfs/
