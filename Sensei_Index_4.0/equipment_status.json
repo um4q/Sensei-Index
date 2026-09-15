@@ -1,0 +1,412 @@
+{
+  "100|transmitter|29103-PIT-1013": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1017": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1023": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1027": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1033": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1037": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1043": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1047": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1057": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1063": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1067": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1073": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1077": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-PIT-1053": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-FIT-1015": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-FIT-1035": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-FIT-1055": {
+    "installed": false,
+    "submitted": false
+  },
+  "100|transmitter|29103-FIT-1011": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1012": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1021": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1022": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1031": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1032": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1041": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1042": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1051": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1052": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1061": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1062": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1071": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-FIT-1072": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1200": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1201": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1202": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-TIT-1100": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1011": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1012": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1021": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1022": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1031": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1032": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1041": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1042": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1051": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1052": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1061": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1062": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1071": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|transmitter|29103-PIT-1072": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-PV-1200": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1011": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1012": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1021": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1022": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1031": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1032": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1041": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1042": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1051": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1052": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1061": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1062": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1071": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "100|valve|29103-FV-1072": {
+    "installed": true,
+    "submitted": true,
+    "accepted": true,
+    "export": false
+  },
+  "200|transmitter|29103-TIT-2030A": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29103|transmitter|29103-FIT-0916": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29103|transmitter|29103-TIT-0916": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29103|transmitter|29103-TIT-0930": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29103|transmitter|29209-TIT-0930": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29103|transmitter|29103-FIT-0913A": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29103|transmitter|29103-FIT-0913B": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29103|valve|29103-LV-0957": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29152|transmitter|29203-TIT-0200A": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  },
+  "29152|transmitter|29203-TIT-0200B": {
+    "installed": false,
+    "submitted": false,
+    "accepted": false,
+    "export": false
+  }
+}
