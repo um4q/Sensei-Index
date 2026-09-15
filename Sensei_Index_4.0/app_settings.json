@@ -4,5 +4,6 @@
   "default_flatten": false,
   "default_include_signature": true,
   "crew_name": "",
-  "run_field_mode": false
+  "ui_scale": 100,
+  "announce_status": true
 }

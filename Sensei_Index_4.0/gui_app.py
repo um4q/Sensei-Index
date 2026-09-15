@@ -20,8 +20,8 @@ from PySide6.QtGui import QFont, QColor, QKeySequence, QShortcut, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFormLayout, QLabel, QPushButton, QLineEdit, QComboBox, QTextEdit,
-    QScrollArea, QFrame, QTreeWidget, QTreeWidgetItem, QStackedWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QMessageBox,
+    QScrollArea, QFrame, QTreeWidget, QTreeWidgetItem, QStackedWidget, QListWidget,
+    QListWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QMessageBox,
     QInputDialog, QFileDialog, QCheckBox, QRadioButton, QButtonGroup,
     QGroupBox, QSizePolicy, QAbstractItemView, QSpacerItem, QAbstractScrollArea,
     QMenu, QStatusBar, QDateEdit,
@@ -2613,13 +2613,14 @@ class MassEditDatesDialog(QDialog):
         self.accept()
 
 
-# =============================================================================
-# Stubs - filled in next
-# =============================================================================
 class EditDialog(QDialog):
-    """One continuous scrollable page (no tabs), grouped into titled
-    QGroupBox sections, with a 'Jump to' dropdown and a Save/Cancel bar
-    that stays fixed at the bottom regardless of scroll position."""
+    """Plate 1d: a sticky Tag header that can never scroll out of view (the
+    one field everything else - the Index list, the row-selection, the PDF
+    filename - is built from), a persistent section list with live filled
+    counts replacing the "Jump to" dropdown, and a fill-progress readout.
+    Full keyboard-first autofill suggestions (the QCompleter popup offering
+    values from nearby tags) aren't implemented - a real, disclosed scope
+    cut, not a silent one."""
 
     def __init__(self, parent, series_number, equip_key, row_num, is_new, prefill=None):
         super().__init__(parent)
@@ -2628,36 +2629,96 @@ class EditDialog(QDialog):
         self.row_num = row_num
         self.etype = da.EQUIPMENT_TYPES[equip_key]
         self.widgets = {}
-        self.resize(880, 720)
+        self.resize(1000, 720)
 
         schema = self.etype["schema"]
+        self.schema = schema
         existing = {} if is_new else da.read_full_row(series_number, equip_key, row_num)
         effective = dict(existing)
         if is_new:
             for fid, val in (prefill or {}).items():
                 effective.setdefault(fid, val)
 
-        self.setWindowTitle(("Add New " if is_new else "Edit ") + self.etype["label"]
-                             + f" \u2013 Row {row_num}")
+        key_field = self.etype["key_field"]
+        self.setWindowTitle(f"{'Add ' if is_new else 'Edit '}{self.etype['label']} – "
+                             f"{da.series_display_label(series_number)}, row {row_num}")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        nav_row = QHBoxLayout()
-        nav_row.setContentsMargins(16, 14, 16, 6)
-        nav_row.addWidget(QLabel("Jump to:"))
-        self.section_picker = QComboBox()
-        self.section_picker.currentIndexChanged.connect(self._jump_to_section)
-        nav_row.addWidget(self.section_picker)
-        nav_row.addStretch()
-        outer.addLayout(nav_row)
+        # ---------------------------------------------------- sticky header
+        header = QFrame()
+        header.setStyleSheet("background:#fff;border-bottom:1px solid rgba(29,31,32,.16);")
+        hlayout = QHBoxLayout(header)
+        hlayout.setContentsMargins(20, 16, 20, 14)
+        hlayout.setSpacing(16)
+
+        tag_col = QVBoxLayout()
+        tag_col.setSpacing(4)
+        key_field_def = next(f for f in schema.LOG_COLUMNS if f["id"] == key_field)
+        tag_kicker = QLabel(f"{key_field_def['label'].upper()} — REQUIRED")
+        tag_kicker.setObjectName("SectionLabel")
+        tag_col.addWidget(tag_kicker)
+        self.tag_widget = self._make_widget(key_field_def, effective.get(key_field, ""))
+        self.tag_widget.setMinimumWidth(230)
+        f = self.tag_widget.font()
+        f.setPointSize(f.pointSize() + 3)
+        f.setWeight(QFont.Medium)
+        self.tag_widget.setFont(f)
+        self.widgets[key_field] = self.tag_widget
+        tag_col.addWidget(self.tag_widget)
+        tag_helper = QLabel(f"Unique across {da.series_display_label(series_number)}. "
+                             f"Used for the PDF filename and for status.")
+        tag_helper.setObjectName("FieldLabel")
+        tag_col.addWidget(tag_helper)
+        hlayout.addLayout(tag_col, stretch=1)
+
+        progress_col = QVBoxLayout()
+        progress_col.setAlignment(Qt.AlignRight)
+        progress_hint = QLabel("Fields filled")
+        progress_hint.setObjectName("FieldLabel")
+        progress_hint.setAlignment(Qt.AlignRight)
+        progress_col.addWidget(progress_hint)
+        self.progress_label = QLabel("")
+        self.progress_label.setObjectName("PageTitle")
+        self.progress_label.setStyleSheet("font-size:22px;")
+        self.progress_label.setAlignment(Qt.AlignRight)
+        progress_col.addWidget(self.progress_label)
+        hlayout.addLayout(progress_col)
+        outer.addWidget(header)
+
+        # -------------------------------------------------------- body
+        body_row = QHBoxLayout()
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(0)
+
+        sidebar = QFrame()
+        sidebar.setFixedWidth(230)
+        sidebar.setStyleSheet("background:#fff;border-right:1px solid rgba(29,31,32,.16);")
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 8, 0, 8)
+        sidebar_layout.setSpacing(0)
+        kicker = QLabel("SECTIONS")
+        kicker.setObjectName("SectionLabel")
+        kicker.setContentsMargins(16, 6, 16, 8)
+        sidebar_layout.addWidget(kicker)
+        self.section_list = QListWidget()
+        self.section_list.setFrameShape(QFrame.NoFrame)
+        self.section_list.itemClicked.connect(self._jump_to_section_item)
+        sidebar_layout.addWidget(self.section_list, stretch=1)
+        footnote = QLabel("Alt+↓ / Alt+↑ move between sections.")
+        footnote.setObjectName("FieldLabel")
+        footnote.setWordWrap(True)
+        footnote.setContentsMargins(16, 8, 16, 4)
+        sidebar_layout.addWidget(footnote)
+        body_row.addWidget(sidebar)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         inner = QWidget()
         inner_layout = QVBoxLayout(inner)
-        inner_layout.setContentsMargins(16, 4, 16, 12)
+        inner_layout.setContentsMargins(20, 14, 20, 12)
         inner_layout.setSpacing(12)
 
         sections = list(dict.fromkeys(f["section"] for f in schema.LOG_COLUMNS))
@@ -2665,30 +2726,45 @@ class EditDialog(QDialog):
         titles.setdefault("control", "Status")
 
         self.section_boxes = {}
+        self.section_field_ids = {}
+        self.section_list_items = {}
         for section in sections:
             section_title = titles.get(section, section.title())
+            fields_here = [f for f in schema.LOG_COLUMNS if f["section"] == section
+                           and f["id"] != key_field]
+            if not fields_here:
+                continue
             box = QGroupBox(section_title)
             grid = QGridLayout(box)
             grid.setHorizontalSpacing(14)
             grid.setVerticalSpacing(8)
             grid.setColumnStretch(1, 1)
             grid.setColumnStretch(3, 1)
-
-            fields_here = [f for f in schema.LOG_COLUMNS if f["section"] == section]
             self._build_section_body(grid, fields_here, effective)
 
             inner_layout.addWidget(box)
             self.section_boxes[section] = box
-            self.section_picker.addItem(section_title, section)
+            self.section_field_ids[section] = [f["id"] for f in fields_here
+                                                if f["id"] != "yanda_qa_signature"]
+            item = QListWidgetItem(section_title)
+            item.setData(Qt.UserRole, section)
+            self.section_list.addItem(item)
+            self.section_list_items[section] = item
 
         inner_layout.addStretch()
         self.scroll.setWidget(inner)
-        outer.addWidget(self.scroll, stretch=1)
+        body_row.addWidget(self.scroll, stretch=1)
+        outer.addLayout(body_row, stretch=1)
+        if self.section_list.count():
+            self.section_list.setCurrentRow(0)
 
         footer = QFrame()
         footer.setObjectName("Card")
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(16, 10, 16, 10)
+        self.autosave_hint = QLabel("Nothing is written to the workbook until you save.")
+        self.autosave_hint.setObjectName("FieldLabel")
+        footer_layout.addWidget(self.autosave_hint)
         footer_layout.addStretch()
         cancel_btn = make_button("Cancel", "Ghost")
         cancel_btn.clicked.connect(self.reject)
@@ -2698,9 +2774,21 @@ class EditDialog(QDialog):
         footer_layout.addWidget(save_btn)
         outer.addWidget(footer)
 
-        # Dirty-tracking snapshot AFTER widgets exist, over exactly the
-        # fields that got one - the signature field intentionally has none.
-        self.initial_values = {fid: effective.get(fid, "") for fid in self.widgets}
+        alt_up = QShortcut(QKeySequence("Alt+Up"), self)
+        alt_up.activated.connect(lambda: self._move_section(-1))
+        alt_down = QShortcut(QKeySequence("Alt+Down"), self)
+        alt_down.activated.connect(lambda: self._move_section(1))
+
+        for widget in self.widgets.values():
+            self._connect_change_signal(widget, self._refresh_progress)
+        self._refresh_progress()
+
+        # Dirty-tracking snapshot read back FROM the widgets themselves (not from
+        # `effective`'s raw sheet values) so it matches whatever a widget actually
+        # normalizes a value to - e.g. a combo box that doesn't have an exact-match
+        # option for the stored value. Comparing against the raw dict here would
+        # make is_dirty() true immediately on open with nothing edited.
+        self.initial_values = self._current_values()
 
     # ------------------------------------------------------------- building
     def _build_section_body(self, grid, fields, existing):
@@ -2744,10 +2832,10 @@ class EditDialog(QDialog):
     def _add_signature_row(self, grid, row):
         active = da.get_active_signature_path()
         if active:
-            label = QLabel(f"\u2713  Signing as: {active.name}")
+            label = QLabel(f"✓  Signing as: {active.name}")
             label.setObjectName("SigOk")
         else:
-            label = QLabel("\u26a0  No signature set up - see Settings \u2192 Manage Signatures")
+            label = QLabel("⚠  No signature set up - see Settings → Manage Signatures")
             label.setObjectName("SigWarn")
         grid.addWidget(label, row, 0, 1, 4)
 
@@ -2757,14 +2845,42 @@ class EditDialog(QDialog):
     def _read_widget(self, widget):
         return read_field_widget(widget)
 
+    def _connect_change_signal(self, widget, callback):
+        if isinstance(widget, QComboBox):
+            widget.currentTextChanged.connect(lambda _t: callback())
+        elif isinstance(widget, QTextEdit):
+            widget.textChanged.connect(callback)
+        else:
+            widget.textChanged.connect(lambda _t: callback())
+
     def _current_values(self):
         return {fid: self._read_widget(w) for fid, w in self.widgets.items()}
 
-    def _jump_to_section(self, index):
-        section = self.section_picker.itemData(index)
+    def _refresh_progress(self):
+        values = self._current_values()
+        filled = sum(1 for v in values.values() if str(v).strip())
+        total = len(self.widgets)
+        self.progress_label.setText(f"{filled} of {total}")
+        for section, field_ids in self.section_field_ids.items():
+            f = sum(1 for fid in field_ids if str(values.get(fid, "")).strip())
+            t = len(field_ids)
+            item = self.section_list_items.get(section)
+            if item:
+                item.setText(f"{self.section_boxes[section].title()}    {f}/{t}")
+
+    def _jump_to_section_item(self, item):
+        section = item.data(Qt.UserRole)
         box = self.section_boxes.get(section)
         if box:
             self.scroll.ensureWidgetVisible(box, ymargin=10)
+
+    def _move_section(self, direction):
+        row = self.section_list.currentRow()
+        new_row = max(0, min(self.section_list.count() - 1, row + direction))
+        self.section_list.setCurrentRow(new_row)
+        item = self.section_list.item(new_row)
+        if item:
+            self._jump_to_section_item(item)
 
     # ------------------------------------------------------------ lifecycle
     def is_dirty(self):
@@ -2818,52 +2934,158 @@ class EditDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
+    """Plate 1i: categories down the left (QListWidget), one page per
+    category on the right (QStackedWidget), instead of one long scrolling
+    column. Appearance is new - theme now has a real High contrast option
+    (theme.HIGH_CONTRAST_QSS existed with nothing to pick it before this),
+    plus text-size scaling (ui_scale) and a screen-reader announcement
+    toggle (announce_status)."""
+
+    CATEGORIES = ["Appearance", "Export defaults", "Workbook", "Series", "Signatures", "Keyboard shortcuts"]
+
     def __init__(self, parent, on_series_change=None):
         super().__init__(parent)
         self.on_series_change = on_series_change
         self.setWindowTitle("Settings")
-        self.resize(440, 680)
+        self.resize(820, 600)
 
-        layout = QVBoxLayout(self)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        nav = QListWidget()
+        nav.setFixedWidth(210)
+        nav.setFrameShape(QFrame.NoFrame)
+        nav.addItems(self.CATEGORIES)
+        nav.currentRowChanged.connect(self._on_category_changed)
+        outer.addWidget(nav)
+        self.nav = nav
+
+        self.pages = QStackedWidget()
+        outer.addWidget(self.pages, stretch=1)
+
+        self.pages.addWidget(self._build_appearance_page())
+        self.pages.addWidget(self._build_export_page())
+        self.pages.addWidget(self._build_workbook_page())
+        self.pages.addWidget(self._build_series_page())
+        self.pages.addWidget(self._build_signatures_page())
+        self.pages.addWidget(self._build_shortcuts_page())
+        nav.setCurrentRow(0)
+
+    def _on_category_changed(self, row):
+        if row >= 0:
+            self.pages.setCurrentIndex(row)
+
+    def _page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+        return page, layout
+
+    def _heading(self, layout, text):
+        h = QLabel(text)
+        h.setObjectName("PageTitle")
+        h.setStyleSheet("font-size:22px;")
+        layout.addWidget(h)
+
+    def _segmented(self, options, current, on_pick):
+        """options: [(value, label)]. Returns the QFrame; on_pick(value)
+        fires when a segment is clicked."""
+        wrap = QFrame()
+        wrap.setStyleSheet("border:1px solid rgba(29,31,32,.3);")
+        row = QHBoxLayout(wrap)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        buttons = {}
+        for value, label in options:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(value == current)
+            btn.setStyleSheet(
+                "QPushButton{border:none;border-right:1px solid rgba(29,31,32,.3);"
+                "padding:7px 14px;font-size:13px;}"
+                "QPushButton:last-child{border-right:none;}"
+                "QPushButton:checked{background:#416180;color:#fff;font-weight:600;}")
+            btn.clicked.connect(lambda _c, v=value: on_pick(v))
+            row.addWidget(btn)
+            buttons[value] = btn
+
+        def refresh(new_current):
+            for v, b in buttons.items():
+                b.setChecked(v == new_current)
+        wrap._refresh = refresh
+        return wrap
+
+    # ----------------------------------------------------------- Appearance
+    def _build_appearance_page(self):
+        page, layout = self._page()
+        self._heading(layout, "Appearance")
         settings = da.load_settings()
 
-        appearance_label = QLabel("Appearance")
-        appearance_label.setStyleSheet("font-size: 14px; font-weight: 700;")
-        layout.addWidget(appearance_label)
+        theme_label = QLabel("Theme")
+        theme_label.setStyleSheet("font-weight:500;")
+        layout.addWidget(theme_label)
+        current_theme = settings.get("theme") or "light"
+        if current_theme not in ("light", "dark", "high_contrast"):
+            current_theme = "light"
+        self.theme_seg = self._segmented(
+            [("light", "Light"), ("dark", "Dark"), ("high_contrast", "High contrast")],
+            current_theme, self._set_theme)
+        layout.addWidget(self.theme_seg)
+        theme_hint = QLabel("High contrast raises every border and text pair past 7:1 "
+                             "and removes the alternating row tint.")
+        theme_hint.setObjectName("FieldLabel")
+        theme_hint.setWordWrap(True)
+        layout.addWidget(theme_hint)
 
-        theme_row = QHBoxLayout()
-        theme_row.addWidget(QLabel("Theme:"))
-        light_radio = QRadioButton("Light")
-        dark_radio = QRadioButton("Dark")
-        (dark_radio if settings.get("theme") == "dark" else light_radio).setChecked(True)
-        light_radio.toggled.connect(lambda checked: checked and self._set_theme("light"))
-        dark_radio.toggled.connect(lambda checked: checked and self._set_theme("dark"))
-        theme_row.addWidget(light_radio)
-        theme_row.addWidget(dark_radio)
-        theme_row.addStretch()
-        layout.addLayout(theme_row)
+        layout.addSpacing(10)
+        size_label = QLabel("Text size")
+        size_label.setStyleSheet("font-weight:500;")
+        layout.addWidget(size_label)
+        current_scale = settings.get("ui_scale", 100)
+        self.scale_seg = self._segmented(
+            [(100, "100%"), (125, "125%"), (150, "150%"), (175, "175%")],
+            current_scale, self._set_scale)
+        layout.addWidget(self.scale_seg)
+        size_hint = QLabel("Scales the whole interface, including table rows and hit targets.")
+        size_hint.setObjectName("FieldLabel")
+        layout.addWidget(size_hint)
 
-        layout.addSpacing(16)
-        journal_label = QLabel("Run Journal")
-        journal_label.setStyleSheet("font-size: 14px; font-weight: 700;")
-        layout.addWidget(journal_label)
-        journal_hint = QLabel("Stamped on every change you make from The Run screen.")
-        journal_hint.setObjectName("FieldLabel")
-        layout.addWidget(journal_hint)
-        name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("Your name:"))
-        self.crew_name_edit = QLineEdit(settings.get("crew_name", ""))
-        self.crew_name_edit.setPlaceholderText("e.g. L. Ostrup")
-        self.crew_name_edit.setAccessibleName("Your name, shown on Run journal entries")
-        self.crew_name_edit.editingFinished.connect(
-            lambda: self._save_setting_safe("crew_name", self.crew_name_edit.text().strip()))
-        name_row.addWidget(self.crew_name_edit, stretch=1)
-        layout.addLayout(name_row)
+        layout.addSpacing(10)
+        motion_label = QLabel("Motion & feedback")
+        motion_label.setStyleSheet("font-weight:500;")
+        layout.addWidget(motion_label)
+        self.announce_check = QCheckBox("Announce saves and status changes in the status bar")
+        self.announce_check.setChecked(bool(settings.get("announce_status", True)))
+        self.announce_check.toggled.connect(lambda v: self._save_setting_safe("announce_status", v))
+        layout.addWidget(self.announce_check)
 
-        layout.addSpacing(16)
-        export_label = QLabel("Default Export Options")
-        export_label.setStyleSheet("font-size: 14px; font-weight: 700;")
-        layout.addWidget(export_label)
+        layout.addStretch()
+        footer = QLabel("Changes apply immediately and are saved to app_settings.json.")
+        footer.setObjectName("FieldLabel")
+        layout.addWidget(footer)
+        return page
+
+    def _set_theme(self, theme_name):
+        self._save_setting_safe("theme", theme_name)
+        self.theme_seg._refresh(theme_name)
+        app = QApplication.instance()
+        if app is not None:
+            apply_app_theme(app, theme_name)
+
+    def _set_scale(self, scale):
+        self._save_setting_safe("ui_scale", scale)
+        self.scale_seg._refresh(scale)
+        app = QApplication.instance()
+        if app is not None:
+            apply_app_theme(app, da.get_setting("theme") or "light")
+
+    # ------------------------------------------------------- Export defaults
+    def _build_export_page(self):
+        page, layout = self._page()
+        self._heading(layout, "Export defaults")
+        settings = da.load_settings()
         hint = QLabel("Used to prefill the Export dialog each time - can still be changed per export.")
         hint.setObjectName("FieldLabel")
         hint.setWordWrap(True)
@@ -2878,11 +3100,13 @@ class SettingsDialog(QDialog):
         self.sig_check.setChecked(settings.get("default_include_signature", True))
         self.sig_check.toggled.connect(lambda v: self._save_setting_safe("default_include_signature", v))
         layout.addWidget(self.sig_check)
+        layout.addStretch()
+        return page
 
-        layout.addSpacing(16)
-        wb_label = QLabel("Workbook")
-        wb_label.setStyleSheet("font-size: 14px; font-weight: 700;")
-        layout.addWidget(wb_label)
+    # -------------------------------------------------------------- Workbook
+    def _build_workbook_page(self):
+        page, layout = self._page()
+        self._heading(layout, "Workbook")
         wb_name = QLabel(da.WORKBOOK_PATH.name)
         wb_name.setObjectName("FieldLabel")
         layout.addWidget(wb_name)
@@ -2891,9 +3115,22 @@ class SettingsDialog(QDialog):
         layout.addWidget(open_wb_btn, alignment=Qt.AlignLeft)
 
         layout.addSpacing(16)
-        series_mgmt_label = QLabel("Manage Series")
-        series_mgmt_label.setStyleSheet("font-size: 14px; font-weight: 700;")
-        layout.addWidget(series_mgmt_label)
+        shortcut_label = QLabel("Desktop Shortcut")
+        shortcut_label.setStyleSheet("font-weight:500;")
+        layout.addWidget(shortcut_label)
+        shortcut_hint = QLabel("Re-create it here if it ever gets deleted.")
+        shortcut_hint.setObjectName("FieldLabel")
+        layout.addWidget(shortcut_hint)
+        shortcut_btn = make_button("Create Desktop Shortcut", "Ghost")
+        shortcut_btn.clicked.connect(self._create_shortcut)
+        layout.addWidget(shortcut_btn, alignment=Qt.AlignLeft)
+        layout.addStretch()
+        return page
+
+    # ---------------------------------------------------------------- Series
+    def _build_series_page(self):
+        page, layout = self._page()
+        self._heading(layout, "Series")
         series_hint = QLabel(
             "Rename gives a series a friendlier label everywhere it's shown. "
             "Remove un-registers it from the app and archives its sheets in "
@@ -2905,11 +3142,13 @@ class SettingsDialog(QDialog):
         self.series_list_area = QVBoxLayout()
         layout.addLayout(self.series_list_area)
         self._render_series_list()
+        layout.addStretch()
+        return page
 
-        layout.addSpacing(16)
-        sig_label = QLabel("Signatures")
-        sig_label.setStyleSheet("font-size: 14px; font-weight: 700;")
-        layout.addWidget(sig_label)
+    # ----------------------------------------------------------- Signatures
+    def _build_signatures_page(self):
+        page, layout = self._page()
+        self._heading(layout, "Signatures")
         active = da.get_setting("active_signature") or "(none set)"
         self.active_sig_label = QLabel(f"Currently signing as: {active}")
         self.active_sig_label.setObjectName("FieldLabel")
@@ -2919,27 +3158,66 @@ class SettingsDialog(QDialog):
         layout.addWidget(manage_sig_btn, alignment=Qt.AlignLeft)
 
         layout.addSpacing(16)
-        shortcut_label = QLabel("Desktop Shortcut")
-        shortcut_label.setStyleSheet("font-size: 14px; font-weight: 700;")
-        layout.addWidget(shortcut_label)
-        shortcut_hint = QLabel("Re-create it here if it ever gets deleted.")
-        shortcut_hint.setObjectName("FieldLabel")
-        layout.addWidget(shortcut_hint)
-        shortcut_btn = make_button("Create Desktop Shortcut", "Ghost")
-        shortcut_btn.clicked.connect(self._create_shortcut)
-        layout.addWidget(shortcut_btn, alignment=Qt.AlignLeft)
-
+        journal_label = QLabel("Your name")
+        journal_label.setStyleSheet("font-weight:500;")
+        layout.addWidget(journal_label)
+        journal_hint = QLabel("Attributed on every journal entry, ECN acknowledgement, "
+                               "and revision-history line you write.")
+        journal_hint.setObjectName("FieldLabel")
+        journal_hint.setWordWrap(True)
+        layout.addWidget(journal_hint)
+        self.crew_name_edit = QLineEdit(da.get_setting("crew_name") or "")
+        self.crew_name_edit.setPlaceholderText("e.g. L. Ostrup")
+        self.crew_name_edit.setAccessibleName("Your name, shown on journal and revision entries")
+        self.crew_name_edit.editingFinished.connect(
+            lambda: self._save_setting_safe("crew_name", self.crew_name_edit.text().strip()))
+        layout.addWidget(self.crew_name_edit)
         layout.addStretch()
-        close_btn = make_button("Close", "Ghost")
-        close_btn.clicked.connect(self.accept)
-        close_row = QHBoxLayout()
-        close_row.addStretch()
-        close_row.addWidget(close_btn)
-        layout.addLayout(close_row)
+        return page
 
-    def _set_theme(self, theme_name):
-        self._save_setting_safe("theme", theme_name)
+    # -------------------------------------------------------- Keyboard help
+    def _build_shortcuts_page(self):
+        page, layout = self._page()
+        self._heading(layout, "Keyboard shortcuts")
+        desc = QLabel("Everything here also works from the buttons on screen.")
+        desc.setObjectName("FieldLabel")
+        layout.addWidget(desc)
 
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        shortcuts = [
+            ("Ctrl+K", "Find any tag across every series"),
+            ("Ctrl+F", "Filter the rows on screen"),
+            ("Ctrl+N", "Add a new row"),
+            ("Ctrl+E", "Edit the selected row"),
+            ("Enter", "Open the selected row's record (read-only)"),
+            ("Ctrl+G", "Jump to a row number"),
+            ("Alt+D", "Documents & ECN for the selected row"),
+            ("Ctrl+Shift+E", "Export…"),
+            ("Delete", "Remove the selected row(s)"),
+            ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
+            ("F5", "Reload from the workbook"),
+            ("F6", "Move between rail, search, table and priorities"),
+            ("Ctrl+P", "Collapse/restore the priorities strip"),
+            ("Ctrl+,", "Settings"),
+            ("Ctrl+Shift+W", "Populating Wizard"),
+            ("Ctrl+Shift+I", "Import Datasheet PDF"),
+        ]
+        for row, (keys, desc_text) in enumerate(shortcuts):
+            key_label = QLabel(keys)
+            key_label.setStyleSheet(
+                "font:500 12px ui-monospace,Menlo,monospace;background:#e9e9ea;"
+                "padding:4px 7px;")
+            key_label.setAlignment(Qt.AlignCenter)
+            grid.addWidget(key_label, row, 0)
+            desc_label = QLabel(desc_text)
+            grid.addWidget(desc_label, row, 1)
+        layout.addLayout(grid)
+        layout.addStretch()
+        return page
+
+    # --------------------------------------------------------------- shared
     def _save_setting_safe(self, key, value):
         try:
             da.set_setting(key, value)
@@ -3141,11 +3419,32 @@ class ExportDialog(QDialog):
         self.etype = da.EQUIPMENT_TYPES[equip_key]
         self.setWindowTitle(f"Export {self.etype['label']}s \u2013 "
                              f"{da.series_display_label(series_number)}")
-        self.resize(500, 680)
+        # The old fixed 500x680 size (with no size policy) could put the
+        # Run Export button off the bottom of a short laptop screen, under
+        # the taskbar, with no way to reach it. Bounded by the actual
+        # available screen area instead, never a hard-coded height; the
+        # body scrolls, the footer stays docked to the window's own
+        # bottom edge so the buttons are always reachable.
+        screen = QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        default_w, default_h = 520, 760
+        if avail is not None:
+            default_h = min(default_h, avail.height() - 60)
+        self.setMinimumSize(440, 420)
+        saved_geo = da.get_setting("export_dialog_size") or {}
+        self.resize(saved_geo.get("w", default_w), saved_geo.get("h", default_h))
+        if avail is not None:
+            x = avail.center().x() - self.width() // 2
+            y = avail.center().y() - self.height() // 2
+            self.move(max(avail.left(), x), max(avail.top(), y))
+        self.setSizeGripEnabled(True)
         settings = da.load_settings()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -3249,8 +3548,8 @@ class ExportDialog(QDialog):
         self.sign_date_edit = None
         sign_off_hint = QLabel(
             "Sign-off dates come from real columns now, the same for both equipment types - "
-            "edit them in the Index grid or with Mass Edit Dates (Ctrl+Shift+D) before "
-            "exporting, and they'll appear on the PDF automatically."
+            "edit them in the Index grid, or select rows and use “Set a date…” in "
+            "the selection bar, before exporting, and they'll appear on the PDF automatically."
             + (" (YANDA QC Representative - Date, in this case.)" if equip_key == "valve" else
                " (QA Rep Date / Client Rep Date, in this case.)"))
         sign_off_hint.setObjectName("FieldLabel")
@@ -3258,7 +3557,8 @@ class ExportDialog(QDialog):
         layout.addWidget(sign_off_hint)
 
         layout.addStretch()
-        outer.addWidget(body, stretch=1)
+        scroll.setWidget(body)
+        outer.addWidget(scroll, stretch=1)
 
         footer = QFrame()
         footer.setObjectName("Card")
@@ -3267,13 +3567,21 @@ class ExportDialog(QDialog):
         cancel_btn = make_button("Cancel", "Ghost")
         cancel_btn.clicked.connect(self.reject)
         run_btn = make_button("Run Export", "Success")
+        run_btn.setToolTip("Ctrl+Enter runs this from anywhere in the dialog")
         run_btn.clicked.connect(self._run)
         footer_layout.addWidget(cancel_btn)
         footer_layout.addWidget(run_btn)
         outer.addWidget(footer)
 
+        run_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
+        run_shortcut.activated.connect(self._run)
+
     def _fill_dated_folder(self):
         self.subfolder_edit.setText(f"{datetime.date.today().isoformat()}_export")
+
+    def closeEvent(self, event):
+        da.set_setting("export_dialog_size", {"w": self.width(), "h": self.height()})
+        super().closeEvent(event)
 
     def _run(self):
         mode = {0: "selected", 1: "flagged", 2: "all"}[self.mode_group.checkedId()]

@@ -741,12 +741,13 @@ def clear_wizard_draft():
 # the workbook at all.
 # ---------------------------------------------------------------------------
 DEFAULT_SETTINGS = {
-    "theme": "bootstrap-light",
+    "theme": "light",
     "active_signature": "yanda_qa_signature_transparent.png",
     "default_flatten": False,
     "default_include_signature": True,
     "crew_name": "",
-    "run_field_mode": False,
+    "ui_scale": 100,
+    "announce_status": True,
 }
 
 
