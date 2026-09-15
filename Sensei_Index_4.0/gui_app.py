@@ -2328,6 +2328,11 @@ class IndexPage(QWidget):
 # like a plain-language printout of the row.
 # =============================================================================
 class RowDetailDialog(QDialog):
+    """"Record" - plate 1e. Replaces the old RowDetailDialog AND the
+    "View Details" toolbar button: reading the record and building its PDF
+    preview are two buttons in the same place now. Blank values read "not
+    recorded" - real text, not an em dash, per that plate's build note."""
+
     def __init__(self, parent, series_number, equip_key, row_num):
         super().__init__(parent)
         self.series_number = series_number
@@ -2335,33 +2340,133 @@ class RowDetailDialog(QDialog):
         self.row_num = row_num
         self.etype = da.EQUIPMENT_TYPES[equip_key]
         self.opened_edit = False
-        self.setWindowTitle(f"{self.etype['label']} \u2013 Row {row_num} \u2013 Full Details")
-        self.resize(700, 680)
+        self.resize(760, 700)
 
         schema = self.etype["schema"]
         try:
-            values = da.read_full_row(series_number, equip_key, row_num)
+            self.values = da.read_full_row(series_number, equip_key, row_num)
         except Exception as exc:
-            values = {}
+            self.values = {}
             QMessageBox.critical(self, "Couldn't read row", str(exc))
+
+        key_val = self.values.get(self.etype["key_field"], "")
+        self.setWindowTitle(f"{key_val} \u2014 record")
+        status = da.get_status(series_number, equip_key, key_val)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        header = QFrame()
+        header.setStyleSheet("background:#fff;border-bottom:1px solid rgba(29,31,32,.16);")
+        hlayout = QVBoxLayout(header)
+        hlayout.setContentsMargins(20, 16, 20, 16)
+        hlayout.setSpacing(10)
+        title = QLabel(key_val)
+        title.setObjectName("PageTitle")
+        hlayout.addWidget(title)
+        subtitle_bits = [da.series_display_label(series_number), self.etype["label"],
+                          f"workbook row {row_num}"]
+        subtitle = QLabel(" \u00b7 ".join(subtitle_bits))
+        subtitle.setObjectName("PageSubtitle")
+        hlayout.addWidget(subtitle)
+
+        timeline = QHBoxLayout()
+        timeline.setSpacing(8)
+        stage_words = ["Installed", "Submitted", "Accepted"]
+        stage_keys = ["installed", "submitted", "accepted"]
+        for i, (word, key) in enumerate(zip(stage_words, stage_keys)):
+            done = bool(status.get(key))
+            marker = QLabel()
+            marker.setFixedSize(11, 11)
+            marker.setStyleSheet(f"background:{'#1d2d3d' if done else '#fff'};"
+                                  f"border:2px solid {'#1d2d3d' if done else '#7a7a7d'};")
+            timeline.addWidget(marker)
+            lbl = QLabel(word)
+            lbl.setStyleSheet(f"color:{'#1d1f20' if done else '#5d5d60'};font-size:12.5px;")
+            timeline.addWidget(lbl)
+            if i < 2:
+                line = QFrame()
+                line.setFixedWidth(20)
+                line.setFixedHeight(1)
+                line.setStyleSheet("background:#1d2d3d;")
+                timeline.addWidget(line)
+        timeline.addStretch()
+        hlayout.addLayout(timeline)
+        outer.addWidget(header)
+
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(20, 10, 20, 0)
+        self._filter_buttons = {}
+        filled_n = sum(1 for f in schema.FIELDS if str(self.values.get(f["id"], "")).strip())
+        blank_n = len(schema.FIELDS) - filled_n
+        for key, text in [("all", f"All fields ({len(schema.FIELDS)})"),
+                           ("filled", f"Filled only ({filled_n})"),
+                           ("blank", f"Blank ({blank_n})")]:
+            btn = make_button(text, "Link" if key != "all" else "Primary")
+            btn.setCheckable(True)
+            btn.setChecked(key == "all")
+            btn.clicked.connect(lambda _c, k=key: self._set_field_filter(k))
+            filter_row.addWidget(btn)
+            self._filter_buttons[key] = btn
+        filter_row.addStretch()
+        outer.addLayout(filter_row)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        inner = QWidget()
-        inner_layout = QVBoxLayout(inner)
-        inner_layout.setContentsMargins(16, 14, 16, 12)
-        inner_layout.setSpacing(12)
+        self.inner = QWidget()
+        self.inner_layout = QVBoxLayout(self.inner)
+        self.inner_layout.setContentsMargins(16, 14, 16, 12)
+        self.inner_layout.setSpacing(12)
+        scroll.setWidget(self.inner)
+        outer.addWidget(scroll, stretch=1)
 
+        self._schema = schema
+        self._field_filter = "all"
+        self._render_fields()
+
+        footer = QFrame()
+        footer.setObjectName("Card")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(16, 10, 16, 10)
+        edit_btn = make_button("Edit", "Primary")
+        edit_btn.clicked.connect(self._open_edit)
+        footer_layout.addWidget(edit_btn)
+        preview_btn = make_button("Preview the PDF", "Ghost")
+        preview_btn.clicked.connect(self._preview_pdf)
+        footer_layout.addWidget(preview_btn)
+        queue_btn = make_button("Queue for export", "Ghost")
+        queue_btn.clicked.connect(self._queue_export)
+        footer_layout.addWidget(queue_btn)
+        footer_layout.addStretch()
+        close_btn = make_button("Close", "Ghost")
+        close_btn.clicked.connect(self.accept)
+        footer_layout.addWidget(close_btn)
+        outer.addWidget(footer)
+
+    def _set_field_filter(self, key):
+        self._field_filter = key
+        for k, btn in self._filter_buttons.items():
+            btn.setChecked(k == key)
+        self._render_fields()
+
+    def _render_fields(self):
+        while self.inner_layout.count():
+            item = self.inner_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        schema = self._schema
         titles = dict(schema.SECTION_TITLES)
         titles.setdefault("control", "Status")
         sections = list(dict.fromkeys(f["section"] for f in schema.LOG_COLUMNS))
         for section in sections:
             fields_here = [f for f in schema.LOG_COLUMNS if f["section"] == section
-                            and f["id"] != "export_flag" and f["id"] != "yanda_qa_signature"]
+                            and f["id"] not in ("export_flag", "yanda_qa_signature")]
+            if self._field_filter == "filled":
+                fields_here = [f for f in fields_here if str(self.values.get(f["id"], "")).strip()]
+            elif self._field_filter == "blank":
+                fields_here = [f for f in fields_here if not str(self.values.get(f["id"], "")).strip()]
             if not fields_here:
                 continue
             box = QGroupBox(titles.get(section, section.title()))
@@ -2373,30 +2478,15 @@ class RowDetailDialog(QDialog):
                 label = QLabel(field["label"])
                 label.setObjectName("FieldLabel")
                 label.setWordWrap(True)
-                val_text = str(values.get(field["id"], "") or "\u2014")
-                value = QLabel(val_text)
+                raw = str(self.values.get(field["id"], "") or "").strip()
+                value = QLabel(raw if raw else "not recorded")
+                value.setStyleSheet("color:#5d5d60;" if not raw else "")
                 value.setWordWrap(True)
                 value.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 grid.addWidget(label, row, 0)
                 grid.addWidget(value, row, 1)
-            inner_layout.addWidget(box)
-
-        inner_layout.addStretch()
-        scroll.setWidget(inner)
-        outer.addWidget(scroll, stretch=1)
-
-        footer = QFrame()
-        footer.setObjectName("Card")
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(16, 10, 16, 10)
-        edit_btn = make_button("Edit This Row...", "Primary")
-        edit_btn.clicked.connect(self._open_edit)
-        footer_layout.addWidget(edit_btn)
-        footer_layout.addStretch()
-        close_btn = make_button("Close", "Ghost")
-        close_btn.clicked.connect(self.accept)
-        footer_layout.addWidget(close_btn)
-        outer.addWidget(footer)
+            self.inner_layout.addWidget(box)
+        self.inner_layout.addStretch()
 
     def _open_edit(self):
         dlg = EditDialog(self.parent(), self.series_number, self.equip_key,
@@ -2404,6 +2494,23 @@ class RowDetailDialog(QDialog):
         if dlg.exec() == QDialog.Accepted:
             self.opened_edit = True
             self.accept()
+
+    def _preview_pdf(self):
+        try:
+            pdf_path = da.generate_preview_pdf(self.series_number, self.equip_key, self.row_num)
+            da.open_file(pdf_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't build preview", str(exc))
+
+    def _queue_export(self):
+        key_val = self.values.get(self.etype["key_field"], "")
+        try:
+            da.set_status(self.series_number, self.equip_key, key_val, export=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "Couldn't save status", str(exc))
+            return
+        self.opened_edit = True  # reuse the same "something changed" signal
+        QMessageBox.information(self, "Queued", f"{key_val} queued for export.")
 
 
 # =============================================================================

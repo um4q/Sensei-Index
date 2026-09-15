@@ -339,7 +339,8 @@ class IndexView(QWidget):
     def _build_footer(self):
         row = QHBoxLayout()
         for text in ["Row banding every 5 · Ctrl+G jumps to a row",
-                     "Identifiers monospaced so digits align column-wise"]:
+                     "Identifiers monospaced so digits align column-wise",
+                     "Enter opens the record · double-click edits · Alt+D documents"]:
             lbl = QLabel(text)
             lbl.setObjectName("FieldLabel")
             row.addWidget(lbl)
@@ -520,7 +521,32 @@ class IndexView(QWidget):
         if event.key() == Qt.Key_Escape:
             self.table.clearSelection()
             return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.table.hasFocus():
+            self.view_selected()
+            return
+        if event.key() == Qt.Key_G and event.modifiers() & Qt.ControlModifier:
+            self.jump_to_row()
+            return
         super().keyPressEvent(event)
+
+    def jump_to_row(self):
+        n, ok = QInputDialog.getInt(
+            self, "Jump to row", "Row # (as shown in the # column):",
+            1, 1, max(1, len(self.filtered_rows)))
+        if ok and 1 <= n <= len(self.filtered_rows):
+            self.table.selectRow(n - 1)
+            self.table.scrollToItem(self.table.item(n - 1, 0))
+            self.table.setFocus()
+
+    def view_selected(self):
+        """Enter on a row opens the read-only Record view (plate 1e) -
+        double-click still opens Edit directly, same distinction the
+        design draws between a quick look and committing to a change."""
+        rows = self.selected_rows()
+        if not rows:
+            return
+        self.main_window.view_row(self.series_number, self.equip_key, rows[0]["row"])
+        self.reload()
 
     # ------------------------------------------------------------- actions
     def add_new(self):
