@@ -28,6 +28,7 @@ tests/test_access_db_logic.py for exactly that - it is NOT a
 around row marshaling/parent lookups/duplicate keys is sound" test.
 """
 import datetime
+import json
 import sys
 from pathlib import Path
 
@@ -56,6 +57,44 @@ def get_connection(path=None):
         )
     conn_str = _ACCESS_CONN_STR.format(path=target)
     return pyodbc.connect(conn_str, autocommit=False)
+
+
+# ------------------------------------------------------------ Cached connection
+# access_data_access.py/access_electrical_data_access.py's own public
+# functions match data_access.py/electrical_data_access.py's real
+# calling convention exactly - gui_app.py calls da.list_series() with NO
+# connection argument, the same way it always has - so something has to
+# hold the one open connection those domain functions reach for
+# internally. This mirrors data_access.py's own _get_cached_workbook()
+# (open once, reuse, invalidate on demand) rather than opening a fresh
+# connection per call.
+_cached_conn = None
+
+
+def get_cached_connection():
+    global _cached_conn
+    if _cached_conn is None:
+        _cached_conn = get_connection()
+    return _cached_conn
+
+
+def set_connection_for_testing(conn):
+    """Test-only override - hands every domain function a sqlite3
+    connection instead of a real pyodbc one, the same way data_access.py's
+    own tests point HERE/WORKBOOK_PATH at an isolated tmp_path rather than
+    the real workbook. See tests/test_domain_modules_integration.py."""
+    global _cached_conn
+    _cached_conn = conn
+
+
+def invalidate_connection_cache():
+    global _cached_conn
+    if _cached_conn is not None:
+        try:
+            _cached_conn.close()
+        except Exception:
+            pass
+    _cached_conn = None
 
 
 def now_str():
@@ -229,12 +268,19 @@ def set_setting(conn, key, value):
 
 # --------------------------------------------------------------- Activity log
 
-def log_activity(conn, domain, equip_key, parent_label, row_id, key_value, action,
-                  details="", source="app"):
+def log_activity(conn, action, domain=None, equip_key=None, parent_label=None, row_id=None,
+                  key_value=None, fields=None, source="app", note=None, ts=None):
+    """Matches data_access.py's own log_activity(action, series=..., ...)
+    shape (parent_label here covers both series and zone - domain says
+    which) - fields: {field_id: {'old': ..., 'new': ...}}, stored as JSON
+    text in fields_json (Access has no native JSON/dict column type,
+    same "one JSON object' worth of text" idea activity_log.jsonl's own
+    per-line format already uses)."""
     insert_row(conn, "ActivityLog", {
         "domain": domain, "equip_key": equip_key, "parent_label": parent_label,
         "row_id": row_id, "key_value": key_value, "action": action,
-        "details": details, "source": source, "timestamp": now_str(),
+        "fields_json": json.dumps(fields or {}), "note": note,
+        "source": source, "timestamp": ts or now_str(),
     })
 
 
@@ -259,10 +305,19 @@ def read_activity_log(conn, limit=None, domain=None, equip_key=None, row_id=None
     cursor = conn.cursor()
     cursor.execute(sql, params)
     rows = cursor.fetchall()
-    return [_row_to_dict(cursor, r) for r in rows]
+    entries = [_row_to_dict(cursor, r) for r in rows]
+    for entry in entries:
+        try:
+            entry["fields"] = json.loads(entry.get("fields_json") or "{}")
+        except (TypeError, ValueError):
+            entry["fields"] = {}
+    return entries
 
 
 # ------------------------------------------------------------------- Status
+
+DEFAULT_STATUS = {"installed": False, "submitted": False, "accepted": False, "export": False}
+
 
 def get_status(conn, domain, equip_key, key_value):
     cursor = conn.cursor()
@@ -272,10 +327,10 @@ def get_status(conn, domain, equip_key, key_value):
     )
     row = cursor.fetchone()
     if row is None:
-        return {"installed": False, "submitted": False, "accepted": False}
+        return dict(DEFAULT_STATUS)
     d = _row_to_dict(cursor, row)
     return {"installed": bool(d["installed"]), "submitted": bool(d["submitted"]),
-            "accepted": bool(d["accepted"])}
+            "accepted": bool(d["accepted"]), "export": bool(d["export"])}
 
 
 def set_status(conn, domain, equip_key, key_value, **fields):
@@ -291,3 +346,22 @@ def set_status(conn, domain, equip_key, key_value, **fields):
                                         "key_value": key_value, **fields})
     else:
         update_row(conn, "RowStatus", row[0], fields)
+
+
+def bulk_set_status(conn, domain, keys, **fields):
+    """keys: [(equip_key, key_value), ...] - same row-update, many keys,
+    one call shape as data_access.py's own bulk_set_status()/
+    bulk_set_electrical_status()."""
+    for equip_key, key_value in keys:
+        set_status(conn, domain, equip_key, key_value, **fields)
+
+
+def rename_status_key(conn, domain, equip_key, old_key, new_key):
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id FROM [RowStatus] WHERE domain = ? AND equip_key = ? AND key_value = ?",
+        [domain, equip_key, old_key],
+    )
+    row = cursor.fetchone()
+    if row is not None:
+        update_row(conn, "RowStatus", row[0], {"key_value": new_key, "updated_at": now_str()})

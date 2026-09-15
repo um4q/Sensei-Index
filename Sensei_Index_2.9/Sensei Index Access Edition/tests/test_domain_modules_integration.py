@@ -8,10 +8,21 @@ as tests/test_access_db_logic.py, just one level up: this exercises the
 domain modules themselves (zone/series creation, row save/read, PDF
 generation via the REAL export_*.py modules and REAL template PDFs),
 not just the generic engine underneath them.
+
+Both domain modules take NO explicit connection argument (see their own
+docstrings for why - it's what lets gui_app.py's real UI code call them
+completely unmodified, exactly like data_access.py/electrical_data_access.
+py's own calling convention). So instead of passing a test connection
+into every call, each test points the module's internal connection CACHE
+at a fresh in-memory SQLite database via access_db.set_connection_for_
+testing(), then calls every function exactly as gui_app.py itself would -
+with no conn argument at all.
 """
 import sqlite3
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -50,100 +61,205 @@ def _build_sqlite_db():
     return conn
 
 
-def test_electrical_zone_and_row_round_trip():
-    import access_electrical_data_access as eda
-    conn = _build_sqlite_db()
+@pytest.fixture()
+def eda():
+    """Fresh module + fresh in-memory connection cache per test - two
+    tests never share state, same isolation a fresh conn used to give,
+    just achieved by resetting the cache instead of passing a new one
+    around explicitly."""
+    import access_db as db
+    import access_electrical_data_access as mod
+    db.set_connection_for_testing(_build_sqlite_db())
+    yield mod
+    db.set_connection_for_testing(None)
 
-    eda.add_zone(conn, "K1B Well Pad")
-    assert eda.list_zones(conn) == ["K1B Well Pad"]
 
-    row_id = eda.find_first_blank_row(conn, "K1B Well Pad", "transformer_test")
-    eda.save_row(conn, "K1B Well Pad", "transformer_test", row_id, {
+@pytest.fixture()
+def da():
+    import access_db as db
+    import access_data_access as mod
+    db.set_connection_for_testing(_build_sqlite_db())
+    yield mod
+    db.set_connection_for_testing(None)
+
+
+def test_electrical_zone_and_row_round_trip(eda):
+    eda.add_zone("K1B Well Pad")
+    assert eda.list_zones() == ["K1B Well Pad"]
+
+    row_id = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row_id, {
         "tag": "29152-PT-001", "make": "ABB", "location": "K1B",
     })
-    full = eda.read_full_row(conn, "K1B Well Pad", "transformer_test", row_id)
+    full = eda.read_full_row("K1B Well Pad", "transformer_test", row_id)
     assert full["tag"] == "29152-PT-001"
     assert full["make"] == "ABB"
 
-    index_rows = eda.read_index_rows(conn, "K1B Well Pad", "transformer_test")
+    index_rows = eda.read_index_rows("K1B Well Pad", "transformer_test")
     assert len(index_rows) == 1
     assert index_rows[0]["tag"] == "29152-PT-001"
 
-    assert eda.count_rows(conn, "K1B Well Pad", "transformer_test") == 1
+    assert eda.count_rows("K1B Well Pad", "transformer_test") == 1
 
 
-def test_electrical_duplicate_detection_scoped_to_zone():
-    import access_electrical_data_access as eda
-    conn = _build_sqlite_db()
-    eda.add_zone(conn, "Zone A")
-    eda.add_zone(conn, "Zone B")
+def test_electrical_duplicate_detection_scoped_to_zone(eda):
+    eda.add_zone("Zone A")
+    eda.add_zone("Zone B")
 
-    row1 = eda.find_first_blank_row(conn, "Zone A", "transformer_test")
-    eda.save_row(conn, "Zone A", "transformer_test", row1, {"tag": "DUPE-1"})
+    row1 = eda.find_first_blank_row("Zone A", "transformer_test")
+    eda.save_row("Zone A", "transformer_test", row1, {"tag": "DUPE-1"})
 
     # Same tag in a DIFFERENT zone should NOT count as a duplicate -
     # same "duplicate check is scoped to one zone/series" rule the
     # Excel edition's own find_duplicate_row() already applies.
-    row2 = eda.find_first_blank_row(conn, "Zone B", "transformer_test")
-    eda.save_row(conn, "Zone B", "transformer_test", row2, {"tag": "DUPE-1"})
-    assert eda.find_duplicate_row(conn, "Zone B", "transformer_test", "DUPE-1", exclude_row=row2) is None
+    row2 = eda.find_first_blank_row("Zone B", "transformer_test")
+    eda.save_row("Zone B", "transformer_test", row2, {"tag": "DUPE-1"})
+    assert eda.find_duplicate_row("Zone B", "transformer_test", "DUPE-1", exclude_row=row2) is None
 
     # Same tag, SAME zone, different row - IS a duplicate.
-    row3 = eda.find_first_blank_row(conn, "Zone A", "transformer_test")
-    eda.save_row(conn, "Zone A", "transformer_test", row3, {"tag": "DUPE-1"})
-    dupe = eda.find_duplicate_row(conn, "Zone A", "transformer_test", "DUPE-1", exclude_row=row3)
+    row3 = eda.find_first_blank_row("Zone A", "transformer_test")
+    eda.save_row("Zone A", "transformer_test", row3, {"tag": "DUPE-1"})
+    dupe = eda.find_duplicate_row("Zone A", "transformer_test", "DUPE-1", exclude_row=row3)
     assert dupe is not None
     assert dupe["id"] == row1
 
 
-def test_electrical_generate_preview_pdf_uses_real_export_module():
+def test_electrical_generate_preview_pdf_uses_real_export_module(eda):
     """Proves the REUSE claim in access_electrical_data_access.py's own
     docstring - the Excel edition's real export_transformer_test_to_pdf.py
     (and its real template PDF) genuinely fills correctly from data that
     came out of this Access-shaped path, unmodified."""
-    import access_electrical_data_access as eda
     from pypdf import PdfReader
-    conn = _build_sqlite_db()
-    eda.add_zone(conn, "K1B Well Pad")
-    row_id = eda.find_first_blank_row(conn, "K1B Well Pad", "transformer_test")
-    eda.save_row(conn, "K1B Well Pad", "transformer_test", row_id, {
+    eda.add_zone("K1B Well Pad")
+    row_id = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row_id, {
         "tag": "29152-PT-001", "make": "ABB",
     })
-    out_path = eda.generate_preview_pdf(conn, "K1B Well Pad", "transformer_test", row_id)
+    out_path = eda.generate_preview_pdf("K1B Well Pad", "transformer_test", row_id)
     assert out_path.exists()
     fields = PdfReader(str(out_path)).get_fields()
     assert fields["tag"].get("/V") == "29152-PT-001"
     assert fields["make"].get("/V") == "ABB"
 
 
-def test_instrumentation_series_and_row_round_trip():
-    import access_data_access as da
-    conn = _build_sqlite_db()
+def test_instrumentation_series_and_row_round_trip(da):
+    da.add_series(100)
+    da.set_series_name(100, "Mod 100")
+    assert da.list_series() == [100]
+    assert da.series_display_label(100) == "Mod 100"
 
-    da.add_series(conn, 100, "Mod 100")
-    assert da.list_series(conn) == [100]
-    assert da.series_display_label(conn, 100) == "Mod 100"
-
-    row_id = da.find_first_blank_row(conn, 100, "transmitter")
-    da.save_row(conn, 100, "transmitter", row_id, {"tag": "29103-TIT-0001"})
-    full = da.read_full_row(conn, 100, "transmitter", row_id)
+    row_id = da.find_first_blank_row(100, "transmitter")
+    da.save_row(100, "transmitter", row_id, {"tag": "29103-TIT-0001"})
+    full = da.read_full_row(100, "transmitter", row_id)
     assert full["tag"] == "29103-TIT-0001"
-    assert da.count_rows(conn, 100, "transmitter") == 1
+    assert da.count_rows(100, "transmitter") == 1
 
 
-def test_status_and_activity_log_through_domain_module():
-    import access_electrical_data_access as eda
-    conn = _build_sqlite_db()
-    eda.add_zone(conn, "K1B Well Pad")
-    row_id = eda.find_first_blank_row(conn, "K1B Well Pad", "transformer_test")
-    eda.save_row(conn, "K1B Well Pad", "transformer_test", row_id, {"tag": "T-1"})
+def test_status_and_activity_log_through_domain_module(eda):
+    eda.add_zone("K1B Well Pad")
+    row_id = eda.find_first_blank_row("K1B Well Pad", "transformer_test")
+    eda.save_row("K1B Well Pad", "transformer_test", row_id, {"tag": "T-1"})
 
-    status = eda.get_electrical_status(conn, "transformer_test", "T-1")
-    assert status == {"installed": False, "submitted": False, "accepted": False}
-    eda.set_electrical_status(conn, "transformer_test", "T-1", installed=True)
-    assert eda.get_electrical_status(conn, "transformer_test", "T-1")["installed"] is True
+    status = eda.get_electrical_status("K1B Well Pad", "transformer_test", "T-1")
+    assert status == {"installed": False, "submitted": False, "accepted": False, "export": False}
+    eda.set_electrical_status("K1B Well Pad", "transformer_test", "T-1", installed=True)
+    assert eda.get_electrical_status("K1B Well Pad", "transformer_test", "T-1")["installed"] is True
 
-    log = eda.read_electrical_activity_log(conn)
+    log = eda.read_electrical_activity_log()
     actions = [entry["action"] for entry in log]
     assert "add_zone" in actions
     assert "save_row" in actions
+
+
+def test_equipment_types_carries_real_ui_metadata(eda, da):
+    """The redo's whole point: EQUIPMENT_TYPES/ELECTRICAL_EQUIPMENT_TYPES
+    are the REAL registries from data_access.py/electrical_data_access.py
+    (label/summary_fields/date_fields/etc.), not the DB-shape dicts
+    access_schema.py's own DOMAIN_TABLES produces - gui_app.py's index
+    page, grouping, and date-column formatting all read this metadata
+    directly and would KeyError/behave wrong without it."""
+    assert da.EQUIPMENT_TYPES["transmitter"]["label"] == "Transmitter"
+    assert "summary_fields" in da.EQUIPMENT_TYPES["transmitter"]
+    assert "group_fields" in da.EQUIPMENT_TYPES["transmitter"]
+
+    etype = eda.ELECTRICAL_EQUIPMENT_TYPES["transformer_test"]
+    assert etype["label"] == "Transformer Test Record"
+    assert etype["supports_signature_stamp"] is True
+    assert "date_fields" in etype
+
+
+def test_export_progress_report_and_cleaned_copy(da, tmp_path, monkeypatch):
+    """Both were among the 4 symbols missing after the first redo pass
+    (WORKBOOK_PATH/export_progress_report/export_cleaned_workbook/
+    get_sheet_name) - this proves they're wired end to end, not just
+    present on the module."""
+    monkeypatch.setattr(da, "REPORTS_DIR", tmp_path / "reports")
+    monkeypatch.setattr(da, "CLEANED_DIR", tmp_path / "cleaned")
+
+    da.add_series(100)
+    row_id = da.find_first_blank_row(100, "transmitter")
+    da.save_row(100, "transmitter", row_id, {"tag": " 29103-tit-0001 "})
+
+    assert da.get_sheet_name(100, "transmitter")
+    with pytest.raises(KeyError):
+        da.get_sheet_name(999, "transmitter")
+
+    report_path = da.export_progress_report()
+    assert report_path.exists()
+
+    plan = da.build_cleanup_plan()
+    assert any(f["field"] == "tag" for f in plan["fixes"])
+
+
+def test_series_type_and_progress_summary_shapes_match_excel_edition(da):
+    """Regression test for a real bug a MainWindow smoke test caught
+    during the redo: both functions used to return just a bare dict,
+    but access_gui_app.py's sidebar/Dashboard code (copied verbatim
+    from gui_app.py) unpacks the SAME shapes data_access.py's own
+    series_type_summary()/series_progress_summary() return - a (count,
+    {value: count}) tuple and a {'avg_percent','at_0','partial','at_100'}
+    dict per equipment kind, respectively. No automated test exercised
+    the GUI's own sidebar/Dashboard-building code before this one, so
+    the shape mismatch shipped silently until the smoke test ran it."""
+    da.add_series(100)
+    row1 = da.find_first_blank_row(100, "transmitter")
+    da.save_row(100, "transmitter", row1, {"tag": "A-1", "system_number": "100"})
+    row2 = da.find_first_blank_row(100, "transmitter")
+    da.save_row(100, "transmitter", row2, {"tag": "A-2", "system_number": "100"})
+
+    count, by_system = da.series_type_summary(100, "transmitter", "system_number")
+    assert count == 2
+    assert by_system == {"100": 2}
+
+    prog = da.series_progress_summary(100)
+    assert set(prog["transmitter"].keys()) == {"avg_percent", "at_0", "partial", "at_100"}
+    assert prog["transmitter"]["at_0"] + prog["transmitter"]["partial"] + prog["transmitter"]["at_100"] == 2
+
+
+def test_list_backups_and_restore_backup_shapes(da, tmp_path, monkeypatch):
+    """Regression test for a second real bug the same smoke test caught:
+    list_backups() used to return raw Path objects, but BackupsDialog
+    (shared between Instrumentation and Electrical via its own
+    backend= param - see access_gui_app.py's own BackupsDialog) indexes
+    every entry by ['path']/['name']/['mtime']/['size'], and
+    restore_backup() didn't exist on either domain module at all even
+    though self.backend.restore_backup(...) is a real call site."""
+    import access_db as db
+
+    monkeypatch.setattr(da, "BACKUPS_DIR", tmp_path / "backups")
+    fake_db = tmp_path / "SenseiIndex.accdb"
+    fake_db.write_text("not a real accdb - just needs to exist for shutil.copy")
+    monkeypatch.setattr(db, "DB_PATH", fake_db)
+
+    dest = da.backup_now()
+    assert dest.exists()
+
+    backups = da.list_backups()
+    assert len(backups) == 1
+    assert set(backups[0].keys()) == {"path", "name", "mtime", "size"}
+    assert backups[0]["path"] == dest
+
+    fake_db.write_text("changed live content")
+    safety = da.restore_backup(dest)
+    assert safety is not None and safety.exists()
+    assert fake_db.read_text() == "not a real accdb - just needs to exist for shutil.copy"

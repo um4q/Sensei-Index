@@ -63,38 +63,45 @@ WHAT'S HERE
     access_db.py                      - the generic database engine (CRUD, parent tables, settings, activity log, status)
     access_data_access.py             - Instrumentation domain module (transmitter, valve)
     access_electrical_data_access.py  - Electrical domain module (the other 7 kinds)
-    access_gui_app.py                 - the app itself
+    access_gui_app.py                 - the app itself - see below, this is gui_app.py, not a rewrite
     build_access_database.py          - one-time SenseiIndex.accdb generator (Windows only)
     tests/                            - SQLite-backed logic tests (see below - what these do and don't prove)
     SHAREPOINT_CLOUD_SETUP.txt        - how to host the database in the cloud for multi-user access
 
-WHAT'S NOT HERE YET
-------------------------
-This covers the core day-to-day workflow - pick a zone/series, browse
-equipment by kind, add/edit/delete rows, check installed/submitted/
-accepted status, generate a filled PDF - completely and for real, not
-as a stub. It does NOT (yet) cover everything the Excel edition's own
-gui_app.py does; these were deliberately left for a later pass rather
-than attempted half-working:
+WHY access_gui_app.py IS gui_app.py, NOT A REWRITE
+--------------------------------------------------------
+An earlier version of this edition shipped with its own simplified,
+generic schema-driven form/table UI instead of the Excel edition's real
+one - functional, but a visible downgrade from the polished app people
+already knew. That approach has been dropped entirely. access_gui_app.py
+is now gui_app.py itself, copied close to byte-for-byte: same sidebar,
+same Dashboard, same Coverage/reconciliation page, same Populating
+Wizard, same Master List import, same global search (Ctrl+K), same
+per-row edit history, same hand-laid-out per-form Edit dialogs, same
+Export dialogs, same Backups dialog, same keyboard shortcuts, same
+Undo/Redo - all of it. What actually changed is two import lines
+(pointed at this edition's own Access-backed access_data_access.py/
+access_electrical_data_access.py, which expose the EXACT SAME call
+surface as data_access.py/electrical_data_access.py - no explicit
+connection argument, identical function names and signatures - so
+every UI class in gui_app.py runs against them completely unmodified),
+the app title, and a handful of QLabel/QMessageBox strings that named
+Excel-only concepts with no Access equivalent (sheet tabs, "Unhide",
+archive-by-hiding-a-sheet - this edition does a REAL relational delete
+instead, so those warnings now say so plainly). Grep access_gui_app.py
+for "Access Edition note" to find every one of those spots.
 
-    - The Master List import/reconciliation engine (reading a client's
-      own Instrumentation Master List spreadsheet and matching it
-      against existing rows)
-    - Import Datasheet PDF (pre-filling a new row from an engineering
-      data sheet PDF)
-    - Progress report export, cleaned-workbook-style export
-    - The global search index (Ctrl+K)
-    - Per-row edit history / a dedicated activity log VIEWER (the log
-      itself IS being written to on every save - see access_db.py's
-      own log_activity() - there's just no window to browse it yet)
-    - The Excel edition's own hand-laid-out, per-form edit dialogs -
-      this edition's own RowEditDialog builds one straightforward form
-      generically from each schema's own field list instead (see
-      access_gui_app.py's own docstring for why)
-
-None of this is a "not possible" list - it's a "not built yet" list.
-The data layer (access_db.py/access_data_access.py/access_electrical_
-data_access.py) already has everything these would need to build on.
+Two genuine behavioral differences from the Excel edition, both
+deliberate, both documented in the code where they matter:
+    - remove_series()/remove_zone() permanently delete the series/zone
+      and its rows - no archive-by-hiding-a-sheet recovery path exists
+      for a real relational database the way it does for an Excel
+      sheet. The confirm dialogs say this plainly.
+    - count_all_by_type() is a genuine global total across every
+      series/zone (data_access.py's own version takes no series_number
+      argument either, for Instrumentation) - there's no per-sheet
+      "hasn't been created yet" state a shared database table needs to
+      track the way a per-series Excel worksheet does.
 
 HOW THE TESTING STORY WORKS HERE (READ THIS BEFORE TRUSTING A CHANGE)
 ---------------------------------------------------------------------------
@@ -118,3 +125,23 @@ access_gui_app.py against that real file to confirm it stays running.
 If you change access_schema.py's own DDL generation or anything in
 access_db.py's actual SQL strings, the SQLite-backed tests passing is
 NOT enough confidence on its own - that CI workflow needs to pass too.
+
+A second, separate gap the SQLite-backed tests/ suite alone doesn't
+cover: it exercises the DATA layer, not access_gui_app.py's own
+widget-building code - nothing there imports PySide6 at all. Since
+access_gui_app.py is gui_app.py verbatim (see above), its Qt classes
+expect the exact same dict/tuple SHAPES data_access.py/electrical_
+data_access.py return - not just the same function names. Two real bugs
+shipped exactly this way during the redo (series_type_summary()/series_
+progress_summary() returning a bare dict instead of the (count, {...})
+tuple and {'avg_percent','at_0','partial','at_100'} dict the sidebar/
+Dashboard actually unpack; list_backups() returning raw Path objects
+instead of the {'path','name','mtime','size'} dicts BackupsDialog
+indexes) - both were caught by actually constructing MainWindow and
+every dialog class under QT_QPA_PLATFORM=offscreen (no real display
+needed) against a SQLite-backed connection, not by the CRUD-level
+tests/ suite, which had no reason to know those shapes mattered. Do the
+same after touching any da./eda. function access_gui_app.py's UI code
+reads structured data from - construct the relevant page/dialog class
+directly (skip .exec() on a QDialog, it blocks waiting for real input)
+and see it actually build.

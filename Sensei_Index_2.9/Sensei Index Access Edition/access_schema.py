@@ -159,6 +159,12 @@ CORE_TABLES = {
         ],
     },
     "ActivityLog": {
+        # Mirrors data_access.py's own log_activity() entry shape
+        # (action/series/equip_key/row/key_value/fields/source/note/ts) -
+        # fields_json holds the {field_id: {old, new}} diff dict as JSON
+        # text (Access has no native JSON/dict column type; MEMO holds
+        # it as plain text, same as activity_log.jsonl's own one-JSON-
+        # object-per-line format already does on the Excel edition).
         "columns": [
             ("id", "COUNTER PRIMARY KEY"),
             ("domain", "TEXT(50)"),
@@ -167,16 +173,17 @@ CORE_TABLES = {
             ("row_id", "LONG"),
             ("key_value", "TEXT(255)"),
             ("action", "TEXT(100)"),
-            ("details", "MEMO"),
+            ("fields_json", "MEMO"),
+            ("note", "MEMO"),
             ("source", "TEXT(50)"),
             ("timestamp", "DATETIME"),
         ],
     },
     "RowStatus": {
         # Mirrors equipment_status.json/electrical_status.json's own
-        # {installed, submitted, accepted} flags, keyed the same way
-        # those files already are (domain + equip_key + the row's own
-        # key value - NOT row_id, so status survives a row being
+        # {installed, submitted, accepted, export} flags, keyed the same
+        # way those files already are (domain + equip_key + the row's
+        # own key value - NOT row_id, so status survives a row being
         # deleted and recreated with the same tag, same as today).
         "columns": [
             ("id", "COUNTER PRIMARY KEY"),
@@ -186,6 +193,7 @@ CORE_TABLES = {
             ("installed", "YESNO"),
             ("submitted", "YESNO"),
             ("accepted", "YESNO"),
+            ("export", "YESNO"),
             ("updated_at", "DATETIME"),
         ],
     },

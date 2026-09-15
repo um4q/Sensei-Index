@@ -75,6 +75,13 @@ jobs:
         run: python -m pytest tests -v
 
       - name: Run a real-Access smoke test against the built .accdb
+        # No explicit conn argument anywhere below - access_data_access.py/
+        # access_electrical_data_access.py take none (they manage their own
+        # cached connection internally, exactly like data_access.py/
+        # electrical_data_access.py do), which is what lets access_gui_app.py
+        # be gui_app.py itself, unmodified. db.get_cached_connection() is
+        # called once, explicitly, only to prove the real pyodbc connection
+        # itself opens cleanly before anything else runs.
         working-directory: ${{ env.APP_DIR }}
         shell: pwsh
         run: |
@@ -83,25 +90,44 @@ jobs:
           import access_electrical_data_access as eda
           import access_data_access as da
 
-          conn = db.get_connection()
-          zone_id = eda.add_zone(conn, 'CI Test Zone')
-          row_id = eda.find_first_blank_row(conn, 'CI Test Zone', 'transformer_test')
-          eda.save_row(conn, 'CI Test Zone', 'transformer_test', row_id, {'tag': 'CI-TEST-001', 'make': 'CI Make'})
-          full = eda.read_full_row(conn, 'CI Test Zone', 'transformer_test', row_id)
+          db.get_cached_connection()
+
+          eda.add_zone('CI Test Zone')
+          row_id = eda.find_first_blank_row('CI Test Zone', 'transformer_test')
+          eda.save_row('CI Test Zone', 'transformer_test', row_id, {'tag': 'CI-TEST-001', 'make': 'CI Make'})
+          full = eda.read_full_row('CI Test Zone', 'transformer_test', row_id)
           assert full['tag'] == 'CI-TEST-001', full
           assert full['make'] == 'CI Make', full
-          dupe = eda.find_duplicate_row(conn, 'CI Test Zone', 'transformer_test', 'CI-TEST-001', exclude_row=row_id)
+          dupe = eda.find_duplicate_row('CI Test Zone', 'transformer_test', 'CI-TEST-001', exclude_row=row_id)
           assert dupe is None
-          out_path = eda.generate_preview_pdf(conn, 'CI Test Zone', 'transformer_test', row_id)
+          out_path = eda.generate_preview_pdf('CI Test Zone', 'transformer_test', row_id)
           assert out_path.exists(), out_path
+          ewritten = eda.run_export('CI Test Zone', 'transformer_test', 'all')
+          assert ewritten, 'eda.run_export wrote nothing'
+          log = eda.read_electrical_activity_log(limit=5)
+          assert log, 'read_electrical_activity_log (real Access TOP-N syntax) returned nothing'
 
-          series_id = da.add_series(conn, 999, 'CI Series')
-          t_row = da.find_first_blank_row(conn, 999, 'transmitter')
-          da.save_row(conn, 999, 'transmitter', t_row, {'tag': 'CI-TIT-001'})
-          assert da.read_full_row(conn, 999, 'transmitter', t_row)['tag'] == 'CI-TIT-001'
+          da.add_series(999, 'CI Series')
+          t_row = da.find_first_blank_row(999, 'transmitter')
+          da.save_row(999, 'transmitter', t_row, {'tag': 'CI-TIT-001', 'system_number': 'CI-SYS'})
+          assert da.read_full_row(999, 'transmitter', t_row)['tag'] == 'CI-TIT-001'
+          count, by_system = da.series_type_summary(999, 'transmitter', 'system_number')
+          assert count == 1 and by_system == {'CI-SYS': 1}, (count, by_system)
+          prog = da.series_progress_summary(999)
+          assert set(prog['transmitter'].keys()) == {'avg_percent', 'at_0', 'partial', 'at_100'}, prog
+          assert da.get_sheet_name(999, 'transmitter')
+          report_path = da.export_progress_report()
+          assert report_path.exists(), report_path
+          cleaned_path = da.export_cleaned_workbook()
+          assert cleaned_path.exists(), cleaned_path
+          backup_path = da.backup_now()
+          assert backup_path.exists(), backup_path
+          backups = da.list_backups()
+          assert backups and set(backups[0].keys()) == {'path', 'name', 'mtime', 'size'}, backups
+          safety = da.restore_backup(backup_path)
+          assert safety is None or safety.exists()
 
           print('REAL ACCESS SMOKE TEST PASSED')
-          conn.close()
           "@
 
       - name: Smoke-test the GUI actually launches against the real database

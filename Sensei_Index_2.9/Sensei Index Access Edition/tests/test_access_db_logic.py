@@ -42,10 +42,11 @@ def _sqlite_conn():
                   "setting_key TEXT, setting_value TEXT)")
     conn.execute("CREATE TABLE ActivityLog (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                   "domain TEXT, equip_key TEXT, parent_label TEXT, row_id INTEGER, "
-                  "key_value TEXT, action TEXT, details TEXT, source TEXT, timestamp TEXT)")
+                  "key_value TEXT, action TEXT, fields_json TEXT, note TEXT, "
+                  "source TEXT, timestamp TEXT)")
     conn.execute("CREATE TABLE RowStatus (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                   "domain TEXT, equip_key TEXT, key_value TEXT, installed INTEGER, "
-                  "submitted INTEGER, accepted INTEGER, updated_at TEXT)")
+                  "submitted INTEGER, accepted INTEGER, export INTEGER, updated_at TEXT)")
     conn.execute("CREATE TABLE TestEquip (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                   "zone_id INTEGER, tag TEXT, notes TEXT, created_at TEXT, updated_at TEXT)")
     conn.commit()
@@ -135,19 +136,23 @@ def test_settings_round_trip_and_update():
 
 def test_activity_log_records_and_filters():
     conn = _sqlite_conn()
-    db.log_activity(conn, "electrical", "transformer_test", "K1B Well Pad", 1, "TAG-1", "save_row")
-    db.log_activity(conn, "instrumentation", "valve", "100", 2, "TAG-2", "save_row")
+    db.log_activity(conn, "save_row", domain="electrical", equip_key="transformer_test",
+                     parent_label="K1B Well Pad", row_id=1, key_value="TAG-1",
+                     fields={"tag": {"old": "", "new": "TAG-1"}})
+    db.log_activity(conn, "save_row", domain="instrumentation", equip_key="valve",
+                     parent_label="100", row_id=2, key_value="TAG-2")
     all_entries = db.read_activity_log(conn)
     assert len(all_entries) == 2
     electrical_only = db.read_activity_log(conn, domain="electrical")
     assert len(electrical_only) == 1
     assert electrical_only[0]["equip_key"] == "transformer_test"
+    assert electrical_only[0]["fields"] == {"tag": {"old": "", "new": "TAG-1"}}
 
 
 def test_status_defaults_and_round_trips():
     conn = _sqlite_conn()
     default = db.get_status(conn, "electrical", "transformer_test", "TAG-1")
-    assert default == {"installed": False, "submitted": False, "accepted": False}
+    assert default == {"installed": False, "submitted": False, "accepted": False, "export": False}
 
     db.set_status(conn, "electrical", "transformer_test", "TAG-1", installed=True)
     status = db.get_status(conn, "electrical", "transformer_test", "TAG-1")
@@ -158,3 +163,19 @@ def test_status_defaults_and_round_trips():
     status = db.get_status(conn, "electrical", "transformer_test", "TAG-1")
     assert status["installed"] is True  # still true - update shouldn't reset it
     assert status["submitted"] is True
+
+
+def test_bulk_set_status_covers_every_key():
+    conn = _sqlite_conn()
+    db.bulk_set_status(conn, "electrical", [("transformer_test", "TAG-1"), ("transformer_test", "TAG-2")],
+                        accepted=True)
+    assert db.get_status(conn, "electrical", "transformer_test", "TAG-1")["accepted"] is True
+    assert db.get_status(conn, "electrical", "transformer_test", "TAG-2")["accepted"] is True
+
+
+def test_rename_status_key_preserves_flags():
+    conn = _sqlite_conn()
+    db.set_status(conn, "electrical", "transformer_test", "OLD-TAG", installed=True)
+    db.rename_status_key(conn, "electrical", "transformer_test", "OLD-TAG", "NEW-TAG")
+    assert db.get_status(conn, "electrical", "transformer_test", "NEW-TAG")["installed"] is True
+    assert db.get_status(conn, "electrical", "transformer_test", "OLD-TAG") == dict(db.DEFAULT_STATUS)
