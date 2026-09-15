@@ -102,6 +102,30 @@ jobs:
           print('MIGRATION AGAINST REAL ACCESS VERIFIED -', sum(da.count_all_by_type().values()), 'total row(s)')
           "@
 
+      # Deliberately pushed HERE - right after migration, before the smoke
+      # test below adds its own "CI Series"/"CI Test Zone" rows and cycles
+      # a backup/restore - so whoever fetches this branch gets the real,
+      # already-migrated database with no CI test data mixed into it. The
+      # smoke test still runs afterward for its own separate verification
+      # purposes; it just no longer affects what was already delivered.
+      - name: Push the built .accdb to a delivery branch (git-fetchable, unlike blob-storage artifacts)
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -e
+          rm -rf /tmp/accdb-delivery
+          mkdir -p /tmp/accdb-delivery
+          cp "SenseiIndex.accdb" /tmp/accdb-delivery/
+          cd /tmp/accdb-delivery
+          git init -q
+          git config user.name "sensei-access-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -q -b accdb-delivery
+          git add "SenseiIndex.accdb"
+          git commit -q -m "SenseiIndex.accdb built from ${{ github.sha }} (migrated, pre-smoke-test)"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push -f origin accdb-delivery
+
       - name: Run a real-Access smoke test against the built .accdb
         # No explicit conn argument anywhere below - access_data_access.py/
         # access_electrical_data_access.py take none (they manage their own
@@ -190,20 +214,3 @@ jobs:
           Write-Host "GUI is still running after 10s (PID $($p.Id)) - clean startup."
           Stop-Process -Id $p.Id -Force
 
-      - name: Push the built .accdb to a delivery branch (git-fetchable, unlike blob-storage artifacts)
-        working-directory: ${{ env.APP_DIR }}
-        shell: bash
-        run: |
-          set -e
-          rm -rf /tmp/accdb-delivery
-          mkdir -p /tmp/accdb-delivery
-          cp "SenseiIndex.accdb" /tmp/accdb-delivery/
-          cd /tmp/accdb-delivery
-          git init -q
-          git config user.name "sensei-access-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git checkout -q -b accdb-delivery
-          git add "SenseiIndex.accdb"
-          git commit -q -m "SenseiIndex.accdb built from ${{ github.sha }}"
-          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git push -f origin accdb-delivery
