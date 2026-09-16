@@ -31,6 +31,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write  # needed to publish/update the Release below
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -126,3 +128,35 @@ jobs:
           name: SenseiIndex-Setup
           path: Sensei_Index_4.0/packaging/installer_output/SenseiIndex-Setup.exe
           if-no-files-found: error
+
+      - name: Publish to a public Release (downloadable without a GitHub login)
+        # Workflow-artifact downloads (the step above) always require being
+        # signed into GitHub, even on a public repo - that's a platform-wide
+        # anti-scraping rule, not a permissions issue with this repo. A
+        # Release asset on a public repo has no such requirement, so this is
+        # the link to actually hand a non-technical end user. Reuses one
+        # fixed tag and overwrites its asset every run, so the download URL
+        # never changes between builds.
+        working-directory: Sensei_Index_4.0/packaging
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "latest-installer"
+          $notesFile = New-TemporaryFile
+          "Latest Sensei Index installer, auto-built from commit $($env:GITHUB_SHA.Substring(0,7))." | Set-Content -Path $notesFile
+          "This release's asset is replaced by every new build - this same link keeps working." | Add-Content -Path $notesFile
+          "" | Add-Content -Path $notesFile
+          "Download SenseiIndex-Setup.exe below and run it." | Add-Content -Path $notesFile
+
+          gh release view $tag 2>$null 1>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag "installer_output\SenseiIndex-Setup.exe" --clobber
+            gh release edit $tag --notes-file $notesFile
+          } else {
+            gh release create $tag "installer_output\SenseiIndex-Setup.exe" --title "Sensei Index - Latest Installer" --notes-file $notesFile
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw "gh release command exited with code $LASTEXITCODE"
+          }
+          Write-Host "Published: https://github.com/${{ github.repository }}/releases/download/$tag/SenseiIndex-Setup.exe"
