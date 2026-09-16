@@ -195,7 +195,16 @@ EQUIPMENT_TYPES = {
         "date_labels": ["QC Rep Date"],
         "serial_field": "serial_number",
         "qa_date_field": "yanda_qc_date",
-        "desc_field": "service",
+        "desc_field": "system",
+        # Unlike transmitter/valve - which only ever have ONE of "service"/
+        # "system" as a real schema field, so a single desc_field covering
+        # both the Index table's Service and System columns is a reasonable
+        # simplification - gauge_schema.py has both as real, independent
+        # fields (see gauge_schema.py). Leaving this unset for transmitter/
+        # valve on purpose: they have nothing else to show in the other
+        # column, so read_engineering_index_rows() falls back to "desc"
+        # for it exactly as before.
+        "service_field": "service",
     },
 }
 
@@ -1508,12 +1517,19 @@ def read_engineering_index_rows(series_number, equip_key):
     serial_field = etype["serial_field"]
     qa_date_field = etype["qa_date_field"]
     desc_field = etype["desc_field"]
+    # Only set for a type that has BOTH a real "service" and a real
+    # "system" field (currently just gauge) - see EQUIPMENT_TYPES's
+    # "service_field" comment. None for transmitter/valve, which only
+    # have one or the other, so entry["desc"] alone already covers it.
+    service_field = etype.get("service_field")
     kind_field = etype["summary_fields"][-1]
     key_field = etype["key_field"]
 
     extra_ids = index_fields + [serial_field, qa_date_field, desc_field, kind_field,
                                  "pid_number", "line_number", "make", "model",
                                  "calibration_range", "instrument_range"]
+    if service_field and service_field not in extra_ids:
+        extra_ids = extra_ids + [service_field]
     cols = {fid: field_to_col.get(fid) for fid in extra_ids}
     key_col = field_to_col.get(key_field)
 
@@ -1533,6 +1549,8 @@ def read_engineering_index_rows(series_number, equip_key):
         entry["serial"] = entry.pop(serial_field)
         entry["qa_date"] = entry.pop(qa_date_field)
         entry["desc"] = entry.pop(desc_field)
+        if service_field and service_field != desc_field:
+            entry["service"] = entry.pop(service_field)
         entry["kind"] = entry.pop(kind_field)
         entry["open_ecns"] = ecns_for_tag(key_val)
         rows.append(entry)

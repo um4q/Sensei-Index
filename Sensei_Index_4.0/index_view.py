@@ -230,7 +230,8 @@ class IndexView(QWidget):
             btn.setCheckable(True)
             btn.setChecked(name == self.density)
             btn.setStyleSheet(
-                "QPushButton{border:1px solid rgba(29,31,32,.3);padding:5px 10px;font-size:12px;}"
+                "QPushButton{border:1px solid rgba(29,31,32,.3);padding:5px 10px;"
+                "font-size:12px;background:#fff;color:#1d1f20;}"
                 "QPushButton:checked{background:#1d2d3d;color:#fff;}")
             btn.clicked.connect(lambda _c, n=name: self._set_density(n))
             self._density_buttons[name] = btn
@@ -264,7 +265,8 @@ class IndexView(QWidget):
             btn.setCheckable(True)
             btn.setChecked(is_current)
             btn.setStyleSheet(
-                "QPushButton{border:1px solid rgba(29,31,32,.3);padding:6px 16px;font-size:13px;}"
+                "QPushButton{border:1px solid rgba(29,31,32,.3);padding:6px 16px;"
+                "font-size:13px;background:#fff;color:#1d1f20;}"
                 "QPushButton:checked{background:#1d2d3d;color:#fff;font-weight:600;}")
             if is_current:
                 btn.setAccessibleName(f"{label}, showing")
@@ -473,7 +475,12 @@ class IndexView(QWidget):
             row_bg = QColor("#f5f5f8") if i % 2 else QColor("#ffffff")
             values = {
                 "Tag": entry["key_value"], "Loop ID": entry.get("loop_id") or "—",
-                "Service": entry.get("desc") or "—", "System": entry.get("desc") or "—",
+                # entry["service"] only exists for a type that has both a
+                # real "service" and a real "system" field (see data_access.
+                # EQUIPMENT_TYPES's "service_field") - falls back to "desc"
+                # for transmitter/valve, which only ever have one of the two.
+                "Service": entry.get("service", entry.get("desc")) or "—",
+                "System": entry.get("desc") or "—",
                 "P&ID (Rev)": (entry.get("pid_number") or "—") + (
                     f" ({entry['pid_rev']})" if entry.get("pid_rev") else ""),
                 "Line #": entry.get("line_number") or "—",

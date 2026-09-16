@@ -215,12 +215,86 @@ def fix_multiline_fields(writer):
             field[NameObject("/Ff")] = NumberObject(current | MULTILINE_FLAG)
 
 
+# Every field on the original PDF hardcodes its own /DA to a fixed 12pt
+# ("/Helv 12 Tf") instead of pypdf's documented auto-size sentinel ("0 Tf") -
+# confirmed directly against the template's AcroForm, not guessed. A fixed
+# size means pypdf never shrinks long values to fit a narrow field; the
+# text just gets silently cut off at the field's own clip rectangle
+# instead (e.g. a real "SUCTION PRESSURE" service description clipping to
+# "SUCTION PRI"). Rewriting the size token to 0 turns on pypdf's built-in
+# shrink-to-fit (and, for the multiline Remarks box, proper word-wrap)
+# with no other change to the appearance.
+_DA_FONT_SIZE_RE = re.compile(r"(/\S+)\s+[\d.]+\s+Tf")
+
+
+def fix_field_autosize(writer):
+    acro = writer._root_object["/AcroForm"]
+    for field_ref in acro["/Fields"]:
+        field = field_ref.get_object()
+        da = field.get("/DA")
+        if da is None:
+            continue
+        new_da = _DA_FONT_SIZE_RE.sub(r"\1 0 Tf", str(da))
+        if new_da != str(da):
+            field[NameObject("/DA")] = TextStringObject(new_da)
+
+
+def isolate_page_content_state(writer):
+    """The template's own page content stream opens with an un-enclosed
+    `cm` (no matching `q`/`Q` around it) that rescales/flips the coordinate
+    system for the rest of the page and is simply never restored - fine
+    for the template's own static content, which is entirely drawn inside
+    that transform, but pypdf's flatten path (writer.update_page_form_field_
+    values(..., flatten=True)) appends each filled field's draw commands by
+    concatenating raw bytes onto the END of that same stream
+    (PdfWriter._merge_content_stream_to_page), so they silently inherit
+    that leftover transform too - shrunk, mirrored, and offset relative to
+    the field's real /Rect. That's the "crooked" export: every field value
+    piled up, rotated, near the Remarks box. Wrapping the page's existing
+    content in its own balanced q/Q here means that transform is always
+    popped before flatten's appended content runs, so filled fields render
+    exactly where their /Rect says regardless of what the static content
+    left active. A one-line, template-level PDF defect, not something this
+    script does wrong - see also fix_multiline_fields()/fix_field_autosize()
+    above for the same pattern (working around confirmed defects in the
+    original PDF, not guessed).
+    """
+    for page in writer.pages:
+        if "/Contents" not in page:
+            continue
+        contents = page.raw_get("/Contents").get_object()
+        # This template's /Contents is itself an array of several stream
+        # objects (pypdf/most writers concatenate array entries back-to-
+        # back, same as one big stream) - page.get_contents() hides that by
+        # handing back a detached, throwaway ContentStream copy, so mutating
+        # it here would silently do nothing. Getting the real object via
+        # raw_get() and editing the first/last pieces in place, instead of
+        # replacing /Contents with one freshly combined stream, also matters
+        # for PdfWriter._merge_content_stream_to_page: for an ArrayObject it
+        # just appends each filled field's own small stream as one more
+        # array entry (cheap), but for a single StreamObject it decodes the
+        # *entire* existing content and rewrites it as a new object on every
+        # single field - collapsing this template's array into one stream
+        # would have made every flattened export re-embed a full copy of
+        # this form's ~700KB of static content once per field.
+        elements = list(contents) if isinstance(contents, ArrayObject) else None
+        first = elements[0].get_object() if elements else contents
+        last = elements[-1].get_object() if elements else contents
+        first.set_data(b"q\n" + first.get_data())
+        if last is first:
+            first.set_data(first.get_data() + b"\nQ\n")
+        else:
+            last.set_data(last.get_data() + b"\nQ\n")
+
+
 def fill_pdf(template_path, values, out_path, flatten=False, add_signature=True):
     reader = PdfReader(str(template_path))
     writer = PdfWriter()
     writer.append(reader)
     ensure_default_resources(writer)
     fix_multiline_fields(writer)
+    fix_field_autosize(writer)
+    isolate_page_content_state(writer)
 
     for page in writer.pages:
         writer.update_page_form_field_values(page, values, flatten=flatten)

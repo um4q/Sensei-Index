@@ -35,7 +35,7 @@ from index_view import IndexView
 from documents_dialog import DocumentsDialog
 
 
-APP_TITLE = "Sensei Index 3.0"
+APP_TITLE = "Sensei Index 4.0"
 
 
 # =============================================================================
@@ -3004,7 +3004,7 @@ class SettingsDialog(QDialog):
             btn.setChecked(value == current)
             btn.setStyleSheet(
                 "QPushButton{border:none;border-right:1px solid rgba(29,31,32,.3);"
-                "padding:7px 14px;font-size:13px;}"
+                "padding:7px 14px;font-size:13px;background:#fff;color:#1d1f20;}"
                 "QPushButton:last-child{border-right:none;}"
                 "QPushButton:checked{background:#416180;color:#fff;font-weight:600;}")
             btn.clicked.connect(lambda _c, v=value: on_pick(v))
