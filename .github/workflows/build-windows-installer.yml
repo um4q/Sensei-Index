@@ -148,6 +148,7 @@ jobs:
           "This release's asset is replaced by every new build - this same link keeps working." | Add-Content -Path $notesFile
           "" | Add-Content -Path $notesFile
           "Download SenseiIndex-Setup.exe below and run it." | Add-Content -Path $notesFile
+          "Already installed? Just run it again over the existing install to update - no need to uninstall first, and it no longer walks you through a full setup wizard each time." | Add-Content -Path $notesFile
 
           gh release view $tag 2>$null 1>$null
           if ($LASTEXITCODE -eq 0) {

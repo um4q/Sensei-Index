@@ -38,6 +38,15 @@ VersionInfoVersion={#APP_VERSION_INFO}
 DefaultDirName={userpf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
+; Nothing below is ever worth asking about - DefaultDirName is fixed (never
+; user-chosen), there's no license to accept, and "Ready to Install" is just
+; a summary of choices the user didn't make. Skipping all three means every
+; run - first install or a new build over an old one - is Tasks (desktop
+; icon) -> install -> done, not a multi-page wizard: this should always feel
+; like updating the exe, not running a fresh setup.
+DisableWelcomePage=yes
+DisableDirPage=yes
+DisableReadyPage=yes
 UninstallDisplayIcon={app}\{#AppExeName}
 SetupIconFile=..\assets\oathplatehelm.ico
 OutputDir=installer_output
