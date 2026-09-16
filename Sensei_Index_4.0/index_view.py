@@ -216,6 +216,7 @@ class IndexView(QWidget):
         title = QLabel(da.series_display_label(self.series_number))
         title.setObjectName("PageTitle")
         row.addWidget(title)
+        row.addLayout(self._build_equip_type_tabs())
         self.subtitle = QLabel("")
         self.subtitle.setObjectName("PageSubtitle")
         row.addWidget(self.subtitle)
@@ -245,6 +246,34 @@ class IndexView(QWidget):
         export_btn.clicked.connect(self.open_export)
         row.addWidget(export_btn)
         return row
+
+    def _build_equip_type_tabs(self):
+        """Plate 1b's equipment-type tabs. Each series has two separate
+        logs - Transmitters and Valves - and this table only ever shows
+        one at a time (self.equip_key), so without this there is no way
+        to reach the other one: the series rail's own counts already sum
+        both types together (series_full_summary), but its row always
+        opens straight into Transmitters."""
+        tabs = QHBoxLayout()
+        tabs.setContentsMargins(18, 0, 0, 0)
+        tabs.setSpacing(0)
+        for key, etype in da.EQUIPMENT_TYPES.items():
+            label = etype["label"] + "s"
+            is_current = key == self.equip_key
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(is_current)
+            btn.setStyleSheet(
+                "QPushButton{border:1px solid rgba(29,31,32,.3);padding:6px 16px;font-size:13px;}"
+                "QPushButton:checked{background:#1d2d3d;color:#fff;font-weight:600;}")
+            if is_current:
+                btn.setAccessibleName(f"{label}, showing")
+            else:
+                btn.setAccessibleName(f"Switch to {label}")
+                btn.clicked.connect(
+                    lambda _c=False, sn=self.series_number, k=key: self.main_window.show_index(sn, k))
+            tabs.addWidget(btn)
+        return tabs
 
     def _set_density(self, name):
         self.density = name
