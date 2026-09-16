@@ -624,7 +624,7 @@ class IndexView(QWidget):
             self, "Set a date", "Date (YYYY-MM-DD), or leave blank to clear:")
         if not ok:
             return
-        qa_field = "yanda_qa_date" if self.equip_key == "transmitter" else "qc_date"
+        qa_field = self.etype["qa_date_field"]
         updates = [(e["row"], qa_field, date_str.strip()) for e in rows]
         da.save_fields_bulk(self.series_number, self.equip_key, updates)
         self.main_window.statusBar().showMessage(

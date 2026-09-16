@@ -33,8 +33,10 @@ from pypdf import PdfReader, PdfWriter
 
 import transmitter_schema
 import valve_schema
+import gauge_schema
 import export_to_pdf
 import export_valve_to_pdf
+import export_gauge_to_pdf
 
 from paths import HERE
 
@@ -154,6 +156,16 @@ EQUIPMENT_TYPES = {
         "group_labels": ["System"],
         "date_fields": ["te1_caldate", "te2_caldate", "te3_caldate", "yanda_qa_date", "client_date"],
         "date_labels": ["TE1 Cal. Date", "TE2 Cal. Date", "TE3 Cal. Date", "QA Rep Date", "Client Rep Date"],
+        # Which field id plays each generic role for this type - lets code
+        # that has to work across every equipment type (the Index table,
+        # Run screen, priorities strip, "Set a date" bulk action, ...) read
+        # etype["...field"] instead of special-casing equip_key by name.
+        # Necessary as soon as a third type exists - a binary
+        # "transmitter or else" ternary silently guesses wrong for anything
+        # else.
+        "serial_field": "serial_number",
+        "qa_date_field": "yanda_qa_date",
+        "desc_field": "service",
     },
     "valve": {
         "label": "Valve",
@@ -166,6 +178,24 @@ EQUIPMENT_TYPES = {
         "group_labels": ["System"],
         "date_fields": ["equip_caldate", "qc_date"],
         "date_labels": ["TE Cal. Date", "QC Rep Date"],
+        "serial_field": "valve_serial",
+        "qa_date_field": "qc_date",
+        "desc_field": "system",
+    },
+    "gauge": {
+        "label": "Gauge",
+        "schema": gauge_schema,
+        "export_module": export_gauge_to_pdf,
+        "key_field": "tag",
+        "summary_fields": ["tag", "system", "gauge_type"],
+        "summary_labels": ["Tag", "System", "Type"],
+        "group_fields": ["system"],
+        "group_labels": ["System"],
+        "date_fields": ["yanda_qc_date"],
+        "date_labels": ["QC Rep Date"],
+        "serial_field": "serial_number",
+        "qa_date_field": "yanda_qc_date",
+        "desc_field": "service",
     },
 }
 
@@ -1275,6 +1305,7 @@ _STAGE_FIELDS = ["installed", "submitted", "accepted"]  # index 0 (Not started) 
 RUN_EXTRA_FIELDS = {
     "transmitter": ["calibration_range", "instrument_range", "serial_number"],
     "valve": ["valve_serial"],
+    "gauge": ["serial_number"],
 }
 
 
@@ -1319,9 +1350,7 @@ def run_row_flag(equip_key, extra, submitted):
         span = _numeric_bounds(extra.get("instrument_range", ""))
         if len(cal) == 2 and len(span) == 2 and (cal[0] < span[0] or cal[1] > span[1]):
             return "Range exceeds instrument span"
-        serial = extra.get("serial_number", "")
-    else:
-        serial = extra.get("valve_serial", "")
+    serial = extra.get(EQUIPMENT_TYPES[equip_key]["serial_field"], "")
     if not serial:
         return "Submitted, no serial" if submitted else "No serial number"
     return ""
@@ -1351,7 +1380,7 @@ def read_run_rows():
             key_col = field_to_col.get(etype["key_field"])
             if not key_col:
                 continue
-            desc_field = "service" if equip_key == "transmitter" else "system"
+            desc_field = etype["desc_field"]
             kind_field = etype["summary_fields"][-1]
             desc_col = field_to_col.get(desc_field)
             kind_col = field_to_col.get(kind_field)
@@ -1448,7 +1477,7 @@ def compute_priorities():
                 rows = read_index_rows_with_status(series_number, equip_key)
             except KeyError:
                 continue
-            qa_field = "yanda_qa_date" if equip_key == "transmitter" else "qc_date"
+            qa_field = etype["qa_date_field"]
             for r in rows:
                 if r["installed"] and not r["submitted"]:
                     needs_install_signoff += 1
@@ -1476,9 +1505,9 @@ def read_engineering_index_rows(series_number, equip_key):
     field_to_col = export_mod.load_column_map(ws)
 
     index_fields = [f["id"] for f in schema.by_section("index")]
-    serial_field = "serial_number" if equip_key == "transmitter" else "valve_serial"
-    qa_date_field = "yanda_qa_date" if equip_key == "transmitter" else "qc_date"
-    desc_field = "service" if equip_key == "transmitter" else "system"
+    serial_field = etype["serial_field"]
+    qa_date_field = etype["qa_date_field"]
+    desc_field = etype["desc_field"]
     kind_field = etype["summary_fields"][-1]
     key_field = etype["key_field"]
 

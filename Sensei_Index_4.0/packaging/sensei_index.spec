@@ -33,9 +33,10 @@ ICON_PATH = APP_DIR / "assets" / "oathplatehelm.ico"
 
 APP_MODULES = [
     "bootstrap", "data_access", "datasheet_reader", "documents_dialog",
-    "export_to_pdf", "export_valve_to_pdf", "gui_app", "index_view",
-    "paths", "splash_screen", "theme", "transmitter_field_map",
+    "export_to_pdf", "export_valve_to_pdf", "export_gauge_to_pdf", "gui_app",
+    "index_view", "paths", "splash_screen", "theme", "transmitter_field_map",
     "transmitter_schema", "valve_field_map", "valve_schema",
+    "gauge_field_map", "gauge_schema",
 ]
 
 # collect_all() rather than relying on PyInstaller's built-in hooks alone:

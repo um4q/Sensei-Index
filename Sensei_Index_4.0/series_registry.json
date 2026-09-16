@@ -4,55 +4,64 @@
       "number": 100,
       "transmitter_sheet": "Transmitter Log 100",
       "valve_sheet": "Valve Log 100",
-      "name": "Mod 100"
+      "name": "Mod 100",
+      "gauge_sheet": "Gauge Log 100"
     },
     {
       "number": 200,
       "transmitter_sheet": "Transmitter Log 200",
       "valve_sheet": "Valve Log 200",
-      "name": "Mod 200"
+      "name": "Mod 200",
+      "gauge_sheet": "Gauge Log 200"
     },
     {
       "number": 29103,
       "transmitter_sheet": "Transmitter Log 29103",
       "valve_sheet": "Valve Log 29103",
-      "name": "Mainline Separator"
+      "name": "Mainline Separator",
+      "gauge_sheet": "Gauge Log 29103"
     },
     {
       "number": 29152,
       "transmitter_sheet": "Transmitter Log 29152",
       "valve_sheet": "Valve Log 29152",
-      "name": "Drain Tank 2"
+      "name": "Drain Tank 2",
+      "gauge_sheet": "Gauge Log 29152"
     },
     {
       "number": 29203,
       "transmitter_sheet": "Transmitter Log 29203",
       "valve_sheet": "Valve Log 29203",
-      "name": "K1B Flowline"
+      "name": "K1B Flowline",
+      "gauge_sheet": "Gauge Log 29203"
     },
     {
       "number": 400,
       "transmitter_sheet": "Transmitter Log 400",
       "valve_sheet": "Valve Log 400",
-      "name": "CMM"
+      "name": "CMM",
+      "gauge_sheet": "Gauge Log 400"
     },
     {
       "number": 500,
       "transmitter_sheet": "Transmitter Log 500",
       "valve_sheet": "Valve Log 500",
-      "name": "SUS Cooler"
+      "name": "SUS Cooler",
+      "gauge_sheet": "Gauge Log 500"
     },
     {
       "number": 29104,
       "name": "K1B Pad \u2014 Additional",
       "transmitter_sheet": "Transmitter Log 29104",
-      "valve_sheet": "Valve Log 29104"
+      "valve_sheet": "Valve Log 29104",
+      "gauge_sheet": "Gauge Log 29104"
     },
     {
       "number": 9050,
       "name": "SUS",
       "transmitter_sheet": "Transmitter Log 9050",
-      "valve_sheet": "Valve Log 9050"
+      "valve_sheet": "Valve Log 9050",
+      "gauge_sheet": "Gauge Log 9050"
     }
   ]
 }

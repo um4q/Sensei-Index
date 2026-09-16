@@ -92,6 +92,7 @@ Source: "..\equipment_status.json"; DestDir: "{app}"; Flags: onlyifdoesntexist u
 Source: "..\wizard_draft.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "..\Transmitter_Inspection_Test_Record_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "..\Pneumatically_Actuated_Valve_Check_Record_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\Gauge_Inspection_Record_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"

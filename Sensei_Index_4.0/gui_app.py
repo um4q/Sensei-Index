@@ -3550,8 +3550,8 @@ class ExportDialog(QDialog):
             "Sign-off dates come from real columns now, the same for both equipment types - "
             "edit them in the Index grid, or select rows and use “Set a date…” in "
             "the selection bar, before exporting, and they'll appear on the PDF automatically."
-            + (" (YANDA QC Representative - Date, in this case.)" if equip_key == "valve" else
-               " (QA Rep Date / Client Rep Date, in this case.)"))
+            + (" (QA Rep Date / Client Rep Date, in this case.)" if equip_key == "transmitter" else
+               " (YANDA QC Representative - Date, in this case.)"))
         sign_off_hint.setObjectName("FieldLabel")
         sign_off_hint.setWordWrap(True)
         layout.addWidget(sign_off_hint)

@@ -11,8 +11,9 @@ WHAT'S IN THIS FOLDER
                                                           needs to run
     Equipment_Inspection_Tracker.xlsx                  - your data
     Instrumentation Master List.xlsx                  - reference list
-    Transmitter_Inspection_Test_Record_TEMPLATE.pdf   - PDF template
+    Transmitter_Inspection_Test_Record_TEMPLATE.pdf   - PDF templates
     Pneumatically_Actuated_Valve_Check_Record_TEMPLATE.pdf
+    Gauge_Inspection_Record_TEMPLATE.pdf
     app_settings.json, equipment_status.json,          - app state,
     series_registry.json, wizard_draft.json              plain text
 
