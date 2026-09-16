@@ -8,10 +8,12 @@ name: Build Windows Installer
 # workflow_dispatch on its own only works once a workflow file has been
 # merged to the repo's default branch though - GitHub won't let you
 # dispatch a workflow that only exists on a feature branch. The `push`
-# trigger below, scoped to this branch and to changes under this app's
-# own packaging/ folder (or to this workflow file itself), exists only to
-# get a build running from this branch before it's merged; it's narrow
-# enough that it won't fire on ordinary source-code commits.
+# trigger below, scoped to this branch and to changes anywhere under the
+# app itself, exists only to get a build running before that merge
+# decision is made, so the installer stays buildable on demand while
+# this branch is under active review/testing - drop the `push` block
+# (or narrow its paths back to packaging/ + this file) once main carries
+# this branch and workflow_dispatch is available directly.
 on:
   workflow_dispatch:
     inputs:
@@ -23,7 +25,7 @@ on:
     branches:
       - claude/gracious-brahmagupta-rbw3mo
     paths:
-      - "Sensei_Index_4.0/packaging/**"
+      - "Sensei_Index_4.0/**"
       - ".github/workflows/build-windows-installer.yml"
 
 jobs:
