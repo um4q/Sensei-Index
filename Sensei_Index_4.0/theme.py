@@ -35,7 +35,11 @@ outline-offset: 2px; }") - Qt has no outline-offset, so the closest
 faithful mapping is a 2px solid border in the focus color, which is what
 every rule below does for :focus.
 """
+import logging
+
 from paths import FONTS_DIR
+
+_log = logging.getLogger(__name__)
 
 BODY_FONT = "Barlow"
 # The bundled static TTFs don't carry the name-table entries Qt needs to
@@ -45,7 +49,16 @@ BODY_FONT = "Barlow"
 # covers the design's overwhelming majority use of condensed text (kickers,
 # section labels, table headers, page titles are all weight 600).
 HEADING_FONT = "Barlow Condensed SemiBold"
+# For use in QSS (a font-stack string is valid there). "ui-monospace" is a
+# CSS-only generic keyword with no real installed family behind it - it's
+# listed first here only because a real browser/QSS engine would skip it
+# and fall through to the next name, same as the others.
 MONO_FONT = "ui-monospace, Menlo, Consolas, monospace"
+# For use with QFont.setFamilies([...]) in actual code - a QFont needs a
+# real list of family name strings, not one QSS-style stack string (passing
+# MONO_FONT straight to QFont(...) would look for a single family literally
+# named "ui-monospace, Menlo, Consolas, monospace", which doesn't exist).
+MONO_FONT_FAMILIES = ["Menlo", "Consolas", "DejaVu Sans Mono", "monospace"]
 
 LIGHT = {
     "ground": "#f2f2f3", "ink": "#1d1f20", "secondary": "#5d5d60", "body": "#42474b",
@@ -78,14 +91,23 @@ def load_bundled_fonts():
         "BarlowCondensed-Medium.ttf", "BarlowCondensed-SemiBold.ttf",
     ):
         path = FONTS_DIR / filename
-        if path.exists():
-            QFontDatabase.addApplicationFont(str(path))
+        if not path.exists():
+            _log.warning("Bundled font file missing, skipping: %s", path)
+            continue
+        if QFontDatabase.addApplicationFont(str(path)) == -1:
+            _log.warning("Qt rejected bundled font file (returned -1): %s", path)
 
 
 def _build_qss(c, zebra_on=True, contrast_borders=False):
     border_alpha = "1" if contrast_borders else "0.16"
     border_strong = c["ink"] if contrast_borders else f'rgba(29,31,32,{border_alpha})'
-    zebra_rule = f'alternate-background-color: {c["zebra"]};' if zebra_on else ""
+    # LIGHT's zebra, not c["zebra"]: the index table's rows stay on the
+    # same always-light surface as its background/text above regardless of
+    # theme, so its alternate stripe has to come from the same
+    # theme-independent palette, not the active theme's own (in DARK,
+    # c["zebra"] is a dark blue meant to alternate against DARK's own dark
+    # ground, which would be unreadable against this table's white rows).
+    zebra_rule = f'alternate-background-color: {LIGHT["zebra"]};' if zebra_on else ""
     return f"""
 QMainWindow, QDialog, QWidget {{
     background: {c["ground"]};
@@ -218,6 +240,29 @@ QPushButton#EquipTab[active="true"] {{
     font-weight: 500;
 }}
 
+/* --------------------------------------------------------- density toggle */
+/* The row-height picker, in the same toolbar as EquipTab above. Unlike
+   EquipTab's transparent unchecked state, this one wants a visibly filled
+   "segmented control" look even when unchecked - c["chrome"] pairs with
+   c["ink"] correctly in every theme (both come from the same palette), the
+   same way white+ink (a theme-constant paired with a theme-variable) does
+   NOT: that literal-white-background mistake is exactly what made this
+   control's old inline styling unreadable in dark theme. :checked rather
+   than EquipTab's [active] property since these three buttons really do
+   toggle in place (EquipTab's "active" tab instead swaps in a whole new
+   IndexView, so it's fixed for that widget's lifetime). */
+QPushButton#DensityButton {{
+    border: 1px solid rgba(29,31,32,.3);
+    padding: 5px 10px;
+    font-size: 12px;
+    background: {c["chrome"]};
+    color: {c["ink"]};
+}}
+QPushButton#DensityButton:checked {{
+    background: {c["navy"]};
+    color: #ffffff;
+}}
+
 /* -------------------------------------------------------------- filter row */
 QLineEdit#FilterSearch {{
     background: {c["white"]};
@@ -256,8 +301,22 @@ QLabel#LegendKicker {{
 }}
 
 /* -------------------------------------------------------------- index table */
+/* The index table itself (its header, row gutter, Stage/Doc/ECN chips, and
+   the SYSTEM legend right above it - see index_view.py) is deliberately
+   kept on this light/white surface in every theme, same as the "white"
+   token above is already theme-independent - a dense data grid stays
+   legible as dark text on a light "paper" regardless of the app's overall
+   theme, the same reasoning spreadsheet-like tools generally use. (The
+   toolbar row above THAT - EquipTab, DensityButton - is not part of this:
+   it sits on the ordinary theme-reactive ContentArea background, so it
+   correctly follows the active theme like everything else.) Because of
+   that, its text explicitly uses LIGHT's ink rather than the active
+   theme's - in dark theme that "ink" is a near-white color meant for
+   light text on a dark background, which would be unreadable on this
+   table's white background. */
 QTableWidget#IndexTable {{
     background: {c["white"]};
+    color: {LIGHT["ink"]};
     {zebra_rule}
     gridline-color: rgba(29,31,32,.08);
     border: 1px solid rgba(29,31,32,.16);

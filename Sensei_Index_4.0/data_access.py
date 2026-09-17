@@ -687,20 +687,6 @@ def count_rows(series_number, equip_key):
     return len(read_index_rows(series_number, equip_key))
 
 
-def series_type_summary(series_number, equip_key, group_field):
-    """(count, {group_value: count}) in one pass over read_index_rows() -
-    used by the sidebar, which used to call count_rows() and
-    distinct_group_values() back to back (two separate scans of the same
-    rows) for every series x equipment-type combo it draws."""
-    rows = read_index_rows(series_number, equip_key)
-    counts = {}
-    for r in rows:
-        val = str(r.get(group_field) or "").strip()
-        if val:
-            counts[val] = counts.get(val, 0) + 1
-    return len(rows), dict(sorted(counts.items()))
-
-
 def count_all_by_type():
     """{'transmitter': <total across every series>, 'valve': <...>}"""
     totals = {k: 0 for k in EQUIPMENT_TYPES}
@@ -1029,22 +1015,6 @@ def read_index_rows_filtered(series_number, equip_key, filters=None):
     return rows
 
 
-def distinct_group_values(series_number, equip_key, group_field, filters=None):
-    """{value: count} for every distinct non-blank value of group_field,
-    among rows matching any filters already chosen at a shallower level of
-    the drill-down browser."""
-    rows = read_index_rows(series_number, equip_key)
-    if filters:
-        for fid, val in filters.items():
-            rows = [r for r in rows if str(r.get(fid) or "") == str(val)]
-    counts = {}
-    for r in rows:
-        val = str(r.get(group_field) or "").strip()
-        if val:
-            counts[val] = counts.get(val, 0) + 1
-    return dict(sorted(counts.items()))
-
-
 # ---------------------------------------------------------------------------
 # Batch export (the new Export menu) - mirrors what export_to_pdf.py /
 # export_valve_to_pdf.py's own main() does, but driven by explicit GUI
@@ -1309,14 +1279,6 @@ def create_desktop_shortcut(shortcut_name="InstINDEX"):
 STAGE_WORDS = ["Not started", "Installed", "Submitted", "Accepted"]
 _STAGE_FIELDS = ["installed", "submitted", "accepted"]  # index 0 (Not started) has none set
 
-# Extra, non-summary fields the Run view's checks need that read_index_rows()
-# doesn't already pull in (it only reads summary_fields + date_fields).
-RUN_EXTRA_FIELDS = {
-    "transmitter": ["calibration_range", "instrument_range", "serial_number"],
-    "valve": ["valve_serial"],
-    "gauge": ["serial_number"],
-}
-
 
 def stage_from_status(status):
     if status.get("accepted"):
@@ -1342,125 +1304,43 @@ def set_run_stage(series_number, equip_key, key_value, stage):
     set_status(series_number, equip_key, key_value, **fields)
 
 
+def bulk_set_stage(keys, stage):
+    """Like set_run_stage, but for many rows in the one read + one write
+    bulk_set_status already gives bulk_queue_export - marking every row in
+    a large selection Installed/Submitted/Accepted no longer means that
+    many separate read+write cycles of status.json (GUI audit Part 3 #14).
+    keys: iterable of (series_number, equip_key, key_value) tuples."""
+    stage = max(0, min(3, stage))
+    fields = {f: (i <= stage) for i, f in enumerate(_STAGE_FIELDS, start=1)}
+    bulk_set_status(keys, **fields)
+
+
 def _numeric_bounds(text):
     nums = re.findall(r"-?\d+(?:\.\d+)?", text or "")
     return [float(n) for n in nums]
 
 
 def run_row_flag(equip_key, extra, submitted):
-    """Mirrors the two checks the Run screen was designed around: a
+    """Mirrors the two checks that matter across every equipment type: a
     calibrated range that doesn't fit inside the instrument's own span, and
     a missing serial number (worse once the row's already been submitted to
     the client with nothing to identify the physical unit). Never blocks
     anything - purely informational, same as every other check in this
-    app."""
+    app. extra: a read_engineering_index_rows()-shaped entry - "serial" is
+    that function's own normalized name for whichever raw field is each
+    equipment type's real serial_field (index_view.IndexView is the only
+    caller; GUI audit Part 3 #27 found index_view.py had its own diverged
+    copy of this same check that silently dropped the submitted-with-no-
+    serial case entirely)."""
     if equip_key == "transmitter":
         cal = _numeric_bounds(extra.get("calibration_range", ""))
         span = _numeric_bounds(extra.get("instrument_range", ""))
         if len(cal) == 2 and len(span) == 2 and (cal[0] < span[0] or cal[1] > span[1]):
             return "Range exceeds instrument span"
-    serial = extra.get(EQUIPMENT_TYPES[equip_key]["serial_field"], "")
+    serial = extra.get("serial", "")
     if not serial:
         return "Submitted, no serial" if submitted else "No serial number"
     return ""
-
-
-def read_run_rows():
-    """One flat list across every registered series and both equipment
-    types - tag/equip#, a short description, stage, the export queue flag,
-    and the computed check - everything the Run screen's list, search, and
-    stage control need, in one common shape regardless of which sheet a
-    row actually lives on."""
-    out = []
-    store = _load_status_store()
-    wb = _get_cached_workbook(data_only=False)
-    for series_number in list_series():
-        series_label = series_display_label(series_number)
-        for equip_key, etype in EQUIPMENT_TYPES.items():
-            try:
-                sheet_name = get_sheet_name(series_number, equip_key)
-            except KeyError:
-                continue
-            if sheet_name not in wb.sheetnames:
-                continue
-            ws = wb[sheet_name]
-            export_mod = etype["export_module"]
-            field_to_col = export_mod.load_column_map(ws)
-            key_col = field_to_col.get(etype["key_field"])
-            if not key_col:
-                continue
-            desc_field = etype["desc_field"]
-            kind_field = etype["summary_fields"][-1]
-            desc_col = field_to_col.get(desc_field)
-            kind_col = field_to_col.get(kind_field)
-            extra_cols = {fid: field_to_col.get(fid) for fid in RUN_EXTRA_FIELDS.get(equip_key, [])}
-
-            for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
-                raw_key = ws.cell(row=r, column=key_col).value
-                if raw_key in (None, ""):
-                    continue
-                key_val = export_mod.cell_to_str(raw_key)
-                status = _normalized_status(store.get(_status_key(series_number, equip_key, key_val)))
-                extra = {fid: (export_mod.cell_to_str(ws.cell(row=r, column=c).value) if c else "")
-                         for fid, c in extra_cols.items()}
-                out.append({
-                    "series_number": series_number,
-                    "series_label": series_label,
-                    "equip_key": equip_key,
-                    "equip_label": etype["label"],
-                    "key_value": key_val,
-                    "row": r,
-                    "desc": export_mod.cell_to_str(ws.cell(row=r, column=desc_col).value) if desc_col else "",
-                    "kind": export_mod.cell_to_str(ws.cell(row=r, column=kind_col).value) if kind_col else "",
-                    "stage": stage_from_status(status),
-                    "queued": bool(status["export"]),
-                    "flag": run_row_flag(equip_key, extra, status["submitted"]),
-                })
-    return out
-
-
-# ---------------------------------------------------------------------------
-# The Run journal - a permanent, append-only, stamped log of every stage
-# change and export-queue toggle made from the Run view. Deliberately
-# separate from equipment_status.json (which only ever holds *current*
-# state) and from the app's own Ctrl+Z UndoManager (which only lives in
-# memory for this session): this is the durable "who changed what, when"
-# record the Run screen's design was built around. Undoing a change adds a
-# new entry rather than erasing the one it reverts - for a QA record,
-# seeing "installed, then stepped back" is more honest than making the
-# first entry disappear.
-# ---------------------------------------------------------------------------
-JOURNAL_PATH = HERE / "run_journal.json"
-JOURNAL_MAX_ENTRIES = 1000
-
-
-def _load_journal():
-    if not JOURNAL_PATH.exists():
-        return []
-    try:
-        with open(JOURNAL_PATH, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def append_journal(tag, what):
-    entries = _load_journal()
-    who = get_setting("crew_name") or "Unnamed crew member"
-    entry = {
-        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "tag": tag,
-        "what": what,
-        "who": who,
-    }
-    entries.insert(0, entry)
-    del entries[JOURNAL_MAX_ENTRIES:]
-    _write_json(JOURNAL_PATH, entries)
-    return entry
-
-
-def read_journal(limit=200):
-    return _load_journal()[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -1534,6 +1414,9 @@ def read_engineering_index_rows(series_number, equip_key):
     key_col = field_to_col.get(key_field)
 
     store = _load_status_store()
+    # Loaded and indexed ONCE per table load, not once per row - see
+    # _index_ecns_by_tag's own docstring (GUI audit Part 3 #10).
+    ecn_by_tag = _index_ecns_by_tag(load_ecns())
     rows = []
     for r in range(export_mod.FIRST_DATA_ROW, ws.max_row + 1):
         raw_key = ws.cell(row=r, column=key_col).value if key_col else None
@@ -1552,7 +1435,7 @@ def read_engineering_index_rows(series_number, equip_key):
         if service_field and service_field != desc_field:
             entry["service"] = entry.pop(service_field)
         entry["kind"] = entry.pop(kind_field)
-        entry["open_ecns"] = ecns_for_tag(key_val)
+        entry["open_ecns"] = ecn_by_tag.get(key_val, [])
         rows.append(entry)
     return rows
 
@@ -1584,10 +1467,6 @@ def load_documents():
     return _load_json_list(DOCUMENTS_PATH)
 
 
-def save_documents(docs):
-    _write_json(DOCUMENTS_PATH, docs)
-
-
 def documents_for_tag(tag):
     return [d for d in load_documents() if tag in d.get("tags", [])]
 
@@ -1601,12 +1480,24 @@ def save_ecns(ecns):
     _write_json(ECN_PATH, ecns)
 
 
+def _index_ecns_by_tag(ecns, open_only=True):
+    """tag -> [ecn, ...], built once from an already-loaded ECN list. Pulled
+    out of ecns_for_tag so read_engineering_index_rows can build this
+    mapping ONCE per table load and do a plain dict lookup per row, instead
+    of that function re-reading and re-parsing ecn.json from disk once per
+    row - the single biggest cause of the Index table's load-time lag on a
+    sheet of any real size (GUI audit Part 3 #10)."""
+    by_tag = {}
+    for e in ecns:
+        if open_only and e.get("resolution"):
+            continue
+        for tag in e.get("affected_tags", []):
+            by_tag.setdefault(tag, []).append(e)
+    return by_tag
+
+
 def ecns_for_tag(tag, open_only=True):
-    ecns = load_ecns()
-    out = [e for e in ecns if tag in e.get("affected_tags", [])]
-    if open_only:
-        out = [e for e in out if not e.get("resolution")]
-    return out
+    return _index_ecns_by_tag(load_ecns(), open_only=open_only).get(tag, [])
 
 
 def acknowledge_ecn(ecn_id, who, range_changed=False, affected_records=None):

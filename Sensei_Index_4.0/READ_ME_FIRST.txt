@@ -4,7 +4,7 @@ INSTINDEX - QUICK START
 1. Put this whole folder somewhere normal, like your Desktop or Documents.
    (Don't split it up - everything in here needs to stay together.)
 
-2. Double-click START_INSTINDEX.bat
+2. Double-click START_SENSEI_INDEX.bat
 
 That's it. The first time, it'll quietly install a few required Python
 packages (needs Python already installed - the .bat file will tell you
@@ -63,9 +63,11 @@ WHAT'S NEW IN THIS VERSION
   (Settings > Manage Series, the sidebar right-click, or when creating a
   new one) and that name is what shows up throughout the app instead.
   Unnamed ones just show their bare number.
-- Export now respects whatever filter the Index view is currently showing
-  - so drilling into a System via the sidebar's "By System" tree, then
-  hitting Export, exports only that system's rows instead of everything.
+- Export does NOT currently narrow itself to whatever the Index table's
+  search box is showing - it always offers the whole sheet (rows checked
+  in the Export column / flagged Y in Excel / every row with a tag), same
+  regardless of what you've searched for on screen. Narrowing Export to
+  match the search is a real gap, not yet built (GUI audit Part 3, #7-8).
 - Dashboard has a new "Quick Tips" card: a reminder that logging new
   equipment is fastest done directly in Excel (bulk entry, autofill,
   copy/paste), and an "Excel Sheets" button that opens a Transmitter

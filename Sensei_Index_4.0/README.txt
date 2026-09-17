@@ -55,8 +55,10 @@ the field crew to fill in as they inspect it:
     9050 SUS -> new series "SUS" (9050), never tracked before:
         +22 transmitters, +4 valves
 
-Only two equipment types get imported - Transmitters and Valves, the
-same two the PDF templates in this app have always supported. A
+At the time this ETL ran, only Transmitters and Valves had PDF templates
+in this app, so only those two equipment types were imported (Gauges were
+added later, as their own separate import - see EQUIPMENT_TYPES in
+data_access.py, which now lists three types, not two). A
 "Positioner" row in the master list isn't imported as its own record;
 it's matched to its parent valve (same area + loop number) and folded
 into that valve's Positioner Model field, the same place the Valve Check
@@ -80,74 +82,49 @@ from inside this folder. It's safe to run again - it never overwrites a
 cell that already has a value, it only appends genuinely new tags.
 
 
-3. THE RUN - A NEW PRIMARY SCREEN
+3. THE RUN - BUILT, THEN CUT
 -----------------------------------------------------------------
-The app now opens straight into "The Run" instead of the Dashboard (the
-Dashboard is still there in the sidebar, unchanged). It's one flat list
-across every series and both equipment types, built for moving fast
-through a stack of tags in the field:
-
-    Up / Down      move
-    Space          advance one stage (Not started -> Installed ->
-                   Submitted -> Accepted)
-    Shift+Space    step back one stage
-    A              jump straight to Accepted
-    E              toggle the row's export queue
-    Ctrl+Z          undo (same undo stack the rest of the app already uses)
-    /              jump to search
-    F              Field mode - bigger rows and text for reading on a
-                   phone/tablet in the field, same shortcuts either way
-
-Filter boards along the top (Everything / Needs install / Ready to
-submit / Awaiting client / Flagged) mirror the sidebar's own counts.
-
-A Check column runs two live checks on every row, same as the workbook
-always could have told you but never did:
-    - "Range exceeds instrument span" - the calibrated range doesn't fit
-      inside the instrument's own full-scale range
-    - "No serial number" / "Submitted, no serial" - missing serial, worse
-      once it's already gone to the client with nothing on it
-Checks never block anything - purely informational, same philosophy as
-every other check-style feature already in this app.
-
-The Journal panel (toggle from the header) is a new, permanent, stamped
-log of every stage change and export-queue toggle made from the Run
-screen - who, what, when. It's separate from the app's Ctrl+Z (which only
-lives in memory for the current session): undoing something adds a new
-journal line rather than erasing the old one, since for a QA record
-"installed, then stepped back" is more honest than making the first
-entry disappear. Set your name once in Settings > Run Journal so entries
-are attributed to you instead of "Unnamed crew member."
+A "Run" primary screen (one flat list across every series/equipment type,
+with keyboard-driven stage advancing, filter boards, a Check column, and
+a permanent Journal log) was designed and partly built, then reverted -
+it never shipped, and the app opens into the Dashboard, unchanged, same
+as before. This section used to describe it as if it existed; it didn't,
+and this rewrite is the correction (see also GUI audit Part 3, defects
+1-3). The Check column's own two live checks weren't wasted, though -
+they're exactly what index_view.py's per-row flag now runs on the Index
+table (data_access.run_row_flag): "Range exceeds instrument span" and
+"No serial number" / "Submitted, no serial." Building a real Run screen
+is still a reasonable thing to want; if that happens, it should read from
+data_access.stage_from_status/set_run_stage/get_run_stage/run_row_flag,
+which are real, live, still here, and already what the Index table itself
+runs on.
 
 
 4. ACCESSIBILITY
 -----------------------------------------------------------------
 Stage is always shown as a word next to the fill, never color alone. The
-Run list's row-status checkboxes and the new Run screen's controls carry
-accessible names that include which row they're on ("29103-PIT-1014,
-Submitted"), not just which column, so a screen reader doesn't read three
-unlabeled cells - it reads one sentence per row. This pass covered the
-Run screen (built accessible from the start) and the Index view's
-per-row status checkboxes, which was the concrete example called out in
-the accessibility redesign. A full pass over every remaining dialog in
-the app is a reasonable next increment, not done here.
+Index table's Stage cell (index_view.StageCell) carries an accessible name
+that includes which row it's on ("29103-PIT-1014, Submitted"), not just
+the stage word alone, so a screen reader doesn't read an unlabeled cell in
+isolation - it reads one sentence per row. A full pass over every
+remaining dialog in the app is a reasonable next increment, not done here.
 
 
 5. FILES ADDED IN THIS FOLDER (vs. 1.9)
 -----------------------------------------------------------------
-    run_view.py                 - the Run screen (new)
     tools/masterlist_etl.py     - classification + cross-reference logic,
                                    read-only, importable, has its own
                                    report mode (python tools/masterlist_etl.py)
     tools/build_v4_tracker.py   - runs the ETL and writes the workbook +
                                    series_registry.json (what actually
                                    built this folder's tracker)
-    data_access.py               - unchanged functions untouched; added
-                                   read_run_rows/set_run_stage/get_run_stage
-                                   and the Run journal (append_journal/
-                                   read_journal) at the end of the file
-    gui_app.py                   - added the Run nav item and boot-into-Run,
-                                   generalized the two refresh methods that
-                                   used to assume "Index page or Dashboard"
-                                   to also cover Run, added a "Your name"
-                                   field to Settings
+    data_access.py               - added stage_from_status/set_run_stage/
+                                   get_run_stage/bulk_set_stage/run_row_flag,
+                                   which the Index table's own Stage column
+                                   and per-row flag now run on (see section 3
+                                   above - not run_view.py/read_run_rows/the
+                                   Run journal, which were built for the Run
+                                   screen and removed with it)
+    gui_app.py                   - unchanged in this area; see index_view.py
+                                   (plate 6a's Index table) for the Stage
+                                   column and bulk actions instead

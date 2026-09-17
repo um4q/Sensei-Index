@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sensei Index 3.0 launcher.
+Sensei Index 4.0 launcher.
 
     pythonw bootstrap.py
 
