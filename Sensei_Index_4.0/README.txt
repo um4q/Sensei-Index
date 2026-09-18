@@ -128,3 +128,52 @@ remaining dialog in the app is a reasonable next increment, not done here.
     gui_app.py                   - unchanged in this area; see index_view.py
                                    (plate 6a's Index table) for the Stage
                                    column and bulk actions instead
+    master_list.py               - reads Instrumentation Master List.xlsx
+                                   directly (all 9 sheets/areas, not just
+                                   the K1B-focused subset above) and
+                                   classifies every raw "Instrument Type
+                                   Description" string into a (family,
+                                   discipline) pair - see section 6.
+    overall_index_view.py        - the Overall Index screen (section 6).
+
+
+6. OVERALL INDEX (GUI audit Part 3, Section 3)
+-----------------------------------------------------------------
+A new sidebar page, above the per-series ones, showing every real
+instrument tag in the master list workbook - not just the three
+equipment types (Transmitter/Valve/Gauge) this app can generate a PDF
+record for. As of the current workbook: 1,686 tags across 9 areas, 100
+distinct raw type strings normalized into 28 families over 9 disciplines
+(Temperature/Pressure/Flow/Level/Valve/Rotating equipment/Discrete/
+Electrical/Analyzer), with exactly one string left Unclassified - see
+master_list.py's own docstring for what it is (a document-control label
+that landed in the Instrument Type Description column by mistake, a real
+data-entry defect in the source workbook, not a gap in the taxonomy).
+
+These numbers are bigger than the GUI audit document that asked for this
+screen expected (it quoted 1,332 tags / 8 areas / 75 type strings) -
+checked against the real workbook rather than assumed, since several of
+that same document's other claims turned out to be wrong earlier in this
+pass. Every one of its named spelling collisions (CONTROL VALVE - ON/OFF
+vs CONTROL VALVE, ON/OFF; TEMPTERATURE GAUGE; the four hand-switch
+spellings; and the rest) is real and present in the current data with
+higher counts than quoted - strong evidence the master list has simply
+grown since that document was written, not that the numbers were
+invented. The screen reflects the live workbook, not the stale snapshot.
+
+Recorded/Open/No-form is decided empirically per family (does the
+tracker actually have a real example of this family logged anywhere
+today), not guessed from the type name - see overall_index_rows()'s
+docstring in master_list.py. Read-and-triage only: this screen never
+edits a cell. A virtualized QAbstractTableModel + QStyledItemDelegate
+(no per-row QTableWidgetItem/cell widgets), because at this size "only
+the visible rows exist" stopped being optional.
+
+While building this, the same dark-theme-unreadable pattern GUI audit
+Part 3 already found and fixed in the per-series Index table (near-white
+"ink" text on a surface that's pinned white in every theme) turned out to
+also affect every QLineEdit/QComboBox/QTextEdit in the entire app -
+typed text in any search box or form field was rendering essentially
+invisible in dark theme. Fixed at the source (theme.py's shared control
+QSS now pins that text to LIGHT's ink, same as the index table), not
+patched locally per screen.

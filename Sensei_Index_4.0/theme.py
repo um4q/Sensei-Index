@@ -78,6 +78,20 @@ DARK = {
     "light_blue": "#b5d9fd", "pale_blue": "#94bce3",
 }
 
+# One color per Overall Index discipline (master_list.DISCIPLINES) - a
+# leading-edge rail on each row, always paired with the written discipline
+# name (never color alone, per the Overall Index's own accessibility
+# requirement). Fixed regardless of the active theme, the same as
+# index_view.GROUP_COLORS - the Overall Index table is a light-locked data
+# grid like the per-series Index table it sits beside, so these are chosen
+# for contrast against a white row background specifically, not re-derived
+# per theme.
+DISCIPLINE_COLORS = {
+    "Temperature": "#c1701e", "Pressure": "#0072b2", "Flow": "#009e73",
+    "Level": "#4aa3d6", "Valve": "#a6431e", "Rotating equipment": "#8e4a8f",
+    "Discrete": "#5d5d60", "Electrical": "#8a7000", "Analyzer": "#6b4f9e",
+}
+
 
 def load_bundled_fonts():
     """Registers the bundled Barlow / Barlow Condensed weights with Qt so
@@ -326,6 +340,26 @@ QTableWidget#IndexTable::item:selected {{
     background: {c["highlight"]};
     color: {c["ink"]};
 }}
+
+/* The Overall Index table (overall_index_view.py) - same light-locked
+   data-grid treatment as QTableWidget#IndexTable above, and for the same
+   reason: a dense survey table of 1000+ rows stays legible as dark text
+   on white paper regardless of the app's active theme. Its own delegate
+   paints the Tag and Record cells directly (discipline rail, record
+   chips) rather than through QSS, but everything else - plain text
+   cells, the header band, row selection - goes through this rule. */
+QTableView#OverallIndexTable {{
+    background: {LIGHT["white"]};
+    color: {LIGHT["ink"]};
+    alternate-background-color: {LIGHT["zebra"]};
+    gridline-color: rgba(29,31,32,.08);
+    border: 1px solid rgba(29,31,32,.16);
+    font-size: 12.5px;
+}}
+QTableView#OverallIndexTable::item:selected {{
+    background: {LIGHT["highlight"]};
+    color: {LIGHT["ink"]};
+}}
 QHeaderView::section {{
     background: {c["chrome"]};
     color: {c["body"]};
@@ -418,9 +452,18 @@ QLabel#StatNumber {{
 QLabel#StatLabel {{ font-size: 12px; color: {c["secondary"]}; }}
 
 /* -------------------------------------------------------------- controls */
+/* background is white in every theme (never c["ground"]/c["chrome"]), so
+   its text has to be LIGHT's ink specifically, not the active theme's -
+   in dark theme c["ink"] is a near-white color meant for light text on a
+   dark background, which is exactly as unreadable on this white field as
+   it was on the white index table and the white Overall Index cards
+   (GUI audit Part 3 #17-19, and the Overall Index build that found the
+   same bug here: every QLineEdit/QComboBox/QTextEdit in the app - every
+   search box and every Add/Edit/Settings field - was rendering typed
+   text at #eef6ff on #ffffff in dark theme, i.e. invisible). */
 QLineEdit, QComboBox, QTextEdit, QSpinBox, QDateEdit {{
     background: {c["white"]};
-    color: {c["ink"]};
+    color: {LIGHT["ink"]};
     border: 1px solid rgba(29,31,32,.28);
     border-radius: 0px;
     padding: 6px 9px;

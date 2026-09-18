@@ -32,6 +32,7 @@ import datasheet_reader
 import theme
 from theme import LIGHT_QSS, DARK_QSS, HIGH_CONTRAST_QSS
 from index_view import IndexView
+from overall_index_view import OverallIndexView
 from documents_dialog import DocumentsDialog
 
 
@@ -416,8 +417,11 @@ class MainWindow(QMainWindow):
             page.edit_selected()
 
     def _shortcut_focus_search(self):
-        page = self._active_index_page()
-        if page:
+        # hasattr, not _active_index_page() - OverallIndexView has its own
+        # search_edit too, and isn't an IndexView (it has no add/edit/export
+        # to guard against, so it doesn't need that narrower check).
+        page = self.current_dynamic_page
+        if hasattr(page, "search_edit"):
             page.search_edit.setFocus()
             page.search_edit.selectAll()
 
@@ -482,8 +486,11 @@ class MainWindow(QMainWindow):
             page.remove_selected()
 
     def _shortcut_refresh(self):
-        page = self._active_index_page()
-        if page:
+        # hasattr, not _active_index_page() - OverallIndexView has its own
+        # reload() too (re-reads the master list + tracker from disk), and
+        # isn't an IndexView.
+        page = self.current_dynamic_page
+        if hasattr(page, "reload"):
             page.reload()
             self.statusBar().showMessage("Refreshed", 2000)
         else:
@@ -649,6 +656,10 @@ class MainWindow(QMainWindow):
         self.dashboard_row_btn.clicked.connect(self.show_dashboard)
         layout.addWidget(self.dashboard_row_btn)
 
+        self.overall_index_row_btn = make_button("Overall Index", "RailRow")
+        self.overall_index_row_btn.clicked.connect(self.show_overall_index)
+        layout.addWidget(self.overall_index_row_btn)
+
         series_label = QLabel("SERIES")
         series_label.setObjectName("RailSectionLabel")
         series_label.setContentsMargins(16, 14, 16, 8)
@@ -745,6 +756,10 @@ class MainWindow(QMainWindow):
             "active", "true" if isinstance(current, DashboardPage) else "false")
         self.dashboard_row_btn.style().unpolish(self.dashboard_row_btn)
         self.dashboard_row_btn.style().polish(self.dashboard_row_btn)
+        self.overall_index_row_btn.setProperty(
+            "active", "true" if isinstance(current, OverallIndexView) else "false")
+        self.overall_index_row_btn.style().unpolish(self.overall_index_row_btn)
+        self.overall_index_row_btn.style().polish(self.overall_index_row_btn)
 
     def refresh_sidebar_and_dashboard(self):
         """Call after anything that changes counts (save, add/remove/rename
@@ -798,6 +813,9 @@ class MainWindow(QMainWindow):
         page = DashboardPage(self)
         self.dashboard_page = page
         self._set_dynamic_page(page)
+
+    def show_overall_index(self):
+        self._set_dynamic_page(OverallIndexView(self))
 
     def show_index(self, series_number, equip_key, filters=None):
         page = IndexView(self, series_number, equip_key)
