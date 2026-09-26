@@ -8,7 +8,11 @@
       "gauge_sheet": "Gauge Log 100",
       "transformer_test_sheet": "Transformer Test Log 100",
       "small_power_cable_sheet": "Small Power Cable Log 100",
-      "general_equip_install_sheet": "General Equip Install Log 100"
+      "general_equip_install_sheet": "General Equip Install Log 100",
+      "eht_removal_sheet": "EHT Removal Log 100",
+      "eht_rtd_sheet": "EHT RTD Log 100",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 100",
+      "torqueing_sheet": "Torqueing Log 100"
     },
     {
       "number": 200,
@@ -18,7 +22,11 @@
       "gauge_sheet": "Gauge Log 200",
       "transformer_test_sheet": "Transformer Test Log 200",
       "small_power_cable_sheet": "Small Power Cable Log 200",
-      "general_equip_install_sheet": "General Equip Install Log 200"
+      "general_equip_install_sheet": "General Equip Install Log 200",
+      "eht_removal_sheet": "EHT Removal Log 200",
+      "eht_rtd_sheet": "EHT RTD Log 200",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 200",
+      "torqueing_sheet": "Torqueing Log 200"
     },
     {
       "number": 29103,
@@ -28,7 +36,11 @@
       "gauge_sheet": "Gauge Log 29103",
       "transformer_test_sheet": "Transformer Test Log 29103",
       "small_power_cable_sheet": "Small Power Cable Log 29103",
-      "general_equip_install_sheet": "General Equip Install Log 29103"
+      "general_equip_install_sheet": "General Equip Install Log 29103",
+      "eht_removal_sheet": "EHT Removal Log 29103",
+      "eht_rtd_sheet": "EHT RTD Log 29103",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 29103",
+      "torqueing_sheet": "Torqueing Log 29103"
     },
     {
       "number": 29152,
@@ -38,7 +50,11 @@
       "gauge_sheet": "Gauge Log 29152",
       "transformer_test_sheet": "Transformer Test Log 29152",
       "small_power_cable_sheet": "Small Power Cable Log 29152",
-      "general_equip_install_sheet": "General Equip Install Log 29152"
+      "general_equip_install_sheet": "General Equip Install Log 29152",
+      "eht_removal_sheet": "EHT Removal Log 29152",
+      "eht_rtd_sheet": "EHT RTD Log 29152",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 29152",
+      "torqueing_sheet": "Torqueing Log 29152"
     },
     {
       "number": 29203,
@@ -48,7 +64,11 @@
       "gauge_sheet": "Gauge Log 29203",
       "transformer_test_sheet": "Transformer Test Log 29203",
       "small_power_cable_sheet": "Small Power Cable Log 29203",
-      "general_equip_install_sheet": "General Equip Install Log 29203"
+      "general_equip_install_sheet": "General Equip Install Log 29203",
+      "eht_removal_sheet": "EHT Removal Log 29203",
+      "eht_rtd_sheet": "EHT RTD Log 29203",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 29203",
+      "torqueing_sheet": "Torqueing Log 29203"
     },
     {
       "number": 400,
@@ -58,7 +78,11 @@
       "gauge_sheet": "Gauge Log 400",
       "transformer_test_sheet": "Transformer Test Log 400",
       "small_power_cable_sheet": "Small Power Cable Log 400",
-      "general_equip_install_sheet": "General Equip Install Log 400"
+      "general_equip_install_sheet": "General Equip Install Log 400",
+      "eht_removal_sheet": "EHT Removal Log 400",
+      "eht_rtd_sheet": "EHT RTD Log 400",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 400",
+      "torqueing_sheet": "Torqueing Log 400"
     },
     {
       "number": 500,
@@ -68,17 +92,25 @@
       "gauge_sheet": "Gauge Log 500",
       "transformer_test_sheet": "Transformer Test Log 500",
       "small_power_cable_sheet": "Small Power Cable Log 500",
-      "general_equip_install_sheet": "General Equip Install Log 500"
+      "general_equip_install_sheet": "General Equip Install Log 500",
+      "eht_removal_sheet": "EHT Removal Log 500",
+      "eht_rtd_sheet": "EHT RTD Log 500",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 500",
+      "torqueing_sheet": "Torqueing Log 500"
     },
     {
       "number": 29104,
-      "name": "K1B Pad \u2014 Additional",
+      "name": "K1B Pad — Additional",
       "transmitter_sheet": "Transmitter Log 29104",
       "valve_sheet": "Valve Log 29104",
       "gauge_sheet": "Gauge Log 29104",
       "transformer_test_sheet": "Transformer Test Log 29104",
       "small_power_cable_sheet": "Small Power Cable Log 29104",
-      "general_equip_install_sheet": "General Equip Install Log 29104"
+      "general_equip_install_sheet": "General Equip Install Log 29104",
+      "eht_removal_sheet": "EHT Removal Log 29104",
+      "eht_rtd_sheet": "EHT RTD Log 29104",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 29104",
+      "torqueing_sheet": "Torqueing Log 29104"
     },
     {
       "number": 9050,
@@ -88,7 +120,11 @@
       "gauge_sheet": "Gauge Log 9050",
       "transformer_test_sheet": "Transformer Test Log 9050",
       "small_power_cable_sheet": "Small Power Cable Log 9050",
-      "general_equip_install_sheet": "General Equip Install Log 9050"
+      "general_equip_install_sheet": "General Equip Install Log 9050",
+      "eht_removal_sheet": "EHT Removal Log 9050",
+      "eht_rtd_sheet": "EHT RTD Log 9050",
+      "eht_pre_insulation_sheet": "EHT PreIns Log 9050",
+      "torqueing_sheet": "Torqueing Log 9050"
     }
   ]
 }

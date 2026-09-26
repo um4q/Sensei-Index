@@ -37,12 +37,20 @@ import gauge_schema
 import transformer_test_schema
 import small_power_cable_schema
 import general_equip_install_schema
+import eht_removal_schema
+import eht_rtd_schema
+import eht_pre_insulation_schema
+import torqueing_schema
 import export_to_pdf
 import export_valve_to_pdf
 import export_gauge_to_pdf
 import export_transformer_test_to_pdf
 import export_small_power_cable_to_pdf
 import export_general_equip_install_to_pdf
+import export_eht_removal_to_pdf
+import export_eht_rtd_to_pdf
+import export_eht_pre_insulation_to_pdf
+import export_torqueing_to_pdf
 
 from paths import HERE
 
@@ -258,6 +266,83 @@ EQUIPMENT_TYPES = {
         "date_fields": ["cal_due", "yanda_rep_date", "client_rep_date"],
         "date_labels": ["Cal. Due", "Yanda Rep. Date", "Client Rep. Date"],
         "serial_field": "serial_number",
+        "qa_date_field": "yanda_rep_date",
+        "desc_field": "system_number",
+    },
+    "eht_removal": {
+        "label": "EHT Removal",
+        "schema": eht_removal_schema,
+        "export_module": export_eht_removal_to_pdf,
+        "key_field": "trace_tag",
+        "summary_fields": ["trace_tag", "system_no", "area"],
+        "summary_labels": ["Trace Tag", "System #", "Area"],
+        "group_fields": ["system_no"],
+        "group_labels": ["System"],
+        "date_fields": ["yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
+        # No per-row serial number concept on this form (a removal/
+        # reinstatement report, not a serialized instrument) - the closest
+        # real identifying field is the EHTC # (EHT circuit/cable number),
+        # same "reuse a field that exists rather than invent one" fallback
+        # small_power_cable_schema.py's own entry above already uses.
+        "serial_field": "ehtc_no",
+        "qa_date_field": "yanda_rep_date",
+        "desc_field": "system_no",
+    },
+    "eht_rtd": {
+        "label": "EHT RTD",
+        "schema": eht_rtd_schema,
+        "export_module": export_eht_rtd_to_pdf,
+        "key_field": "trace_number",
+        "summary_fields": ["trace_number", "panel_number", "circuit_number"],
+        "summary_labels": ["Trace #", "Panel #", "Circuit #"],
+        "group_fields": ["panel_number"],
+        "group_labels": ["Panel"],
+        # This form's two sign-off stages (pre-insulation, then final/
+        # post-insulation) each have their own name+date pair - the FINAL
+        # stage's dates are the ones worth bulk-editing/showing, same idea
+        # as every other type here using its own last sign-off date.
+        "date_fields": ["final_signoff_yanda_date", "final_signoff_client_date"],
+        "date_labels": ["Final Yanda Sign-off Date", "Final Client Sign-off Date"],
+        # No per-row serial number concept - closest identifying field is
+        # the Controller # (a physical unit identifier), same fallback
+        # reasoning as eht_removal's own serial_field above.
+        "serial_field": "controller_number",
+        "qa_date_field": "final_signoff_yanda_date",
+        "desc_field": "panel_number",
+    },
+    "eht_pre_insulation": {
+        "label": "EHT PreIns",
+        "schema": eht_pre_insulation_schema,
+        "export_module": export_eht_pre_insulation_to_pdf,
+        "key_field": "trace_number",
+        "summary_fields": ["trace_number", "panel_number", "circuit_number"],
+        "summary_labels": ["Trace #", "Panel #", "Circuit #"],
+        "group_fields": ["panel_number"],
+        "group_labels": ["Panel"],
+        "date_fields": ["yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
+        "serial_field": "test_equip_serial",
+        "qa_date_field": "yanda_rep_date",
+        "desc_field": "panel_number",
+    },
+    "torqueing": {
+        "label": "Torqueing",
+        "schema": torqueing_schema,
+        "export_module": export_torqueing_to_pdf,
+        "key_field": "torque_record_number",
+        "summary_fields": ["torque_record_number", "system_number", "reference_tag_number"],
+        "summary_labels": ["Torque Record No.", "System No.", "Reference Tag #"],
+        "group_fields": ["system_number"],
+        "group_labels": ["System"],
+        "date_fields": ["yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
+        # No per-row serial number concept on this form (a torqueing report,
+        # not a serialized instrument) - the closest real identifying field
+        # is the torque wrench's own serial #, same "reuse the test
+        # equipment's serial" fallback small_power_cable_schema.py's entry
+        # above already uses.
+        "serial_field": "torque_wrench_serial_number",
         "qa_date_field": "yanda_rep_date",
         "desc_field": "system_number",
     },
