@@ -34,9 +34,15 @@ from pypdf import PdfReader, PdfWriter
 import transmitter_schema
 import valve_schema
 import gauge_schema
+import transformer_test_schema
+import small_power_cable_schema
+import general_equip_install_schema
 import export_to_pdf
 import export_valve_to_pdf
 import export_gauge_to_pdf
+import export_transformer_test_to_pdf
+import export_small_power_cable_to_pdf
+import export_general_equip_install_to_pdf
 
 from paths import HERE
 
@@ -205,6 +211,55 @@ EQUIPMENT_TYPES = {
         # column, so read_engineering_index_rows() falls back to "desc"
         # for it exactly as before.
         "service_field": "service",
+    },
+    "transformer_test": {
+        "label": "Transformer Test",
+        "schema": transformer_test_schema,
+        "export_module": export_transformer_test_to_pdf,
+        "key_field": "tag",
+        "summary_fields": ["tag", "system", "make"],
+        "summary_labels": ["Tag", "System", "Make"],
+        "group_fields": ["system"],
+        "group_labels": ["System"],
+        "date_fields": ["yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
+        "serial_field": "serial_number",
+        "qa_date_field": "yanda_rep_date",
+        "desc_field": "system",
+    },
+    "small_power_cable": {
+        "label": "Small Power Cable",
+        "schema": small_power_cable_schema,
+        "export_module": export_small_power_cable_to_pdf,
+        "key_field": "cable_tag_number",
+        "summary_fields": ["cable_tag_number", "system", "cable_type"],
+        "summary_labels": ["Cable Tag Number", "System", "Cable Type"],
+        "group_fields": ["system"],
+        "group_labels": ["System"],
+        "date_fields": ["yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
+        # No per-cable serial number concept on this form (see
+        # small_power_cable_schema.py's docstring) - the closest real field
+        # is the test equipment's own asset/serial number, same fallback
+        # idea as reusing a field that exists rather than inventing one.
+        "serial_field": "test_equip_1_asset_serial",
+        "qa_date_field": "yanda_rep_date",
+        "desc_field": "system",
+    },
+    "general_equip_install": {
+        "label": "General Equip Install",
+        "schema": general_equip_install_schema,
+        "export_module": export_general_equip_install_to_pdf,
+        "key_field": "tag_number",
+        "summary_fields": ["tag_number", "system_number", "manufacturer"],
+        "summary_labels": ["Tag #", "System #", "Manufacturer"],
+        "group_fields": ["system_number"],
+        "group_labels": ["System"],
+        "date_fields": ["cal_due", "yanda_rep_date", "client_rep_date"],
+        "date_labels": ["Cal. Due", "Yanda Rep. Date", "Client Rep. Date"],
+        "serial_field": "serial_number",
+        "qa_date_field": "yanda_rep_date",
+        "desc_field": "system_number",
     },
 }
 
