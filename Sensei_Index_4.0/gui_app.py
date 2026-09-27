@@ -118,7 +118,7 @@ class StatCard(QFrame):
     breakdown list underneath - the Main Menu's answer to 'you only show
     the total.'"""
 
-    def __init__(self, title, total, breakdown, parent=None):
+    def __init__(self, title, total, breakdown, parent=None, breakdown_title="BY SYSTEM"):
         super().__init__(parent)
         self.setObjectName("Card")
         layout = QVBoxLayout(self)
@@ -137,7 +137,7 @@ class StatCard(QFrame):
         line.setStyleSheet("color: palette(mid);")
         layout.addWidget(line)
 
-        by_system_label = QLabel("BY SYSTEM")
+        by_system_label = QLabel(breakdown_title)
         by_system_label.setObjectName("SectionLabel")
         layout.addWidget(by_system_label)
 
@@ -187,22 +187,26 @@ class SeriesStatCard(QFrame):
             lbl.setStyleSheet("font-weight: 700;")
             grid.addWidget(lbl, 0, c)
 
+        stat_keys = ("total", "installed", "submitted", "accepted")
         row = 1
-        for equip_key, etype in da.EQUIPMENT_TYPES.items():
-            stats = summary.get(equip_key)
-            name = QLabel(f"{etype['label']}s")
-            grid.addWidget(name, row, 0)
-            if stats is None:
-                none_lbl = QLabel("\u2013")
-                none_lbl.setObjectName("FieldLabel")
-                grid.addWidget(none_lbl, row, 1, 1, 4)
-            else:
-                values = [stats["total"], stats["installed"], stats["submitted"], stats["accepted"]]
-                for c, v in enumerate(values, start=1):
-                    val_lbl = QLabel(str(v))
+        for discipline in da.DISCIPLINES:
+            keys = [k for k in da.types_in_discipline(discipline) if k in summary]
+            head = QLabel(discipline.upper())
+            head.setObjectName("SectionLabel")
+            grid.addWidget(head, row, 0)
+            for c, s in enumerate(stat_keys, start=1):
+                sub_lbl = QLabel(str(sum(summary[k][s] for k in keys)))
+                sub_lbl.setObjectName("SectionLabel")
+                grid.addWidget(sub_lbl, row, c)
+            row += 1
+            # Only forms this series actually has records for - 7 rows of zeros is noise.
+            for equip_key in (k for k in keys if summary[k]["total"]):
+                grid.addWidget(QLabel(da.EQUIPMENT_TYPES[equip_key]["plural"]), row, 0)
+                for c, s in enumerate(stat_keys, start=1):
+                    val_lbl = QLabel(str(summary[equip_key][s]))
                     val_lbl.setStyleSheet("font-weight: 700;")
                     grid.addWidget(val_lbl, row, c)
-            row += 1
+                row += 1
         layout.addLayout(grid)
         layout.addStretch()
 
@@ -214,7 +218,12 @@ def make_field_widget(field, initial_value):
     if field["ftype"] == "choice":
         combo = QComboBox()
         combo.addItems(field["choices"])
-        if initial_value in field["choices"]:
+        if initial_value and initial_value not in field["choices"]:
+            # Keep off-list values (older records, typed in Excel) or saving would blank them.
+            combo.addItem(initial_value)
+            combo.setItemData(combo.count() - 1, "Not one of this form's standard options - kept as entered",
+                              Qt.ToolTipRole)
+        if initial_value:
             combo.setCurrentText(initial_value)
         else:
             combo.setCurrentIndex(-1)
@@ -1231,7 +1240,7 @@ class DashboardPage(QWidget):
         title = QLabel("K1B Equipment Inspection Tracker")
         title.setObjectName("PageTitle")
         layout.addWidget(title)
-        subtitle = QLabel("Instrumentation QA/QC Tracker")
+        subtitle = QLabel("Instrumentation & Electrical QA/QC Tracker")
         subtitle.setObjectName("PageSubtitle")
         layout.addWidget(subtitle)
 
@@ -1244,10 +1253,15 @@ class DashboardPage(QWidget):
         cards_row = QHBoxLayout()
         cards_row.setSpacing(16)
         totals = da.count_all_by_type()
-        for equip_key, etype in da.EQUIPMENT_TYPES.items():
+        for equip_key in da.types_in_discipline("Instrumentation"):
             breakdown = da.count_by_system_all_series(equip_key)
-            card = StatCard(f"{etype['label']}s logged", totals.get(equip_key, 0), breakdown)
+            card = StatCard(f"{da.EQUIPMENT_TYPES[equip_key]['plural']} logged",
+                            totals.get(equip_key, 0), breakdown)
             cards_row.addWidget(card)
+        by_form = {da.EQUIPMENT_TYPES[k]["plural"]: totals.get(k, 0)
+                   for k in da.types_in_discipline("Electrical")}
+        cards_row.addWidget(StatCard("Electrical records logged", sum(by_form.values()), by_form,
+                                     breakdown_title="BY FORM"))
         cards_row.addStretch()
         inner_layout.addLayout(cards_row)
 
@@ -1257,31 +1271,32 @@ class DashboardPage(QWidget):
         series_label.setObjectName("SectionLabel")
         inner_layout.addWidget(series_label, alignment=Qt.AlignLeft)
 
-        series_row = QHBoxLayout()
-        series_row.setSpacing(10)
-        for series_number in da.list_series():
+        # Wrapped into rows (not one long row each) so the page never scrolls
+        # sideways and the cards above keep the window's width.
+        series_grid = QGridLayout()
+        series_grid.setSpacing(10)
+        for i, series_number in enumerate(da.list_series()):
             btn = make_button(da.series_display_label(series_number), "Primary", width=140)
             btn.clicked.connect(lambda checked=False, n=series_number: self._open_first_type(n))
-            series_row.addWidget(btn)
-        series_row.addStretch()
-        inner_layout.addLayout(series_row)
+            series_grid.addWidget(btn, i // 6, i % 6)
+        inner_layout.addLayout(series_grid)
 
         by_series_label = QLabel("BY SERIES \u2013 INSTALLED / SUBMITTED / ACCEPTED")
         by_series_label.setObjectName("SectionLabel")
         inner_layout.addWidget(by_series_label, alignment=Qt.AlignLeft)
 
-        by_series_row = QHBoxLayout()
-        by_series_row.setSpacing(16)
+        by_series_grid = QGridLayout()
+        by_series_grid.setSpacing(16)
         series_numbers = da.list_series()
         if not series_numbers:
             none_label = QLabel("No series yet - add one from the sidebar.")
             none_label.setObjectName("StatLabel")
-            by_series_row.addWidget(none_label)
-        for series_number in series_numbers:
+            by_series_grid.addWidget(none_label, 0, 0)
+        for i, series_number in enumerate(series_numbers):
             summary = da.series_full_summary(series_number)
-            by_series_row.addWidget(SeriesStatCard(series_number, summary))
-        by_series_row.addStretch()
-        inner_layout.addLayout(by_series_row)
+            by_series_grid.addWidget(SeriesStatCard(series_number, summary), i // 3, i % 3,
+                                     Qt.AlignTop)
+        inner_layout.addLayout(by_series_grid)
 
         inner_layout.addStretch()
         scroll.setWidget(inner)
@@ -1323,6 +1338,8 @@ class DashboardPage(QWidget):
         menu = QMenu(self)
         series_numbers = da.list_series()
         for equip_key, etype in da.EQUIPMENT_TYPES.items():
+            if equip_key == da.types_in_discipline(etype["discipline"])[0]:
+                menu.addSection(etype["discipline"])
             submenu = menu.addMenu(f"{etype['label']} Log")
             added_any = False
             for series_number in series_numbers:
@@ -2358,9 +2375,12 @@ class RowDetailDialog(QDialog):
         self.row_num = row_num
         self.etype = da.EQUIPMENT_TYPES[equip_key]
         self.opened_edit = False
-        self.resize(760, 700)
 
         schema = self.etype["schema"]
+        if getattr(schema, "GRIDS", None):
+            self.resize(980, 720)
+        else:
+            self.resize(760, 700)
         try:
             self.values = da.read_full_row(series_number, equip_key, row_num)
         except Exception as exc:
@@ -2383,7 +2403,7 @@ class RowDetailDialog(QDialog):
         title = QLabel(key_val)
         title.setObjectName("PageTitle")
         hlayout.addWidget(title)
-        subtitle_bits = [da.series_display_label(series_number), self.etype["label"],
+        subtitle_bits = [da.series_display_label(series_number), self.etype["plural"],
                           f"workbook row {row_num}"]
         subtitle = QLabel(" \u00b7 ".join(subtitle_bits))
         subtitle.setObjectName("PageSubtitle")
@@ -2478,21 +2498,31 @@ class RowDetailDialog(QDialog):
         titles = dict(schema.SECTION_TITLES)
         titles.setdefault("control", "Status")
         sections = list(dict.fromkeys(f["section"] for f in schema.LOG_COLUMNS))
+        specs = getattr(schema, "GRIDS", [])
+        spec_of = {fid: i for i, spec in enumerate(specs) for _label, ids in spec["rows"]
+                   for fid in ids if fid}
         for section in sections:
             fields_here = [f for f in schema.LOG_COLUMNS if f["section"] == section
                             and f["id"] not in ("export_flag", "yanda_qa_signature")]
-            if self._field_filter == "filled":
-                fields_here = [f for f in fields_here if str(self.values.get(f["id"], "")).strip()]
-            elif self._field_filter == "blank":
-                fields_here = [f for f in fields_here if not str(self.values.get(f["id"], "")).strip()]
-            if not fields_here:
-                continue
             box = QGroupBox(titles.get(section, section.title()))
             grid = QGridLayout(box)
             grid.setHorizontalSpacing(14)
             grid.setVerticalSpacing(6)
             grid.setColumnStretch(1, 1)
-            for row, field in enumerate(fields_here):
+            row = 0
+            built = set()
+            for field in fields_here:
+                spec_index = spec_of.get(field["id"])
+                if spec_index is not None:
+                    if spec_index not in built:
+                        built.add(spec_index)
+                        table = self._record_table(specs[spec_index])
+                        if table is not None:
+                            grid.addWidget(table, row, 0, 1, 2)
+                            row += 1
+                    continue
+                if not self._shown_by_filter(field["id"]):
+                    continue
                 label = QLabel(field["label"])
                 label.setObjectName("FieldLabel")
                 label.setWordWrap(True)
@@ -2503,8 +2533,62 @@ class RowDetailDialog(QDialog):
                 value.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 grid.addWidget(label, row, 0)
                 grid.addWidget(value, row, 1)
+                row += 1
+            if row == 0:
+                box.deleteLater()
+                continue
             self.inner_layout.addWidget(box)
         self.inner_layout.addStretch()
+
+    def _shown_by_filter(self, field_id):
+        filled = bool(str(self.values.get(field_id, "") or "").strip())
+        return {"all": True, "filled": filled, "blank": not filled}[self._field_filter]
+
+    def _record_table(self, spec):
+        """Read-only counterpart of EditDialog._build_table - only rows with a
+        cell matching the current filter; None when no row qualifies."""
+        rows = [(label, ids) for label, ids in spec["rows"]
+                if any(self._shown_by_filter(fid) for fid in ids if fid)]
+        if not rows:
+            return None
+        fields_by_id = {f["id"]: f for f in self._schema.LOG_COLUMNS}
+        table = QWidget()
+        layout = QGridLayout(table)
+        layout.setContentsMargins(0, 0, 0, 4)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(4)
+        label_width = spec.get("row_header_width", 0)
+        if label_width:
+            layout.setColumnMinimumWidth(0, min(label_width, 240))
+        else:
+            layout.setColumnStretch(0, 1)
+        for c, (_header, width) in enumerate(spec["columns"], start=1):
+            if width:
+                layout.setColumnMinimumWidth(c, min(width, 110))
+            else:
+                layout.setColumnStretch(c, 1)
+        headers = [spec.get("row_header", "")] + [h for h, _w in spec["columns"]]
+        for c, text in enumerate(headers):
+            head = QLabel(text)
+            head.setObjectName("SectionLabel")
+            head.setWordWrap(True)
+            layout.addWidget(head, 0, c, Qt.AlignBottom)
+        for r, (row_label, field_ids) in enumerate(rows, start=1):
+            label = QLabel(row_label)
+            label.setObjectName("FieldLabel")
+            label.setWordWrap(True)
+            layout.addWidget(label, r, 0)
+            for c, fid in enumerate(field_ids, start=1):
+                if fid is None:
+                    continue
+                raw = str(self.values.get(fid, "") or "").strip()
+                # Blank cells stay blank like the paper form; screen readers still hear it.
+                value = QLabel(raw)
+                value.setWordWrap(True)
+                value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                value.setAccessibleName(f"{fields_by_id[fid]['label']}: {raw or 'not recorded'}")
+                layout.addWidget(value, r, c)
+        return table
 
     def _open_edit(self):
         dlg = EditDialog(self.parent(), self.series_number, self.equip_key,
@@ -2647,10 +2731,14 @@ class EditDialog(QDialog):
         self.row_num = row_num
         self.etype = da.EQUIPMENT_TYPES[equip_key]
         self.widgets = {}
-        self.resize(1000, 720)
 
         schema = self.etype["schema"]
         self.schema = schema
+        # Forms with tables need the extra width to show a full row of columns.
+        if getattr(schema, "GRIDS", None):
+            self.resize(1180, 760)
+        else:
+            self.resize(1000, 720)
         existing = {} if is_new else da.read_full_row(series_number, equip_key, row_num)
         effective = dict(existing)
         if is_new:
@@ -2658,7 +2746,7 @@ class EditDialog(QDialog):
                 effective.setdefault(fid, val)
 
         key_field = self.etype["key_field"]
-        self.setWindowTitle(f"{'Add ' if is_new else 'Edit '}{self.etype['label']} – "
+        self.setWindowTitle(f"{'Add' if is_new else 'Edit'} {self.etype['noun']} – "
                              f"{da.series_display_label(series_number)}, row {row_num}")
 
         outer = QVBoxLayout(self)
@@ -2810,9 +2898,24 @@ class EditDialog(QDialog):
 
     # ------------------------------------------------------------- building
     def _build_section_body(self, grid, fields, existing):
+        specs = getattr(self.schema, "GRIDS", [])
+        spec_of = {fid: i for i, spec in enumerate(specs) for _label, ids in spec["rows"]
+                   for fid in ids if fid}
+        built = set()
         row = 0
         col_pair = 0
         for field in fields:
+            spec_index = spec_of.get(field["id"])
+            if spec_index is not None:
+                # A table is placed where its first field would have gone.
+                if spec_index not in built:
+                    built.add(spec_index)
+                    if col_pair != 0:
+                        row += 1
+                        col_pair = 0
+                    grid.addWidget(self._build_table(specs[spec_index], existing), row, 0, 1, 4)
+                    row += 1
+                continue
             if field["id"] == "yanda_qa_signature":
                 if col_pair != 0:
                     row += 1
@@ -2846,6 +2949,54 @@ class EditDialog(QDialog):
                 else:
                     col_pair = 0
                     row += 1
+
+    def _build_table(self, spec, existing):
+        """One schema GRIDS entry as a real table: a header row, then one row
+        per item, each cell the same widget the loose layout would use."""
+        fields_by_id = {f["id"]: f for f in self.schema.LOG_COLUMNS}
+        table = QWidget()
+        layout = QGridLayout(table)
+        layout.setContentsMargins(0, 2, 0, 6)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(5)
+
+        label_width = spec.get("row_header_width", 0)
+        if label_width:
+            layout.setColumnMinimumWidth(0, label_width)
+        else:
+            layout.setColumnStretch(0, 1)
+        for c, (_header, width) in enumerate(spec["columns"], start=1):
+            if width:
+                layout.setColumnMinimumWidth(c, width)
+            else:
+                layout.setColumnStretch(c, 1)
+
+        headers = [spec.get("row_header", "")] + [h for h, _w in spec["columns"]]
+        for c, text in enumerate(headers):
+            head = QLabel(text)
+            head.setObjectName("SectionLabel")
+            head.setWordWrap(True)
+            layout.addWidget(head, 0, c, Qt.AlignBottom)
+
+        for r, (row_label, field_ids) in enumerate(spec["rows"], start=1):
+            label = QLabel(row_label)
+            label.setWordWrap(True)
+            if label_width:
+                label.setFixedWidth(label_width)
+            layout.addWidget(label, r, 0)
+            for c, fid in enumerate(field_ids, start=1):
+                if fid is None:
+                    continue
+                field = fields_by_id[fid]
+                widget = self._make_widget(field, existing.get(fid, ""))
+                width = spec["columns"][c - 1][1]
+                if width:
+                    widget.setFixedWidth(width)
+                widget.setToolTip(field["label"])
+                widget.setAccessibleName(field["label"])
+                self.widgets[fid] = widget
+                layout.addWidget(widget, r, c)
+        return table
 
     def _add_signature_row(self, grid, row):
         active = da.get_active_signature_path()
@@ -3435,7 +3586,7 @@ class ExportDialog(QDialog):
         self.equip_key = equip_key
         self.filters = dict(filters or {})
         self.etype = da.EQUIPMENT_TYPES[equip_key]
-        self.setWindowTitle(f"Export {self.etype['label']}s \u2013 "
+        self.setWindowTitle(f"Export {self.etype['plural']} \u2013 "
                              f"{da.series_display_label(series_number)}")
         # The old fixed 500x680 size (with no size policy) could put the
         # Run Export button off the bottom of a short laptop screen, under
@@ -3498,6 +3649,9 @@ class ExportDialog(QDialog):
             hint.setObjectName("FieldLabel")
             hint.setWordWrap(True)
             layout.addWidget(hint)
+        if not hasattr(self.etype["schema"], "CONTROL_FIELD"):
+            flagged_radio.setEnabled(False)
+            flagged_radio.setToolTip("This form's Excel log has no “Export to PDF” column")
         layout.addWidget(flagged_radio)
         layout.addWidget(all_radio)
 
@@ -3525,6 +3679,10 @@ class ExportDialog(QDialog):
         self.flatten_check.setChecked(settings.get("default_flatten", False))
         self.sig_check = QCheckBox("Include signature")
         self.sig_check.setChecked(settings.get("default_include_signature", True))
+        if not hasattr(self.etype["export_module"], "stamp_signature"):
+            self.sig_check.setChecked(False)
+            self.sig_check.setEnabled(False)
+            self.sig_check.setToolTip("This form is hand-signed - it has no signature stamp")
         opts_row.addWidget(self.flatten_check)
         opts_row.addWidget(self.sig_check)
         opts_row.addStretch()
@@ -3564,12 +3722,12 @@ class ExportDialog(QDialog):
 
         self.sign_date_check = None
         self.sign_date_edit = None
+        qa_label = next((f["label"] for f in self.etype["schema"].LOG_COLUMNS
+                         if f["id"] == self.etype["qa_date_field"]), "the sign-off date")
         sign_off_hint = QLabel(
-            "Sign-off dates come from real columns now, the same for both equipment types - "
-            "edit them in the Index grid, or select rows and use “Set a date…” in "
-            "the selection bar, before exporting, and they'll appear on the PDF automatically."
-            + (" (QA Rep Date / Client Rep Date, in this case.)" if equip_key == "transmitter" else
-               " (YANDA QC Representative - Date, in this case.)"))
+            "Sign-off dates come from real columns - edit them in the record, or select rows "
+            "and use “Set a date…” in the selection bar, before exporting, and they'll "
+            f"appear on the PDF automatically. ({qa_label}, in this case.)")
         sign_off_hint.setObjectName("FieldLabel")
         sign_off_hint.setWordWrap(True)
         layout.addWidget(sign_off_hint)
@@ -3878,7 +4036,7 @@ class PopulatingWizardDialog(QDialog):
         form.addWidget(QLabel("Equipment type"), 1, 0)
         self.equip_combo = QComboBox()
         for key, etype in da.EQUIPMENT_TYPES.items():
-            self.equip_combo.addItem(f"{etype['label']}s", key)
+            self.equip_combo.addItem(f"{etype['plural']}  ({etype['discipline']})", key)
         self.equip_combo.currentIndexChanged.connect(self._refresh_system_choices)
         form.addWidget(self.equip_combo, 1, 1)
 

@@ -200,5 +200,37 @@ SECTION_TITLES = {
 
 LOG_COLUMNS = FIELDS
 
+
+def _checklist(prefix, items):
+    return {
+        "row_header": "Task",
+        "row_header_width": 0,
+        "columns": [("Yes / Initial", 92), ("N/A Initial", 92)],
+        "rows": [(f"{n}. {text}", [f"{prefix}_item_{n}_yes", f"{prefix}_item_{n}_na"])
+                 for n, text in enumerate(items, start=1)],
+    }
+
+
+# Edit-form table layouts for gui_app.EditDialog - presentation only. Each
+# row is (row label, [field id per column]); a column width of 0 stretches.
+GRIDS = [
+    _checklist("full_removal", FULL_REMOVAL_ITEMS),
+    _checklist("partial_removal", PARTIAL_REMOVAL_ITEMS),
+    _checklist("reinstall", REINSTALL_ITEMS),
+    _checklist("walkdown", WALKDOWN_ITEMS),
+    {
+        "row_header": "Test",
+        "row_header_width": 150,
+        "columns": [("Voltage", 104), ("Date", 96), ("Amb. °C", 64), ("Tested By", 0),
+                    ("Test Equip. #", 92), ("IR Value", 92), ("Continuity", 92)],
+        "rows": [(row_label, [f"{prefix}_{part}" for part in ("voltage", "date", "amb_temp", "tested_by",
+                                                              "test_equip", "ir_value", "continuity")])
+                 for (prefix, _), row_label in zip(TEST_BLOCKS, [
+                     "1. Before rollback (crew)", "2. After rollback (crew)",
+                     "3. Before re-install (crew)", "4. After installation (QC)",
+                     "5. After insulation (QC)"])],
+    },
+]
+
 if __name__ == "__main__":
     print(f"Total fields: {len(FIELDS)}")

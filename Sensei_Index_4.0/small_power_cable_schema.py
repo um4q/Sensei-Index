@@ -23,6 +23,7 @@ un-mapped header cells) - only Location is a real per-row field. There is
 no signature field anywhere on the real source PDF for either
 representative - hand-sign both after exporting.
 """
+import re
 
 FIELDS = []
 
@@ -127,6 +128,41 @@ SECTION_TITLES = {
     "part6": "PART 6 – Remarks",
     "part7": "PART 7 – Inspected/Approved By",
 }
+
+# Edit-form table layouts for gui_app.EditDialog - presentation only. Each
+# row is (row label, [field id per column]); a column width of 0 stretches.
+GRIDS = [
+    {
+        "row_header": "Check",
+        "row_header_width": 0,
+        "columns": [("Initial / NA", 100)],
+        "rows": [(re.sub(r"\s*\(Initial/NA\)\s*$", "", by_id(f"vis_item_{n}_initial")["label"]),
+                  [f"vis_item_{n}_initial"]) for n in range(1, 12)],
+    },
+    {
+        "row_header": "",
+        "row_header_width": 120,
+        "columns": [("Make", 0), ("Model", 0), ("Asset/Serial #", 0), ("Calibrated On", 110)],
+        "rows": [(f"Test Equipment {n}", [f"test_equip_{n}_{part}" for part in
+                                          ("make", "model", "asset_serial", "calibrated_on")])
+                 for n in (1, 2)],
+    },
+    {
+        "row_header": "",
+        "row_header_width": 150,
+        "columns": [("Conductor–Conductor", 0), ("Conductor–Ground", 0), ("Conductor–Armour", 0)],
+        "rows": [("Insulation Resistance", ["insulation_cond_to_cond", "insulation_cond_to_ground",
+                                            "insulation_cond_to_armour"]),
+                 ("Continuity", ["continuity_cond_to_cond", "continuity_cond_to_ground",
+                                 "continuity_cond_to_armour"])],
+    },
+    {
+        "row_header": "",
+        "row_header_width": 50,
+        "columns": [("Remarks", 0)],
+        "rows": [(f"Line {n}", [f"remarks_line{n}"]) for n in (1, 2, 3)],
+    },
+]
 
 if __name__ == "__main__":
     print(f"Total fields: {len(FIELDS)}")

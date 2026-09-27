@@ -144,5 +144,23 @@ SECTION_TITLES = {
 
 LOG_COLUMNS = FIELDS
 
+# Edit-form table layouts for gui_app.EditDialog - presentation only. Each
+# row is (row label, [field id per column]); a column width of 0 stretches.
+GRIDS = [
+    {
+        "row_header": "Item",
+        "row_header_width": 330,
+        "columns": [("Result (Initial/N/A)", 118), ("Comments", 0)],
+        "rows": [(f"{n}. {label}", [f"pre_ins_item_{n}_result", f"pre_ins_item_{n}_comments"])
+                 for n, label in enumerate(_CHECKLIST_LABELS, start=1)],
+    },
+    {
+        "row_header": "SR/MI",
+        "row_header_width": 90,
+        "columns": [("Reading", 0), ("Passed/Fail", 118)],
+        "rows": [(f"@ {v} VDC", [f"megger_{v}_reading", f"megger_{v}_result"]) for v in (500, 1000, 2500)],
+    },
+]
+
 if __name__ == "__main__":
     print(f"Total fields: {len(FIELDS)}")

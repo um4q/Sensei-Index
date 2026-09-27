@@ -141,6 +141,43 @@ SECTION_TITLES = {
     "part8": "PART 8 – Inspected/Approved By",
 }
 
+# Edit-form table layouts for gui_app.EditDialog - presentation only. Each
+# row is (row label, [field id per column]); a column width of 0 stretches.
+GRIDS = [
+    {
+        "row_header": "",
+        "row_header_width": 120,
+        "columns": [("Make", 0), ("Model", 0), ("Asset/Serial #", 0), ("Calibrated On", 110)],
+        "rows": [(f"Test Equipment {n}", [f"test_equip_{n}_{part}" for part in
+                                          ("make", "model", "asset_serial", "calibrated_on")])
+                 for n in (1, 2)],
+    },
+    {
+        "row_header": "",
+        "row_header_width": 56,
+        "columns": [("Primary–Ground", 0), ("Secondary–Ground", 0), ("Primary–Secondary", 0),
+                    ("Test Voltage", 92), ("Ambient", 92), ("Initial", 64)],
+        "rows": [(f"Row {n}", [f"insulation_row_{n}_{part}" for part in
+                               ("primary_to_ground", "secondary_to_ground", "primary_to_secondary",
+                                "test_voltage", "ambient", "initial")])
+                 for n in (1, 2)],
+    },
+    {
+        "row_header": "Winding",
+        "row_header_width": 120,
+        "columns": [("1", 0), ("2", 0), ("3", 0)],
+        "rows": [("Primary (H)", ["winding_h1", "winding_h2", "winding_h3"]),
+                 ("Secondary (X)", ["winding_x1", "winding_x2", "winding_x3"])],
+    },
+    {
+        "row_header": "Check",
+        "row_header_width": 0,
+        "columns": [("Initial / NA", 100)],
+        "rows": [(by_id(f"vis_item_{n}_initial")["label"].replace(" (Initial/NA)", ""),
+                  [f"vis_item_{n}_initial"]) for n in range(1, 9)],
+    },
+]
+
 if __name__ == "__main__":
     print(f"Total fields: {len(FIELDS)}")
     from collections import Counter

@@ -21,7 +21,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QFrame, QSizePolicy, QInputDialog,
+    QFrame, QSizePolicy, QInputDialog, QTabBar,
 )
 
 import data_access as da
@@ -94,7 +94,37 @@ HEADER_COL_BG = QColor(_C["chrome"])
 # so it isn't worth inventing a theme.py token for just this one spot.
 LEGEND_EXTRA_BLUE = "#749dc4"
 
-ROW_NUM_COL = 0  # inserted before COLUMNS at render time
+ROW_NUM_COL = 0  # inserted before the columns at render time
+
+
+def columns_for(etype):
+    """This type's Index columns as dicts: its own "index_columns" (plus the
+    shared Stage/sign-off pair) if it declares them, else the instrument set."""
+    custom = etype.get("index_columns")
+    if not custom:
+        return [{"label": label, "group": group, "width": width, "kind": kind,
+                 "stretch": label in STRETCH_COLUMNS}
+                for label, group, width, kind in COLUMNS]
+    return list(custom) + [
+        {"label": "Stage", "group": "PROGRESS", "width": 150, "kind": "stage"},
+        {"label": etype.get("qa_date_label", "QA Date"), "group": "PROGRESS", "width": 105,
+         "kind": "text", "field": "qa_date"},
+    ]
+
+
+def group_colors_for(columns, custom):
+    """(band colors, text colors) by group. The instrument set keeps its fixed
+    palette; custom sets alternate the same two tones so neighbours never merge."""
+    if not custom:
+        return GROUP_COLORS, GROUP_TEXT
+    bands, texts = {}, {}
+    for c in columns:
+        if c["group"] not in bands:
+            highlight = len(bands) % 2 == 0
+            bands[c["group"]] = _C["highlight"] if highlight else _C["group_alt"]
+            if highlight:
+                texts[c["group"]] = _C["navy"]
+    return bands, texts
 
 
 class GroupedHeaderView(QHeaderView):
@@ -108,8 +138,11 @@ class GroupedHeaderView(QHeaderView):
 
     GROUP_BAND_H = 18
 
-    def __init__(self, parent=None):
+    def __init__(self, columns, group_colors, group_text, parent=None):
         super().__init__(Qt.Horizontal, parent)
+        self.columns = columns
+        self.group_colors = group_colors
+        self.group_text = group_text
         self.setFixedHeight(18 + 26)
         self.setSectionsClickable(True)
 
@@ -118,9 +151,10 @@ class GroupedHeaderView(QHeaderView):
         if logical_index == ROW_NUM_COL:
             group, label = "", "#"
         else:
-            label, group, _w, _kind = COLUMNS[logical_index - 1]
-        band_color = QColor(GROUP_COLORS.get(group, HEADER_COL_BG))
-        text_color = QColor(GROUP_TEXT.get(group, _C["body"]))
+            col = self.columns[logical_index - 1]
+            label, group = col["label"], col["group"]
+        band_color = QColor(self.group_colors.get(group, HEADER_COL_BG))
+        text_color = QColor(self.group_text.get(group, _C["body"]))
 
         band_rect = rect.adjusted(0, 0, 0, -(rect.height() - self.GROUP_BAND_H))
         painter.fillRect(band_rect, band_color)
@@ -137,7 +171,7 @@ class GroupedHeaderView(QHeaderView):
         painter.setFont(f)
         painter.setPen(text_color)
         show_group_label = (logical_index == ROW_NUM_COL) or (
-            logical_index == 1 or COLUMNS[logical_index - 2][1] != group)
+            logical_index == 1 or self.columns[logical_index - 2]["group"] != group)
         if show_group_label and group:
             painter.drawText(band_rect.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft, group)
 
@@ -190,7 +224,7 @@ def doc_chip_label(status):
     # high-contrast mode's stronger-border/no-zebra treatment, same as any
     # other themed widget (GUI audit Part 3 #22).
     lbl.setObjectName(object_name)
-    lbl.setStyleSheet(f"{css}font:600 10px 'Barlow Condensed SemiBold';padding:2px 5px;")
+    lbl.setStyleSheet("font:600 10px 'Barlow Condensed SemiBold';padding:2px 5px;")
     lbl.setToolTip(tip)
     lbl.setAlignment(Qt.AlignCenter)
     return lbl
@@ -210,6 +244,9 @@ class IndexView(QWidget):
         self.series_number = series_number
         self.equip_key = equip_key
         self.etype = da.EQUIPMENT_TYPES[equip_key]
+        self.columns = columns_for(self.etype)
+        self.group_colors, self.group_text = group_colors_for(
+            self.columns, bool(self.etype.get("index_columns")))
         self.all_rows = []
         self.filtered_rows = []
         self.density = "Survey"
@@ -235,14 +272,20 @@ class IndexView(QWidget):
 
     # ------------------------------------------------------------- header
     def _build_toolbar(self):
+        self._type_counts = {k: v["total"] for k, v in
+                             da.series_full_summary(self.series_number).items()}
+        rows = QVBoxLayout()
+        rows.setSpacing(8)
         row = QHBoxLayout()
         title = QLabel(da.series_display_label(self.series_number))
         title.setObjectName("PageTitle")
         row.addWidget(title)
-        row.addLayout(self._build_equip_type_tabs())
+        row.addSpacing(14)
         self.subtitle = QLabel("")
         self.subtitle.setObjectName("PageSubtitle")
         row.addWidget(self.subtitle)
+        row.addSpacing(22)
+        row.addLayout(self._build_discipline_switch())
         row.addStretch()
 
         density_row = QHBoxLayout()
@@ -258,7 +301,8 @@ class IndexView(QWidget):
             density_row.addWidget(btn)
         row.addLayout(density_row)
 
-        add_btn = QPushButton(f"+ Add {self.etype['label'].lower()}")
+        # "&&": a lone "&" in button text is eaten as a keyboard-mnemonic marker.
+        add_btn = QPushButton(f"+ Add {self.etype['noun']}".replace("&", "&&"))
         add_btn.setObjectName("Primary")
         add_btn.clicked.connect(self.add_new)
         row.addWidget(add_btn)
@@ -266,42 +310,62 @@ class IndexView(QWidget):
         export_btn.setObjectName("Ghost")
         export_btn.clicked.connect(self.open_export)
         row.addWidget(export_btn)
-        return row
+        rows.addLayout(row)
+        rows.addLayout(self._build_equip_type_tabs())
+        return rows
 
-    def _build_equip_type_tabs(self):
-        """Plate 1b's equipment-type tabs. Each series has two separate
-        logs - Transmitters and Valves - and this table only ever shows
-        one at a time (self.equip_key), so without this there is no way
-        to reach the other one: the series rail's own counts already sum
-        both types together (series_full_summary), but its row always
-        opens straight into Transmitters."""
-        tabs = QHBoxLayout()
-        tabs.setContentsMargins(18, 0, 0, 0)
-        tabs.setSpacing(0)
-        for key, etype in da.EQUIPMENT_TYPES.items():
-            label = etype["label"] + "s"
-            is_current = key == self.equip_key
-            btn = QPushButton(label)
-            btn.setObjectName("EquipTab")
+    def _build_discipline_switch(self):
+        """Instrumentation / Electrical: switching opens that discipline's
+        first log with records in this series (or its first log)."""
+        counts = self._type_counts
+        current = self.etype["discipline"]
+        switch = QHBoxLayout()
+        switch.setSpacing(0)
+        for discipline in da.DISCIPLINES:
+            keys = da.types_in_discipline(discipline)
+            total = sum(counts.get(k, 0) for k in keys)
+            is_current = discipline == current
+            btn = QPushButton(f"{discipline}  {total}")
+            btn.setObjectName("DensityButton")
             btn.setCheckable(True)
             btn.setChecked(is_current)
-            # "active" property (not just :checked) to match theme.py's
-            # existing QPushButton#EquipTab[active="true"] rule and the
-            # same convention gui_app.py's own RailRow buttons use - fixed
-            # for this widget's whole lifetime (switching tabs swaps in a
-            # brand new IndexView rather than toggling this one in place),
-            # so no unpolish/polish-on-click is needed the way RailRow's
-            # own dynamically-changing "active" row does.
-            btn.setProperty("active", "true" if is_current else "false")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            btn.setAccessibleName(f"{discipline}, {total} records" + (", showing" if is_current else ""))
             if is_current:
-                btn.setAccessibleName(f"{label}, showing")
+                btn.clicked.connect(lambda _c=False, b=btn: b.setChecked(True))
             else:
-                btn.setAccessibleName(f"Switch to {label}")
+                target = next((k for k in keys if counts.get(k)), keys[0])
                 btn.clicked.connect(
-                    lambda _c=False, sn=self.series_number, k=key: self.main_window.show_index(sn, k))
-            tabs.addWidget(btn)
+                    lambda _c=False, sn=self.series_number, k=target: self.main_window.show_index(sn, k))
+            switch.addWidget(btn)
+        return switch
+
+    def _build_equip_type_tabs(self):
+        """Plate 1b's equipment-type tabs - just the current discipline's logs
+        (all ten in one row pushed the window past 2,200px). A QTabBar
+        scrolls instead of widening the window when it's narrow."""
+        counts = self._type_counts
+        current = self.etype["discipline"]
+        tabs = QHBoxLayout()
+        tabs.setContentsMargins(0, 0, 0, 0)
+        tabs.setSpacing(0)
+        bar = QTabBar()
+        bar.setObjectName("EquipTabs")
+        bar.setDrawBase(False)
+        bar.setExpanding(False)
+        bar.setUsesScrollButtons(True)
+        keys = da.types_in_discipline(current)
+        for key in keys:
+            n = counts.get(key, 0)
+            plural = da.EQUIPMENT_TYPES[key]["plural"]
+            label = f"{plural}  ({n})" if n else plural
+            idx = bar.addTab(label.replace("&", "&&"))
+            bar.setTabData(idx, key)
+            bar.setAccessibleTabName(idx, f"{plural}, {n} records")
+        bar.setCurrentIndex(keys.index(self.equip_key))
+        # Connected only after setCurrentIndex so building the bar doesn't navigate.
+        bar.currentChanged.connect(
+            lambda i, sn=self.series_number: self.main_window.show_index(sn, bar.tabData(i)))
+        tabs.addWidget(bar, stretch=1)
         return tabs
 
     def _set_density(self, name):
@@ -315,7 +379,11 @@ class IndexView(QWidget):
         row = QHBoxLayout()
         self.search_edit = QLineEdit()
         self.search_edit.setObjectName("FilterSearch")
-        self.search_edit.setPlaceholderText(f"⌕ Search tag, loop, service, P&ID")
+        if self.etype.get("index_columns"):
+            searchable = ", ".join(c["label"].lower() for c in self.etype["index_columns"][:3])
+            self.search_edit.setPlaceholderText(f"⌕ Search {searchable}, …")
+        else:
+            self.search_edit.setPlaceholderText("⌕ Search tag, loop, service, P&ID")
         self.search_edit.textChanged.connect(lambda _t: self._debounce.start())
         row.addWidget(self.search_edit, stretch=1)
         self.exception_label = QLabel("")
@@ -328,24 +396,29 @@ class IndexView(QWidget):
         frame.setObjectName("SystemLegend")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(10, 6, 10, 6)
-        kicker = QLabel("SYSTEM")
+        kicker = QLabel(self.etype["group_labels"][0].upper())
         kicker.setObjectName("LegendKicker")
         layout.addWidget(kicker)
         self.legend_body = QHBoxLayout()
         layout.addLayout(self.legend_body)
         layout.addStretch()
-        note = QLabel("Swatches are assigned per system and the name is always written out beside them")
+        group_word = self.etype["group_labels"][0].lower()
+        note = QLabel(f"Swatches are assigned per {group_word} and the name is always written out beside them")
         note.setObjectName("FieldLabel")
+        # Clips instead of setting a ~1,700px minimum width for the whole page.
+        note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        note.setToolTip(note.text())
         layout.addWidget(note)
         return frame
 
     # -------------------------------------------------------------- table
     def _build_table(self):
-        self.table = QTableWidget(0, len(COLUMNS) + 1)
+        self.table = QTableWidget(0, len(self.columns) + 1)
         self.table.setObjectName("IndexTable")
-        header = GroupedHeaderView(self.table)
+        header = GroupedHeaderView(self.columns, self.group_colors, self.group_text, self.table)
         self.table.setHorizontalHeader(header)
-        self.table.setHorizontalHeaderLabels(["#"] + [c[0] for c in COLUMNS])
+        self.table.setHorizontalHeaderLabels(["#"] + [c["label"] for c in self.columns])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -358,16 +431,16 @@ class IndexView(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setColumnWidth(0, 34)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        for i, (label, _group, width, _kind) in enumerate(COLUMNS, start=1):
+        for i, col in enumerate(self.columns, start=1):
             # Service/System stretch to absorb whatever width is left over
             # instead of every column running further past the viewport
             # (GUI audit Part 3 #25). A Stretch section can't be dragged by
             # hand, unlike the Interactive ones - trading that off is what
             # buys back screen space without a full "manage columns" UI.
-            mode = QHeaderView.Stretch if label in STRETCH_COLUMNS else QHeaderView.Interactive
+            mode = QHeaderView.Stretch if col.get("stretch") else QHeaderView.Interactive
             self.table.horizontalHeader().setSectionResizeMode(i, mode)
             if mode == QHeaderView.Interactive:
-                self.table.setColumnWidth(i, width)
+                self.table.setColumnWidth(i, col["width"])
         self.table.horizontalHeader().setMinimumSectionSize(60)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.doubleClicked.connect(lambda idx: self.edit_row_at(idx.row()))
@@ -472,22 +545,31 @@ class IndexView(QWidget):
         rows = self.all_rows
         if query:
             terms = query.split()
+            hay_keys = ["key_value", "loop_id", "desc", "kind", "pid_number"]
+            for col in self.columns:
+                hay_keys.extend(col.get("fields") or ([col["field"]] if "field" in col else []))
+
             def matches(r):
-                hay = " ".join(str(r.get(k, "")) for k in
-                                ("key_value", "loop_id", "desc", "kind", "pid_number")).lower()
+                hay = " ".join(str(r.get(k, "")) for k in hay_keys).lower()
                 return all(t in hay for t in terms)
             rows = [r for r in rows if matches(r)]
         self.filtered_rows = rows
         self._render_rows()
 
-        missing_serial = sum(1 for r in self.all_rows if not r.get("serial"))
         open_ecn = sum(1 for r in self.all_rows if r.get("open_ecns"))
-        missing_cal_due = sum(1 for r in self.all_rows if not r.get("cal_due_date"))
-        self.exception_label.setText(
-            f"{missing_serial} serials missing · {open_ecn} open ECNs · "
-            f"{missing_cal_due} awaiting calibration date")
+        parts = []
+        if self.etype.get("serial_field"):
+            parts.append(f"{sum(1 for r in self.all_rows if not r.get('serial'))} serials missing")
+        parts.append(f"{open_ecn} open ECNs")
+        if self.etype.get("index_columns"):
+            parts.append(f"{sum(1 for r in self.all_rows if not r.get('qa_date'))} awaiting sign-off date")
+        else:
+            parts.append(f"{sum(1 for r in self.all_rows if not r.get('cal_due_date'))} "
+                         f"awaiting calibration date")
+        self.exception_label.setText(" · ".join(parts))
         self.shown_label.setText(f"{len(rows)} of {len(self.all_rows)} shown")
-        self.subtitle.setText(f"{len(self.all_rows)} {self.etype['label'].lower()}s")
+        n = len(self.all_rows)
+        self.subtitle.setText(f"{n} record{'' if n == 1 else 's'}")
 
     def _render_rows(self):
         d = DENSITIES[self.density]
@@ -545,7 +627,8 @@ class IndexView(QWidget):
                 "DS Rev": entry.get("datasheet_rev") or "—",
                 "QA Date": entry.get("qa_date") or "—",
             }
-            for c, (label, _group, _w, kind) in enumerate(COLUMNS, start=1):
+            for c, col in enumerate(self.columns, start=1):
+                label, kind = col["label"], col["kind"]
                 if kind == "stage":
                     self.table.setCellWidget(r, c, StageCell(entry["stage"], entry["key_value"]))
                     continue
@@ -571,11 +654,16 @@ class IndexView(QWidget):
                     self.table.setItem(r, c, item)
                     continue
 
-                text = values.get(label, entry.get(label, "") or "—")
+                if kind == "count":
+                    text = str(sum(1 for f in col["fields"] if entry.get(f)))
+                elif "field" in col:
+                    text = entry.get(col["field"]) or "—"
+                else:
+                    text = values.get(label, entry.get(label, "") or "—")
                 item = QTableWidgetItem(str(text))
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                item.setFont(mono_font if kind in ("mono", "range") else font)
-                if kind == "range":
+                item.setFont(mono_font if kind in ("mono", "range", "count") else font)
+                if kind in ("range", "count"):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 # No explicit background here any more - setAlternatingRow
                 # Colors() (see _build_table) now supplies the zebra stripe

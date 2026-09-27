@@ -157,10 +157,27 @@ def _mutating_workbook():
 # ---------------------------------------------------------------------------
 # Equipment type registry - the single place that defines what a
 # "Transmitter" or a "Valve" IS, as far as the GUI is concerned.
+#
+# "label" is also the stem of every Log sheet's name ("<label> Log <series>",
+# see add_series()), so it never changes once sheets exist; "plural" and
+# "noun" are the display names the GUI shows instead. "index_columns" (only
+# on types without the instrument-style engineering fields) replaces the
+# Index table's Loop/P&ID/calibration columns with ones that fit the form.
 # ---------------------------------------------------------------------------
+DISCIPLINES = ("Instrumentation", "Electrical")
+
+
+def _col(label, group, width, field, kind="text", stretch=False):
+    return {"label": label, "group": group, "width": width, "field": field,
+            "kind": kind, "stretch": stretch}
+
+
 EQUIPMENT_TYPES = {
     "transmitter": {
         "label": "Transmitter",
+        "discipline": "Instrumentation",
+        "plural": "Transmitters",
+        "noun": "transmitter",
         "schema": transmitter_schema,
         "export_module": export_to_pdf,
         "key_field": "tag",
@@ -183,6 +200,9 @@ EQUIPMENT_TYPES = {
     },
     "valve": {
         "label": "Valve",
+        "discipline": "Instrumentation",
+        "plural": "Valves",
+        "noun": "valve",
         "schema": valve_schema,
         "export_module": export_valve_to_pdf,
         "key_field": "equip_number",
@@ -198,6 +218,9 @@ EQUIPMENT_TYPES = {
     },
     "gauge": {
         "label": "Gauge",
+        "discipline": "Instrumentation",
+        "plural": "Gauges",
+        "noun": "gauge",
         "schema": gauge_schema,
         "export_module": export_gauge_to_pdf,
         "key_field": "tag",
@@ -222,6 +245,9 @@ EQUIPMENT_TYPES = {
     },
     "transformer_test": {
         "label": "Transformer Test",
+        "discipline": "Electrical",
+        "plural": "Transformer Tests",
+        "noun": "transformer test",
         "schema": transformer_test_schema,
         "export_module": export_transformer_test_to_pdf,
         "key_field": "tag",
@@ -233,10 +259,24 @@ EQUIPMENT_TYPES = {
         "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
         "serial_field": "serial_number",
         "qa_date_field": "yanda_rep_date",
+        "qa_date_label": "Yanda Sign-off",
         "desc_field": "system",
+        "index_columns": [
+            _col("Tag", "IDENTITY", 150, "tag", "mono"),
+            _col("System", "IDENTITY", 150, "system", stretch=True),
+            _col("Make", "NAMEPLATE", 110, "make"),
+            _col("Model", "NAMEPLATE", 120, "model"),
+            _col("Serial #", "NAMEPLATE", 120, "serial_number", "mono"),
+            _col("kVA", "NAMEPLATE", 70, "rating_kva", "range"),
+            _col("Primary V", "NAMEPLATE", 90, "primary_voltage", "range"),
+            _col("Secondary V", "NAMEPLATE", 95, "secondary_voltage", "range"),
+        ],
     },
     "small_power_cable": {
         "label": "Small Power Cable",
+        "discipline": "Electrical",
+        "plural": "Power & Control Cables",
+        "noun": "cable record",
         "schema": small_power_cable_schema,
         "export_module": export_small_power_cable_to_pdf,
         "key_field": "cable_tag_number",
@@ -246,16 +286,28 @@ EQUIPMENT_TYPES = {
         "group_labels": ["System"],
         "date_fields": ["yanda_rep_date", "client_rep_date"],
         "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
-        # No per-cable serial number concept on this form (see
-        # small_power_cable_schema.py's docstring) - the closest real field
-        # is the test equipment's own asset/serial number, same fallback
-        # idea as reusing a field that exists rather than inventing one.
-        "serial_field": "test_equip_1_asset_serial",
+        # None: a cable has no equipment serial, so "No serial number" would
+        # flag every row for nothing.
+        "serial_field": None,
         "qa_date_field": "yanda_rep_date",
+        "qa_date_label": "Yanda Sign-off",
         "desc_field": "system",
+        "index_columns": [
+            _col("Cable Tag", "IDENTITY", 160, "cable_tag_number", "mono"),
+            _col("System", "IDENTITY", 150, "system", stretch=True),
+            _col("Cable Type", "CABLE", 120, "cable_type"),
+            _col("Size", "CABLE", 80, "cable_size", "mono"),
+            _col("Cond.", "CABLE", 60, "number_of_conductors", "range"),
+            _col("Rated V", "CABLE", 80, "cable_rated_voltage", "range"),
+            _col("IR Cond–Gnd", "TESTS", 105, "insulation_cond_to_ground", "range"),
+            _col("Continuity", "TESTS", 95, "continuity_cond_to_cond", "range"),
+        ],
     },
     "general_equip_install": {
         "label": "General Equip Install",
+        "discipline": "Electrical",
+        "plural": "Equipment Installs",
+        "noun": "equipment install",
         "schema": general_equip_install_schema,
         "export_module": export_general_equip_install_to_pdf,
         "key_field": "tag_number",
@@ -267,10 +319,24 @@ EQUIPMENT_TYPES = {
         "date_labels": ["Cal. Due", "Yanda Rep. Date", "Client Rep. Date"],
         "serial_field": "serial_number",
         "qa_date_field": "yanda_rep_date",
+        "qa_date_label": "Yanda Sign-off",
         "desc_field": "system_number",
+        "index_columns": [
+            _col("Tag #", "IDENTITY", 150, "tag_number", "mono"),
+            _col("System #", "IDENTITY", 140, "system_number", stretch=True),
+            _col("Manufacturer", "NAMEPLATE", 120, "manufacturer"),
+            _col("Model #", "NAMEPLATE", 110, "model_number"),
+            _col("Serial #", "NAMEPLATE", 110, "serial_number", "mono"),
+            _col("Voltage", "NAMEPLATE", 80, "voltage", "range"),
+            _col("Amps", "NAMEPLATE", 70, "amps", "range"),
+            _col("Ref. Dwg #", "NAMEPLATE", 140, "ref_dwg_number", "mono"),
+        ],
     },
     "eht_removal": {
         "label": "EHT Removal",
+        "discipline": "Electrical",
+        "plural": "EHT Removals",
+        "noun": "EHT removal",
         "schema": eht_removal_schema,
         "export_module": export_eht_removal_to_pdf,
         "key_field": "trace_tag",
@@ -280,17 +346,27 @@ EQUIPMENT_TYPES = {
         "group_labels": ["System"],
         "date_fields": ["yanda_rep_date", "client_rep_date"],
         "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
-        # No per-row serial number concept on this form (a removal/
-        # reinstatement report, not a serialized instrument) - the closest
-        # real identifying field is the EHTC # (EHT circuit/cable number),
-        # same "reuse a field that exists rather than invent one" fallback
-        # small_power_cable_schema.py's own entry above already uses.
-        "serial_field": "ehtc_no",
+        "serial_field": None,
         "qa_date_field": "yanda_rep_date",
+        "qa_date_label": "Yanda Sign-off",
         "desc_field": "system_no",
+        "index_columns": [
+            _col("Trace Tag", "IDENTITY", 190, "trace_tag", "mono", stretch=True),
+            _col("Area", "IDENTITY", 90, "area"),
+            _col("System", "IDENTITY", 100, "system_no"),
+            _col("Type", "CIRCUIT", 50, "eht_type"),
+            _col("Length", "CIRCUIT", 65, "eht_length", "range"),
+            _col("EHTC #", "CIRCUIT", 80, "ehtc_no", "mono"),
+            _col("Panel #", "CIRCUIT", 105, "panel_no", "mono"),
+            _col("Breaker", "CIRCUIT", 65, "breaker_no", "mono"),
+            _col("ISO Drawing", "CIRCUIT", 170, "eht_iso_drawing_no", "mono"),
+        ],
     },
     "eht_rtd": {
         "label": "EHT RTD",
+        "discipline": "Electrical",
+        "plural": "EHT & RTD Inspections",
+        "noun": "EHT & RTD inspection",
         "schema": eht_rtd_schema,
         "export_module": export_eht_rtd_to_pdf,
         "key_field": "trace_number",
@@ -304,15 +380,26 @@ EQUIPMENT_TYPES = {
         # as every other type here using its own last sign-off date.
         "date_fields": ["final_signoff_yanda_date", "final_signoff_client_date"],
         "date_labels": ["Final Yanda Sign-off Date", "Final Client Sign-off Date"],
-        # No per-row serial number concept - closest identifying field is
-        # the Controller # (a physical unit identifier), same fallback
-        # reasoning as eht_removal's own serial_field above.
-        "serial_field": "controller_number",
+        "serial_field": None,
         "qa_date_field": "final_signoff_yanda_date",
+        "qa_date_label": "Final Yanda Sign-off",
         "desc_field": "panel_number",
+        "index_columns": [
+            _col("Trace #", "IDENTITY", 190, "trace_number", "mono"),
+            _col("Panel #", "IDENTITY", 110, "panel_number", "mono"),
+            _col("Circuit #", "IDENTITY", 70, "circuit_number", "mono"),
+            _col("Controller #", "CIRCUIT", 100, "controller_number", "mono"),
+            _col("RTD(s) #", "CIRCUIT", 110, "rtds_number", "mono"),
+            _col("Zone Drawing", "CIRCUIT", 150, "zone_drawing_number", "mono", stretch=True),
+            _col("Pre-Ins 500 V", "MEGGER", 100, "pre_ins_megger_reading_500", "range"),
+            _col("Post-Ins 500 V", "MEGGER", 105, "post_ins_megger_reading_500", "range"),
+        ],
     },
     "eht_pre_insulation": {
         "label": "EHT PreIns",
+        "discipline": "Electrical",
+        "plural": "EHT Pre-Insulation",
+        "noun": "EHT pre-insulation report",
         "schema": eht_pre_insulation_schema,
         "export_module": export_eht_pre_insulation_to_pdf,
         "key_field": "trace_number",
@@ -322,12 +409,26 @@ EQUIPMENT_TYPES = {
         "group_labels": ["Panel"],
         "date_fields": ["yanda_rep_date", "client_rep_date"],
         "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
-        "serial_field": "test_equip_serial",
+        "serial_field": None,
         "qa_date_field": "yanda_rep_date",
+        "qa_date_label": "Yanda Sign-off",
         "desc_field": "panel_number",
+        "index_columns": [
+            _col("Trace #", "IDENTITY", 190, "trace_number", "mono"),
+            _col("Panel #", "IDENTITY", 110, "panel_number", "mono"),
+            _col("Circuit #", "IDENTITY", 70, "circuit_number", "mono"),
+            _col("Controller #", "CIRCUIT", 100, "eht_controller_number", "mono"),
+            _col("Trace Line #", "CIRCUIT", 150, "trace_line_number", "mono", stretch=True),
+            _col("500 V", "MEGGER", 85, "megger_500_reading", "range"),
+            _col("1000 V", "MEGGER", 85, "megger_1000_reading", "range"),
+            _col("2500 V", "MEGGER", 85, "megger_2500_reading", "range"),
+        ],
     },
     "torqueing": {
         "label": "Torqueing",
+        "discipline": "Electrical",
+        "plural": "Torque Records",
+        "noun": "torque record",
         "schema": torqueing_schema,
         "export_module": export_torqueing_to_pdf,
         "key_field": "torque_record_number",
@@ -337,16 +438,26 @@ EQUIPMENT_TYPES = {
         "group_labels": ["System"],
         "date_fields": ["yanda_rep_date", "client_rep_date"],
         "date_labels": ["Yanda Rep. Date", "Client Rep. Date"],
-        # No per-row serial number concept on this form (a torqueing report,
-        # not a serialized instrument) - the closest real identifying field
-        # is the torque wrench's own serial #, same "reuse the test
-        # equipment's serial" fallback small_power_cable_schema.py's entry
-        # above already uses.
-        "serial_field": "torque_wrench_serial_number",
+        "serial_field": None,
         "qa_date_field": "yanda_rep_date",
+        "qa_date_label": "Yanda Sign-off",
         "desc_field": "system_number",
+        "index_columns": [
+            _col("Record No.", "IDENTITY", 110, "torque_record_number", "mono"),
+            _col("System", "IDENTITY", 170, "system_number"),
+            _col("Reference Tag", "IDENTITY", 130, "reference_tag_number", "mono"),
+            _col("First Location", "BOLTS", 230, "bolt_row_1_tag", "mono", stretch=True),
+            {"label": "Bolts", "group": "BOLTS", "width": 60, "kind": "count",
+             "fields": [f"bolt_row_{n}_tag" for n in range(1, 16)]},
+            _col("Wrench Serial", "EQUIPMENT", 115, "torque_wrench_serial_number", "mono"),
+            _col("Wrench Cal.", "EQUIPMENT", 100, "calibration_date"),
+        ],
     },
 }
+
+
+def types_in_discipline(discipline):
+    return [k for k, t in EQUIPMENT_TYPES.items() if t["discipline"] == discipline]
 
 ASSETS_DIR = HERE / "assets"
 SETTINGS_PATH = HERE / "app_settings.json"
@@ -1477,6 +1588,8 @@ def run_row_flag(equip_key, extra, submitted):
         span = _numeric_bounds(extra.get("instrument_range", ""))
         if len(cal) == 2 and len(span) == 2 and (cal[0] < span[0] or cal[1] > span[1]):
             return "Range exceeds instrument span"
+    if EQUIPMENT_TYPES[equip_key]["serial_field"] is None:
+        return ""
     serial = extra.get("serial", "")
     if not serial:
         return "Submitted, no serial" if submitted else "No serial number"
@@ -1545,11 +1658,15 @@ def read_engineering_index_rows(series_number, equip_key):
     kind_field = etype["summary_fields"][-1]
     key_field = etype["key_field"]
 
-    extra_ids = index_fields + [serial_field, qa_date_field, desc_field, kind_field,
+    extra_ids = index_fields + [qa_date_field, desc_field, kind_field,
                                  "pid_number", "line_number", "make", "model",
                                  "calibration_range", "instrument_range"]
+    if serial_field:
+        extra_ids.append(serial_field)
     if service_field and service_field not in extra_ids:
         extra_ids = extra_ids + [service_field]
+    for col_spec in etype.get("index_columns", []):
+        extra_ids.extend(col_spec.get("fields") or [col_spec["field"]])
     cols = {fid: field_to_col.get(fid) for fid in extra_ids}
     key_col = field_to_col.get(key_field)
 
@@ -1569,12 +1686,12 @@ def read_engineering_index_rows(series_number, equip_key):
         status = _normalized_status(store.get(_status_key(series_number, equip_key, key_val)))
         entry["stage"] = stage_from_status(status)
         entry["queued"] = bool(status["export"])
-        entry["serial"] = entry.pop(serial_field)
-        entry["qa_date"] = entry.pop(qa_date_field)
-        entry["desc"] = entry.pop(desc_field)
+        entry["serial"] = entry.get(serial_field, "") if serial_field else ""
+        entry["qa_date"] = entry.get(qa_date_field, "")
+        entry["desc"] = entry.get(desc_field, "")
         if service_field and service_field != desc_field:
             entry["service"] = entry.pop(service_field)
-        entry["kind"] = entry.pop(kind_field)
+        entry["kind"] = entry.get(kind_field, "")
         entry["open_ecns"] = ecn_by_tag.get(key_val, [])
         rows.append(entry)
     return rows

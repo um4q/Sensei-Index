@@ -138,6 +138,54 @@ SECTION_TITLES = {
     "part8": "PART 8 – Inspected/Approved By",
 }
 
+# The 18 verification task descriptions, from the printed form itself
+# (YCQE-E&I-013 Rev.0) - the log only stores the Yes/N-A initials per task.
+_TASKS = [
+    "Inspect for any damage to all components associated. Ensure removal of shipping blocks.",
+    "Equipment is securely mounted, anchored & plumb. Correct fastener assemblies are installed & "
+    "complete. Clearances and installation are as per CEC & manufacturer specifications.",
+    "Verify CSA certification marking (or equivalent), warning labels installed as per CEC & "
+    "specifications.",
+    "Verify equipment nameplate data matches IFC drawings & specifications.",
+    "Verify area classification rating & connectors are rated for the location of installation.",
+    "Verify over current protection is as per CEC & IFC drawings. MCC cubicle has been inspected.",
+    "Verify grounding & bonding requirements are as per CEC, owner specifications & IFC drawings.",
+    "All cables, conductors & equipment are labeled and identified as per CEC & IFC drawings.",
+    "Verify that continuity and megger testing has been conducted on all cables/conductors.",
+    "Insulation resistance testing and winding resistance testing has been completed.",
+    "Re-terminate all wiring as per IFC drawings & manufacturer specs after testing is completed.",
+    "Push-pull-tug method completed after termination. Torqueing as per manufacturer specifications.",
+    "Ensure there are no metal filings inside or on top of equipment before energization.",
+    "Check for overall cleanliness and acceptable constructability of equipment installation. Remove "
+    "all tools, debris, oil, dirt, safety grounds and isolation. Inspect for moisture & leaks.",
+    "Gland plates & all other entrances have been sealed as per owner specifications.",
+    "All covers and/or doors have been installed as per manufacturer specifications.",
+    "Picture(s) of equipment installation are attached with this report.",
+    "Red line mark-ups to be submitted with as-built drawings for turnover.",
+]
+
+# Edit-form table layouts for gui_app.EditDialog - presentation only. Each
+# row is (row label, [field id per column]); a column width of 0 stretches.
+GRIDS = [
+    {
+        "row_header": "Task",
+        "row_header_width": 0,
+        "columns": [("Yes Initial", 88), ("N/A Initial", 88)],
+        "rows": [(f"{n}. {text}", [f"task_{n}_yes", f"task_{n}_na"])
+                 for n, text in enumerate(_TASKS, start=1)],
+    },
+    {
+        "row_header": "Row",
+        "row_header_width": 36,
+        "columns": [("Cond. I.D.", 90), ("Location", 0), ("Bolt Grade", 76), ("Bolt Size", 66),
+                    ("Torque Value", 86), ("Marked (Yes)", 88), ("By (Initial)", 80), ("Date", 96)],
+        "rows": [(str(n), [f"torqueing_row_{n}_{part}" for part in
+                           ("cond_id", "location", "bolt_grade", "bolt_size", "torque_value",
+                            "torque_marked", "torque_by", "date")])
+                 for n in range(1, 6)],
+    },
+]
+
 if __name__ == "__main__":
     print(f"Total fields: {len(FIELDS)}")
     from collections import Counter

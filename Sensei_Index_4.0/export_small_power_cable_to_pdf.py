@@ -185,7 +185,8 @@ def fix_field_autosize(writer):
             field[NameObject("/DA")] = TextStringObject(new_da)
 
 
-def fill_pdf(template_path, values, out_path, flatten=False):
+def fill_pdf(template_path, values, out_path, flatten=False, add_signature=True):
+    # This form has no signature field; add_signature only keeps run_export()'s call uniform.
     reader = PdfReader(str(template_path))
     writer = PdfWriter()
     writer.append(reader)

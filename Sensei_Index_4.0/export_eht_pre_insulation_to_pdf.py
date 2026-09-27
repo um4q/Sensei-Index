@@ -102,6 +102,17 @@ def load_column_map(ws):
     return field_to_col
 
 
+def rows_to_export(ws, field_to_col, explicit_rows, export_all):
+    # No "Export to PDF (Y/N)" column on this form, so the Excel-flag mode never matches.
+    if explicit_rows:
+        return sorted(set(explicit_rows))
+    key_col = field_to_col.get("trace_number")
+    if not export_all or key_col is None:
+        return []
+    return [r for r in range(FIRST_DATA_ROW, ws.max_row + 1)
+            if cell_to_str(ws.cell(row=r, column=key_col).value)]
+
+
 def build_values_for_row(ws, field_to_col, row_num):
     """Returns a dict of REAL PDF field name -> value. Every field on this
     template is a plain text widget (see eht_pre_insulation_field_map.py's

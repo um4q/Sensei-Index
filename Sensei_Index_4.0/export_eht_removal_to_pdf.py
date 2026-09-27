@@ -85,6 +85,17 @@ def load_column_map(ws):
     return field_to_col
 
 
+def rows_to_export(ws, field_to_col, explicit_rows, export_all):
+    # No "Export to PDF (Y/N)" column on this form, so the Excel-flag mode never matches.
+    if explicit_rows:
+        return sorted(set(explicit_rows))
+    key_col = field_to_col.get("trace_tag")
+    if not export_all or key_col is None:
+        return []
+    return [r for r in range(FIRST_DATA_ROW, ws.max_row + 1)
+            if cell_to_str(ws.cell(row=r, column=key_col).value)]
+
+
 def pdf_safe_text(text):
     """This template's AcroForm fields use a plain Helvetica/WinAnsi font,
     which has no glyph for the ohm sign - either the real OHM SIGN
@@ -167,12 +178,13 @@ def ensure_default_resources(writer):
         acro[NameObject("/DA")] = TextStringObject("/Helv 0 Tf 0 g")
 
 
-def fill_pdf(template_path, values, out_path, flatten=False):
+def fill_pdf(template_path, values, out_path, flatten=False, add_signature=True):
     """No signature-image stamping on this form - both Yanda and Client
     Representative sign-off blocks are hand-signed only (see
     eht_removal_field_map.py's UNMAPPED_NOTE), so unlike
     export_gauge_to_pdf.py there's no reportlab overlay step at all here -
-    this is pure AcroForm fill."""
+    this is pure AcroForm fill. add_signature is accepted only so
+    data_access.run_export() can call every type the same way."""
     reader = PdfReader(str(template_path))
     writer = PdfWriter()
     writer.append(reader)

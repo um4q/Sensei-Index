@@ -240,7 +240,8 @@ QPushButton#RailFooterButton {{
 QPushButton#RailFooterButton:hover {{ background: {c["zebra"]}; }}
 
 /* ------------------------------------------------------------ equip tabs */
-QPushButton#EquipTab {{
+QTabBar#EquipTabs {{ background: transparent; }}
+QTabBar#EquipTabs::tab {{
     background: transparent;
     border: none;
     border-bottom: 3px solid transparent;
@@ -248,7 +249,8 @@ QPushButton#EquipTab {{
     color: {c["body"]};
     font-size: 14px;
 }}
-QPushButton#EquipTab[active="true"] {{
+QTabBar#EquipTabs::tab:hover {{ color: {c["ink"]}; }}
+QTabBar#EquipTabs::tab:selected {{
     border-bottom: 3px solid {c["accent2"]};
     color: {c["ink"]};
     font-weight: 500;

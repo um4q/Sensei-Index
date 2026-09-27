@@ -137,5 +137,18 @@ SECTION_TITLES = {
 
 LOG_COLUMNS = FIELDS
 
+# Edit-form table layouts for gui_app.EditDialog - presentation only. Each
+# row is (row label, [field id per column]); a column width of 0 stretches.
+GRIDS = [
+    {
+        "row_header": "Row",
+        "row_header_width": 36,
+        "columns": [("No.", 56), ("Location (Tag #)", 0), ("Bolt Grade", 76), ("Bolt Size", 66),
+                    ("Torque (FT/LB)", 86), ("Torqued By", 76), ("Witnessed By", 84), ("Date", 96)],
+        "rows": [(str(n), [f"bolt_row_{n}_{col_id}" for col_id, _ in _BOLT_COLUMNS])
+                 for n in range(1, 16)],
+    },
+]
+
 if __name__ == "__main__":
     print(f"Total fields: {len(FIELDS)}")

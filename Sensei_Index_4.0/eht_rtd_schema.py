@@ -175,5 +175,46 @@ SECTION_TITLES = {
 
 LOG_COLUMNS = FIELDS
 
+
+def _result_rows(prefix, numbers):
+    rows = []
+    for num in numbers:
+        result_id, comments_id = f"{prefix}_{num}_result", f"{prefix}_{num}_comments"
+        label = by_id(result_id)["label"].rsplit(" - ", 1)[0]
+        rows.append((label, [result_id, comments_id if by_id(comments_id) else None]))
+    return rows
+
+
+def _megger(prefix):
+    return {
+        "row_header": "Megger",
+        "row_header_width": 90,
+        "columns": [("MI", 76), ("SR", 76), ("Reading (mΩ)", 0)],
+        "rows": [(f"@ {v} Vdc", [f"{prefix}_megger_mi_{v}", f"{prefix}_megger_sr_{v}",
+                                 f"{prefix}_megger_reading_{v}"]) for v in (500, 1000, 2500)],
+    }
+
+
+# Edit-form table layouts for gui_app.EditDialog - presentation only. Each
+# row is (row label, [field id per column]); a column width of 0 stretches.
+# Items 1.3/1.8/2.4 have no Comments cell on the real form (their ATC/ohms
+# readings stay ordinary fields right under the table).
+GRIDS = [
+    {
+        "row_header": "Item",
+        "row_header_width": 300,
+        "columns": [("Result", 84), ("Comments", 0)],
+        "rows": _result_rows("pre_ins_item", ["1_1", "1_2", "1_3", "1_4", "1_5", "1_6", "1_7", "1_8"]),
+    },
+    _megger("pre_ins"),
+    {
+        "row_header": "Item",
+        "row_header_width": 300,
+        "columns": [("Result", 84), ("Comments", 0)],
+        "rows": _result_rows("post_ins_item", ["2_1", "2_2", "2_3", "2_4"]),
+    },
+    _megger("post_ins"),
+]
+
 if __name__ == "__main__":
     print(f"Total fields: {len(FIELDS)}")
