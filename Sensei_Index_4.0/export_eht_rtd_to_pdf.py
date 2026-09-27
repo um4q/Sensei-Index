@@ -85,6 +85,25 @@ def load_column_map(ws):
     return field_to_col
 
 
+def pdf_safe_text(text):
+    """This template's AcroForm fields use a plain Helvetica/WinAnsi font,
+    which has no glyph for the ohm sign - either the real OHM SIGN
+    (U+2126) or the visually-identical GREEK CAPITAL LETTER OMEGA
+    (U+03A9) some real-world data uses instead (a common mix-up, since
+    most keyboards only make the Greek letter easy to type). Writing
+    either one silently drops the character from the rendered PDF - this
+    form's own R1/R2/MI ohms fields and "(Ω)"-labeled resistance readings
+    make that a real, expected occurrence here, not a hypothetical one
+    (see export_eht_removal_to_pdf.py's identical helper, where the same
+    defect was first confirmed against real data: pypdf warns "characters
+    not supported by font encoding" and the rendered page silently drops
+    the character). Substituting a plain-ASCII "ohm" keeps the reading
+    intact. Only affects what gets written into the PDF - the Excel cell
+    itself, and everywhere else the app displays it, keep the original Ω
+    character untouched."""
+    return text.replace("Ω", " ohm").replace("Ω", " ohm")
+
+
 def build_values_for_row(ws, field_to_col, row_num):
     """Returns a dict of REAL PDF field name -> value. Handles 4 shapes:
     a plain FIELD_MAP lookup, ATC_CHECKBOXES (field-specific on-state,
@@ -102,6 +121,7 @@ def build_values_for_row(ws, field_to_col, row_num):
         raw = cell_to_str(ws.cell(row=row_num, column=col).value)
         if not raw:
             continue
+        raw = pdf_safe_text(raw)
 
         if field["ftype"] == "choice":
             allowed = field["choices"]
