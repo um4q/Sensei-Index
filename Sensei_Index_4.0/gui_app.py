@@ -231,7 +231,7 @@ def make_field_widget(field, initial_value):
     if field["ftype"] == "multiline":
         text = QTextEdit()
         text.setPlainText(initial_value)
-        text.setFixedHeight(64)
+        text.setFixedHeight(round(theme.scaled(64)))
         return text
     edit = QLineEdit()
     edit.setText(initial_value)
@@ -252,8 +252,27 @@ def make_button(text, object_name=None, width=None):
     if object_name:
         btn.setObjectName(object_name)
     if width:
-        btn.setMinimumWidth(width)
+        btn.setMinimumWidth(round(theme.scaled(width)))
     return btn
+
+
+def rail_width():
+    """The series rail grows at half the rate of the text - enough for the
+    longest series name at 175% without crowding the page beside it."""
+    return round(theme.scaled_gently(276))
+
+
+def scaled_size(widget, width, height):
+    """A dialog's default size grown with Settings > Text size, but never
+    past the screen it opens on."""
+    width, height = round(theme.scaled(width)), round(theme.scaled(height))
+    if theme.scaled(1) > 1:
+        screen = widget.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            width = min(width, int(avail.width() * 0.95))
+            height = min(height, int(avail.height() * 0.92))
+    return width, height
 
 
 def _accepted_row_color():
@@ -367,7 +386,15 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(28, 24, 28, 24)
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack)
-        body.addWidget(content_wrap, stretch=1)
+        # A page bigger than the window (large text on a laptop screen)
+        # scrolls rather than pushing the window past the screen edge.
+        content_scroll = QScrollArea()
+        content_scroll.setObjectName("ContentScroll")
+        content_scroll.setWidgetResizable(True)
+        content_scroll.setFrameShape(QFrame.NoFrame)
+        content_scroll.setFocusPolicy(Qt.NoFocus)
+        content_scroll.setWidget(content_wrap)
+        body.addWidget(content_scroll, stretch=1)
         root.addWidget(body_wrap, stretch=1)
 
         self.setStatusBar(QStatusBar())
@@ -656,7 +683,8 @@ class MainWindow(QMainWindow):
     def _build_series_rail(self):
         rail = QFrame()
         rail.setObjectName("SeriesRail")
-        rail.setFixedWidth(276)
+        rail.setFixedWidth(rail_width())
+        self._series_rail_frame = rail
         layout = QVBoxLayout(rail)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -679,10 +707,25 @@ class MainWindow(QMainWindow):
         series_label.setContentsMargins(16, 14, 16, 8)
         layout.addWidget(series_label)
 
+        # The series list scrolls, so a long list (or a large text size)
+        # never sets the window's minimum height.
+        series_scroll = QScrollArea()
+        series_scroll.setObjectName("RailScroll")
+        series_scroll.setWidgetResizable(True)
+        series_scroll.setFrameShape(QFrame.NoFrame)
+        series_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        series_scroll.setFocusPolicy(Qt.NoFocus)  # no extra, invisible Tab stop
+        holder = QWidget()
+        holder.setObjectName("RailSeriesHolder")
+        holder_layout = QVBoxLayout(holder)
+        holder_layout.setContentsMargins(0, 0, 0, 0)
+        holder_layout.setSpacing(0)
         self.rail_series_area = QVBoxLayout()
         self.rail_series_area.setSpacing(0)
-        layout.addLayout(self.rail_series_area)
-        layout.addStretch()
+        holder_layout.addLayout(self.rail_series_area)
+        holder_layout.addStretch()
+        series_scroll.setWidget(holder)
+        layout.addWidget(series_scroll, stretch=1)
 
         add_series_btn = make_button("+ Add new series", "RailFooterButton")
         add_series_btn.clicked.connect(self.add_series)
@@ -720,7 +763,7 @@ class MainWindow(QMainWindow):
             row_layout.setSpacing(4)
             top = QHBoxLayout()
             name_lbl = QLabel(label)
-            name_lbl.setStyleSheet("font-size:14px;")
+            name_lbl.setStyleSheet(f"font-size:{theme.px(14)}px;")
             top.addWidget(name_lbl)
             top.addStretch()
             count_lbl = QLabel(f"{accepted} / {total}")
@@ -950,10 +993,20 @@ class MainWindow(QMainWindow):
         self.refresh_sidebar_and_dashboard()
 
     def open_settings(self):
+        scale_before = da.get_setting("ui_scale")
         dlg = SettingsDialog(self, on_series_change=self.refresh_sidebar_and_dashboard)
         dlg.exec()
         self.apply_theme()
         self.refresh_sidebar_and_dashboard()
+        if da.get_setting("ui_scale") != scale_before:
+            # Row heights, rail width and table fonts are set in code, so the
+            # current page is rebuilt at the new text size.
+            if hasattr(self, "_series_rail_frame"):
+                self._series_rail_frame.setFixedWidth(rail_width())
+            if isinstance(self.current_dynamic_page, OverallIndexView):
+                self.show_overall_index()
+            else:
+                self.refresh_current_view()
 
     def connect_to_drive(self):
         """Placeholder entry point for a future cloud-backup/sync
@@ -2386,9 +2439,9 @@ class RowDetailDialog(QDialog):
 
         schema = self.etype["schema"]
         if getattr(schema, "GRIDS", None):
-            self.resize(980, 720)
+            self.resize(*scaled_size(self, 980, 720))
         else:
-            self.resize(760, 700)
+            self.resize(*scaled_size(self, 760, 700))
         try:
             self.values = da.read_full_row(series_number, equip_key, row_num)
         except Exception as exc:
@@ -2517,7 +2570,7 @@ class RowDetailDialog(QDialog):
             grid.setHorizontalSpacing(14)
             grid.setVerticalSpacing(6)
             grid.setColumnStretch(1, 1)
-            grid.setColumnMinimumWidth(0, 190)
+            grid.setColumnMinimumWidth(0, round(theme.scaled(190)))
             row = 0
             built = set()
             for field in fields_here:
@@ -2535,7 +2588,7 @@ class RowDetailDialog(QDialog):
                 label = QLabel(field["label"])
                 label.setObjectName("FieldLabel")
                 label.setWordWrap(True)
-                label.setFixedWidth(190)
+                label.setFixedWidth(round(theme.scaled(190)))
                 raw = str(self.values.get(field["id"], "") or "").strip()
                 value = QLabel(raw if raw else "not recorded")
                 if not raw:
@@ -2571,12 +2624,12 @@ class RowDetailDialog(QDialog):
         layout.setVerticalSpacing(4)
         label_width = spec.get("row_header_width", 0)
         if label_width:
-            layout.setColumnMinimumWidth(0, min(label_width, 240))
+            layout.setColumnMinimumWidth(0, round(theme.scaled(min(label_width, 240))))
         else:
             layout.setColumnStretch(0, 1)
         for c, (_header, width) in enumerate(spec["columns"], start=1):
             if width:
-                layout.setColumnMinimumWidth(c, min(width, 110))
+                layout.setColumnMinimumWidth(c, round(theme.scaled(min(width, 110))))
             else:
                 layout.setColumnStretch(c, 1)
         headers = [spec.get("row_header", "")] + [h for h, _w in spec["columns"]]
@@ -2752,11 +2805,12 @@ class EditDialog(QDialog):
         # One label width per dialog so fields line up from section to section
         # (longer labels wrap).
         if getattr(schema, "GRIDS", None):
-            self.resize(1180, 760)
-            self._label_width = 160
+            self.resize(*scaled_size(self, 1180, 760))
+            self._label_width = round(theme.scaled(160))
         else:
-            self.resize(1100, 740)
-            self._label_width = 140
+            self.resize(*scaled_size(self, 1100, 740))
+            self._label_width = round(theme.scaled(140))
+        self._nav_width = round(theme.scaled(self.SECTION_NAV_WIDTH))
         existing = {} if is_new else da.read_full_row(series_number, equip_key, row_num)
         effective = dict(existing)
         if is_new:
@@ -2806,7 +2860,7 @@ class EditDialog(QDialog):
         progress_col.addWidget(progress_hint)
         self.progress_label = QLabel("")
         self.progress_label.setObjectName("PageTitle")
-        self.progress_label.setStyleSheet("font-size:22px;")
+        self.progress_label.setStyleSheet(f"font-size:{theme.px(22)}px;")
         self.progress_label.setAlignment(Qt.AlignRight)
         progress_col.addWidget(self.progress_label)
         hlayout.addLayout(progress_col)
@@ -2818,7 +2872,7 @@ class EditDialog(QDialog):
         body_row.setSpacing(0)
 
         sidebar = QFrame()
-        sidebar.setFixedWidth(self.SECTION_NAV_WIDTH)
+        sidebar.setFixedWidth(self._nav_width)
         sidebar.setObjectName("DialogSidebar")
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 8, 0, 8)
@@ -2986,14 +3040,14 @@ class EditDialog(QDialog):
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(5)
 
-        label_width = spec.get("row_header_width", 0)
+        label_width = round(theme.scaled(spec.get("row_header_width", 0)))
         if label_width:
             layout.setColumnMinimumWidth(0, label_width)
         else:
             layout.setColumnStretch(0, 1)
         for c, (_header, width) in enumerate(spec["columns"], start=1):
             if width:
-                layout.setColumnMinimumWidth(c, width)
+                layout.setColumnMinimumWidth(c, round(theme.scaled(width)))
             else:
                 layout.setColumnStretch(c, 1)
 
@@ -3017,7 +3071,7 @@ class EditDialog(QDialog):
                 widget = self._make_widget(field, existing.get(fid, ""))
                 width = spec["columns"][c - 1][1]
                 if width:
-                    widget.setFixedWidth(width)
+                    widget.setFixedWidth(round(theme.scaled(width)))
                 widget.setToolTip(field["label"])
                 widget.setAccessibleName(field["label"])
                 self.widgets[fid] = widget
@@ -3068,7 +3122,7 @@ class EditDialog(QDialog):
         """Wrapped rows need an explicit height: Qt measures the wrap before the
         stylesheet's item padding, which cut long section names off."""
         self.section_list.ensurePolished()
-        text_width = self.SECTION_NAV_WIDTH - 31 - 10  # item padding + border, scrollbar room
+        text_width = self._nav_width - 31 - 10  # item padding + border, scrollbar room
         fm = QFontMetrics(self.section_list.font())
         height = fm.boundingRect(QRect(0, 0, text_width, 2000), Qt.TextWordWrap, item.text()).height()
         item.setSizeHint(QSize(text_width, height + 14))
@@ -3152,7 +3206,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.on_series_change = on_series_change
         self.setWindowTitle("Settings")
-        self.resize(820, 600)
+        self.resize(*scaled_size(self, 820, 600))
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -3160,7 +3214,7 @@ class SettingsDialog(QDialog):
 
         nav = QListWidget()
         nav.setObjectName("SideNav")
-        nav.setFixedWidth(210)
+        nav.setFixedWidth(round(theme.scaled(210)))
         nav.setFrameShape(QFrame.NoFrame)
         nav.addItems(self.CATEGORIES)
         nav.currentRowChanged.connect(self._on_category_changed)
@@ -3170,12 +3224,17 @@ class SettingsDialog(QDialog):
         self.pages = QStackedWidget()
         outer.addWidget(self.pages, stretch=1)
 
-        self.pages.addWidget(self._build_appearance_page())
-        self.pages.addWidget(self._build_export_page())
-        self.pages.addWidget(self._build_workbook_page())
-        self.pages.addWidget(self._build_series_page())
-        self.pages.addWidget(self._build_signatures_page())
-        self.pages.addWidget(self._build_shortcuts_page())
+        for build in (self._build_appearance_page, self._build_export_page,
+                      self._build_workbook_page, self._build_series_page,
+                      self._build_signatures_page, self._build_shortcuts_page):
+            # Each page scrolls, so the tallest one never sets the dialog's
+            # minimum height (it outgrew a laptop screen at larger text sizes).
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setFocusPolicy(Qt.NoFocus)
+            scroll.setWidget(build())
+            self.pages.addWidget(scroll)
         nav.setCurrentRow(0)
 
     def _on_category_changed(self, row):
@@ -3192,7 +3251,7 @@ class SettingsDialog(QDialog):
     def _heading(self, layout, text):
         h = QLabel(text)
         h.setObjectName("PageTitle")
-        h.setStyleSheet("font-size:22px;")
+        h.setStyleSheet(f"font-size:{theme.px(22)}px;")
         layout.addWidget(h)
 
     def _segmented(self, options, current, on_pick):
@@ -3500,7 +3559,7 @@ class SignatureManagerDialog(QDialog):
         layout = QVBoxLayout(self)
 
         add_label = QLabel("Add a new signature")
-        add_label.setStyleSheet("font-size: 14px; font-weight: 700;")
+        add_label.setStyleSheet(f"font-size: {theme.px(14)}px; font-weight: 700;")
         layout.addWidget(add_label)
         hint = QLabel("Name it, then choose a PNG or JPG image - it's copied into "
                       "the assets/ folder under that name.")
@@ -3519,7 +3578,7 @@ class SignatureManagerDialog(QDialog):
 
         layout.addSpacing(12)
         list_label = QLabel("Existing signatures  (pick one to make it active)")
-        list_label.setStyleSheet("font-size: 14px; font-weight: 700;")
+        list_label.setStyleSheet(f"font-size: {theme.px(14)}px; font-weight: 700;")
         layout.addWidget(list_label)
 
         self.list_area = QVBoxLayout()
@@ -4566,10 +4625,10 @@ def apply_app_theme(app, theme_name):
     called from bootstrap.py at startup and from Settings > Appearance the
     moment the user changes it (plate 1i: "changes apply immediately")."""
     qss = {"dark": DARK_QSS, "high_contrast": HIGH_CONTRAST_QSS}.get(theme_name, LIGHT_QSS)
-    scale = da.get_setting("ui_scale") or 100
-    if scale and scale != 100:
-        qss += f"\nQWidget {{ font-size: {round(13 * scale / 100, 1)}px; }}"
-    app.setStyleSheet(qss)
+    # Text size scales every font size in the stylesheet (the old single
+    # QWidget override left every label, table and tab at 100%).
+    theme.set_ui_scale(da.get_setting("ui_scale") or 100)
+    app.setStyleSheet(theme.scale_qss(qss))
 
 
 def main():

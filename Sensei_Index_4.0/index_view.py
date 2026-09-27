@@ -17,11 +17,11 @@ through MainWindow's existing dialogs (edit_row / view_row / export_rows
 gui_app can import this one without a cycle.
 """
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QFrame, QSizePolicy, QInputDialog, QTabBar,
+    QFrame, QSizePolicy, QInputDialog, QTabBar, QApplication,
 )
 
 import data_access as da
@@ -143,7 +143,8 @@ class GroupedHeaderView(QHeaderView):
         self.columns = columns
         self.group_colors = group_colors
         self.group_text = group_text
-        self.setFixedHeight(18 + 26)
+        self.GROUP_BAND_H = round(theme.scaled(18))
+        self.setFixedHeight(self.GROUP_BAND_H + round(theme.scaled(26)))
         self.setSectionsClickable(True)
 
     def paintSection(self, painter, rect, logical_index):
@@ -166,7 +167,7 @@ class GroupedHeaderView(QHeaderView):
 
         f = painter.font()
         f.setFamily("Barlow Condensed SemiBold")
-        f.setPointSize(9)
+        f.setPointSizeF(theme.scaled(9))
         f.setBold(False)
         painter.setFont(f)
         painter.setPen(text_color)
@@ -176,11 +177,23 @@ class GroupedHeaderView(QHeaderView):
             painter.drawText(band_rect.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft, group)
 
         f2 = painter.font()
-        f2.setPointSize(9)
+        f2.setPointSizeF(theme.scaled(9))
         painter.setFont(f2)
         painter.setPen(QColor(_C["body"]))
         painter.drawText(col_rect.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft, label)
         painter.restore()
+
+
+class _ResizeAwareFrame(QFrame):
+    """A QFrame that calls back when its width changes."""
+
+    def __init__(self, on_resize):
+        super().__init__()
+        self._on_resize = on_resize
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._on_resize()
 
 
 class StageCell(QWidget):
@@ -196,7 +209,8 @@ class StageCell(QWidget):
             block.setStyleSheet(f"background:{_C['navy'] if filled else _C['track']};")
             layout.addWidget(block)
         word = QLabel(STAGE_WORDS[stage])
-        word.setStyleSheet(f"font:400 11.5px 'Barlow';color:{_C['secondary'] if stage == 0 else _C['ink']};")
+        word.setStyleSheet(f"font:400 {theme.px(11.5)}px 'Barlow';"
+                           f"color:{_C['secondary'] if stage == 0 else _C['ink']};")
         layout.addWidget(word)
         layout.addStretch()
         # Screen-reader users landing on this cell need to know which row
@@ -224,7 +238,7 @@ def doc_chip_label(status):
     # high-contrast mode's stronger-border/no-zebra treatment, same as any
     # other themed widget (GUI audit Part 3 #22).
     lbl.setObjectName(object_name)
-    lbl.setStyleSheet("font:600 10px 'Barlow Condensed SemiBold';padding:2px 5px;")
+    lbl.setStyleSheet(f"font:600 {theme.px(10)}px 'Barlow Condensed SemiBold';padding:2px 5px;")
     lbl.setToolTip(tip)
     lbl.setAlignment(Qt.AlignCenter)
     return lbl
@@ -284,9 +298,17 @@ class IndexView(QWidget):
         self.subtitle = QLabel("")
         self.subtitle.setObjectName("PageSubtitle")
         row.addWidget(self.subtitle)
-        row.addSpacing(22)
-        row.addLayout(self._build_discipline_switch())
-        row.addStretch()
+        # On a laptop-width screen or at larger text sizes the discipline
+        # switch and row-height picker get a row of their own, so the header
+        # never pushes the window past the screen.
+        screen = QApplication.primaryScreen()
+        narrow_screen = screen is not None and screen.availableGeometry().width() < 1600
+        two_rows = narrow_screen or theme.scaled(1) >= 1.25
+        controls = QHBoxLayout() if two_rows else row
+        if not two_rows:
+            row.addSpacing(22)
+        controls.addLayout(self._build_discipline_switch())
+        controls.addStretch()
 
         density_row = QHBoxLayout()
         density_row.setSpacing(0)
@@ -299,7 +321,9 @@ class IndexView(QWidget):
             btn.clicked.connect(lambda _c, n=name: self._set_density(n))
             self._density_buttons[name] = btn
             density_row.addWidget(btn)
-        row.addLayout(density_row)
+        controls.addLayout(density_row)
+        if two_rows:
+            row.addStretch()
 
         # "&&": a lone "&" in button text is eaten as a keyboard-mnemonic marker.
         add_btn = QPushButton(f"+ Add {self.etype['noun']}".replace("&", "&&"))
@@ -311,6 +335,8 @@ class IndexView(QWidget):
         export_btn.clicked.connect(self.open_export)
         row.addWidget(export_btn)
         rows.addLayout(row)
+        if two_rows:
+            rows.addLayout(controls)
         rows.addLayout(self._build_equip_type_tabs())
         return rows
 
@@ -388,16 +414,26 @@ class IndexView(QWidget):
         row.addWidget(self.search_edit, stretch=1)
         self.exception_label = QLabel("")
         self.exception_label.setObjectName("FieldLabel")
+        # May be cut short in a very narrow window rather than widening it;
+        # the tooltip keeps the whole line.
+        self.exception_label.setMinimumWidth(1)
         row.addWidget(self.exception_label)
         return row
 
     def _build_legend(self):
-        frame = QFrame()
+        frame = _ResizeAwareFrame(self._fit_legend)
         frame.setObjectName("SystemLegend")
+        # Five long system names in one row set a ~1,200px minimum page width
+        # (more at larger text sizes). Instead the legend shows the chips that
+        # fit and a "+N more" for the rest - see _fit_legend.
+        frame.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.legend_frame = frame
+        self._legend_items = []
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(10, 6, 10, 6)
         kicker = QLabel(self.etype["group_labels"][0].upper())
         kicker.setObjectName("LegendKicker")
+        self._legend_kicker = kicker
         layout.addWidget(kicker)
         self.legend_body = QHBoxLayout()
         layout.addLayout(self.legend_body)
@@ -429,7 +465,7 @@ class IndexView(QWidget):
         # _render_rows, which forced a literal color that ignored theme
         # entirely (GUI audit Part 3 #17).
         self.table.setAlternatingRowColors(True)
-        self.table.setColumnWidth(0, 34)
+        self.table.setColumnWidth(0, round(theme.scaled(34)))
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         for i, col in enumerate(self.columns, start=1):
             # Service/System stretch to absorb whatever width is left over
@@ -437,10 +473,13 @@ class IndexView(QWidget):
             # (GUI audit Part 3 #25). A Stretch section can't be dragged by
             # hand, unlike the Interactive ones - trading that off is what
             # buys back screen space without a full "manage columns" UI.
-            mode = QHeaderView.Stretch if col.get("stretch") else QHeaderView.Interactive
+            # At larger text sizes stretched columns were squeezed to a sliver,
+            # so they keep their width and the table scrolls sideways instead.
+            stretch = col.get("stretch") and theme.scaled(1) < 1.25
+            mode = QHeaderView.Stretch if stretch else QHeaderView.Interactive
             self.table.horizontalHeader().setSectionResizeMode(i, mode)
             if mode == QHeaderView.Interactive:
-                self.table.setColumnWidth(i, col["width"])
+                self.table.setColumnWidth(i, round(theme.scaled(col["width"])))
         self.table.horizontalHeader().setMinimumSectionSize(60)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.doubleClicked.connect(lambda idx: self.edit_row_at(idx.row()))
@@ -481,19 +520,21 @@ class IndexView(QWidget):
         clear_btn.clicked.connect(self.remove_selected)
         layout.addWidget(clear_btn)
         esc_hint = QLabel("Esc to deselect")
-        esc_hint.setStyleSheet(f"color:{_C['light_blue']};font-size:12.5px;")
+        esc_hint.setStyleSheet(f"color:{_C['light_blue']};font-size:{theme.px(12.5)}px;")
         layout.addWidget(esc_hint)
         return bar
 
     def _build_footer(self):
         row = QHBoxLayout()
-        for text in ["Row banding every 5 · Ctrl+G jumps to a row",
-                     "Identifiers monospaced so digits align column-wise",
-                     "Enter opens the record · double-click edits · Alt+D documents"]:
-            lbl = QLabel(text)
-            lbl.setObjectName("FieldLabel")
-            row.addWidget(lbl)
-        row.addStretch()
+        # One label taking the free width: a single line when it fits, and it
+        # wraps rather than widening the window when it doesn't.
+        hints = QLabel("\u2003".join([
+            "Row banding every 5 · Ctrl+G jumps to a row",
+            "Identifiers monospaced so digits align column-wise",
+            "Enter opens the record · double-click edits · Alt+D documents"]))
+        hints.setObjectName("FieldLabel")
+        hints.setWordWrap(True)
+        row.addWidget(hints, stretch=1)
         self.shown_label = QLabel("")
         self.shown_label.setObjectName("FieldLabel")
         row.addWidget(self.shown_label)
@@ -517,6 +558,7 @@ class IndexView(QWidget):
             item = self.legend_body.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        self._legend_items = []
         counts = {}
         for e in self.all_rows:
             key = e.get("desc") or "(not set)"
@@ -533,13 +575,47 @@ class IndexView(QWidget):
             wrap = QHBoxLayout()
             wrap.setSpacing(6)
             wrap.addWidget(sw)
-            lbl = QLabel(f"{name}  {n}")
-            lbl.setStyleSheet(f"font-size:12px;color:{_C['body']};")
+            font = QFont("Barlow")
+            font.setPixelSize(round(theme.scaled(12)))
+            short = QFontMetrics(font).elidedText(name, Qt.ElideRight, round(theme.scaled(260)))
+            lbl = QLabel(f"{short}  {n}")
+            if short != name:
+                lbl.setToolTip(f"{name}  {n}")
+            lbl.setStyleSheet(f"font-size:{theme.px(12)}px;color:{_C['body']};")
             wrap.addWidget(lbl)
             holder = QWidget()
             holder.setObjectName("LegendItem")
             holder.setLayout(wrap)
             self.legend_body.addWidget(holder)
+            self._legend_items.append((holder, f"{name}  {n}"))
+        self._legend_more = QLabel("")
+        self._legend_more.setObjectName("FieldLabel")
+        self.legend_body.addWidget(self._legend_more)
+        self._fit_legend()
+
+    def _fit_legend(self):
+        """Shows the legend chips that fit the current width, in order, and a
+        "+N more" (names in its tooltip) for the rest."""
+        items = getattr(self, "_legend_items", [])
+        if not items:
+            return
+        gap = max(self.legend_body.spacing(), 6)
+        avail = self.legend_frame.width() - 20 - self._legend_kicker.sizeHint().width() - gap
+        hidden = []
+        used = 0
+        for i, (holder, text) in enumerate(items):
+            self._legend_more.setText(f"+{len(items) - i - 1} more")
+            reserve = self._legend_more.sizeHint().width() + gap if i < len(items) - 1 else 0
+            width = holder.sizeHint().width() + gap
+            if not hidden and used + width + reserve <= avail:
+                holder.show()
+                used += width
+            else:
+                holder.hide()
+                hidden.append(text)
+        self._legend_more.setText(f"+{len(hidden)} more")
+        self._legend_more.setToolTip("\n".join(hidden))
+        self._legend_more.setVisible(bool(hidden))
 
     def apply_filter(self):
         query = self.search_edit.text().strip().lower()
@@ -568,6 +644,7 @@ class IndexView(QWidget):
             parts.append(f"{sum(1 for r in self.all_rows if not r.get('cal_due_date'))} "
                          f"awaiting calibration date")
         self.exception_label.setText(" · ".join(parts))
+        self.exception_label.setToolTip(self.exception_label.text())
         self.shown_label.setText(f"{len(rows)} of {len(self.all_rows)} shown")
         n = len(self.all_rows)
         self.subtitle.setText(f"{n} record{'' if n == 1 else 's'}")
@@ -577,7 +654,8 @@ class IndexView(QWidget):
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         font = QFont("Barlow")
-        font.setPointSize(d["font_pt"])
+        font.setPointSizeF(theme.scaled(d["font_pt"]))
+        row_h = round(theme.scaled(d["row_h"]))
         # A real family list, not the QSS-only font-stack string theme.
         # MONO_FONT is written as (a single string like that would just be
         # looked up as one literal, nonexistent family name) - see theme.
@@ -585,11 +663,11 @@ class IndexView(QWidget):
         mono_font = QFont()
         mono_font.setFamilies(theme.MONO_FONT_FAMILIES)
         mono_font.setStyleHint(QFont.Monospace)
-        mono_font.setPointSize(d["font_pt"])
+        mono_font.setPointSizeF(theme.scaled(d["font_pt"]))
         for i, entry in enumerate(self.filtered_rows):
             r = self.table.rowCount()
             self.table.insertRow(r)
-            self.table.setRowHeight(r, d["row_h"])
+            self.table.setRowHeight(r, row_h)
             banded = (i + 1) % 5 == 0
 
             num_item = QTableWidgetItem(str(i + 1))

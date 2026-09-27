@@ -36,6 +36,7 @@ faithful mapping is a 2px solid border in the focus color, which is what
 every rule below does for :focus.
 """
 import logging
+import re
 
 from paths import ASSETS_DIR, FONTS_DIR
 
@@ -99,6 +100,45 @@ DISCIPLINE_COLORS = {
     "Level": "#4aa3d6", "Valve": "#a6431e", "Rotating equipment": "#8e4a8f",
     "Discrete": "#5d5d60", "Electrical": "#8a7000", "Analyzer": "#6b4f9e",
 }
+
+
+# Settings > Text size as a factor (1.0 = 100%). gui_app.apply_app_theme
+# sets it before any page is built; sizes set in code (table rows, painted
+# fonts, fixed widths, inline styles) read it through scaled() / px().
+_ui_scale = 1.0
+_FONT_RE = re.compile(r"font-size:\s*([\d.]+)px")
+_HEIGHT_RE = re.compile(r"(min-height|max-height):\s*([\d.]+)px")
+
+
+def set_ui_scale(percent):
+    global _ui_scale
+    _ui_scale = (percent or 100) / 100
+
+
+def scaled(value):
+    """A size in px or pt multiplied by the Text size setting."""
+    return value * _ui_scale
+
+
+def px(value):
+    """scaled(), rounded for use in an inline stylesheet."""
+    return round(value * _ui_scale, 1)
+
+
+def scaled_gently(value):
+    """For chrome around text (bars, rails, fixed panels): grows at half the
+    rate of the text, which is enough to hold it without eating the screen."""
+    return value * (1 + (_ui_scale - 1) / 2)
+
+
+def scale_qss(qss):
+    """Every font size in a stylesheet scaled, and the fixed bar heights
+    scaled gently."""
+    if _ui_scale == 1.0:
+        return qss
+    qss = _FONT_RE.sub(lambda m: f"font-size: {px(float(m.group(1)))}px", qss)
+    return _HEIGHT_RE.sub(
+        lambda m: f"{m.group(1)}: {round(scaled_gently(float(m.group(2))), 1)}px", qss)
 
 
 def load_bundled_fonts():
@@ -600,6 +640,9 @@ QListWidget#SideNav::item:selected:focus {{ border-left: 3px solid {c["accent"]}
 QLabel#MutedValue {{ color: {c["secondary"]}; }}
 QLabel#StageDone {{ color: {c["ink"]}; font-size: 12.5px; }}
 QLabel#StagePending {{ color: {c["secondary"]}; font-size: 12.5px; }}
+
+QScrollArea#RailScroll, QScrollArea#RailScroll > QWidget,
+QWidget#RailSeriesHolder {{ background: transparent; }}
 
 /* Series rail progress: count, track and fill. */
 QLabel#RailCount {{ color: {c["secondary"]}; font-size: 13px; }}

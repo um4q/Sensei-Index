@@ -185,7 +185,7 @@ class OverallIndexDelegate(QStyledItemDelegate):
         painter.fillRect(option.rect, QColor(theme.LIGHT["group_alt"]))
         if index.column() == 1:
             f = QFont("Barlow Condensed SemiBold")
-            f.setPointSize(10)
+            f.setPointSizeF(theme.scaled(10))
             painter.setFont(f)
             painter.setPen(QColor(theme.LIGHT["navy"]))
             painter.drawText(option.rect.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft,
@@ -233,7 +233,7 @@ class OverallIndexDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(chip, 4, 4)
             painter.setPen(QColor(theme.LIGHT["secondary"]))
         f = QFont("Barlow Condensed SemiBold")
-        f.setPointSize(9)
+        f.setPointSizeF(theme.scaled(9))
         painter.setFont(f)
         painter.drawText(chip, Qt.AlignCenter, RECORD_LABELS[state])
         painter.restore()
@@ -287,17 +287,17 @@ class DisciplineCard(QFrame):
         swatch.setStyleSheet(f"background:{theme.DISCIPLINE_COLORS.get(discipline, theme.LIGHT['secondary'])};border-radius:5px;")
         top.addWidget(swatch)
         name = QLabel(discipline)
-        name.setStyleSheet(f"font-size:12px;font-weight:600;color:{theme.LIGHT['body']};")
+        name.setStyleSheet(f"font-size:{theme.px(12)}px;font-weight:600;color:{theme.LIGHT['body']};")
         top.addWidget(name)
         top.addStretch()
         layout.addLayout(top)
 
         num = QLabel(str(tags))
-        num.setStyleSheet(f"font-size:26px;font-weight:600;color:{theme.LIGHT['ink']};")
+        num.setStyleSheet(f"font-size:{theme.px(26)}px;font-weight:600;color:{theme.LIGHT['ink']};")
         layout.addWidget(num)
 
         sub = QLabel(f"{recorded} recorded ({pct}%)")
-        sub.setStyleSheet(f"font-size:12px;color:{theme.LIGHT['secondary']};")
+        sub.setStyleSheet(f"font-size:{theme.px(12)}px;color:{theme.LIGHT['secondary']};")
         layout.addWidget(sub)
 
         track = QFrame()
@@ -369,15 +369,19 @@ class OverallIndexView(QWidget):
         row.addWidget(title)
         self.subtitle = QLabel("")
         self.subtitle.setObjectName("PageSubtitle")
-        row.addWidget(self.subtitle)
-        row.addStretch()
+        # One line when it fits, wraps rather than widening the window.
+        self.subtitle.setWordWrap(True)
+        row.addWidget(self.subtitle, stretch=1)
         return row
 
     def _build_cards_area(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setFixedHeight(236)
+        # Full height when there's room; shrinks (and scrolls) in a short
+        # window rather than setting its minimum height.
+        scroll.setMaximumHeight(round(theme.scaled_gently(236)))
+        scroll.setMinimumHeight(round(theme.scaled(118)))
         holder = QWidget()
         self.cards_grid = QGridLayout(holder)
         self.cards_grid.setSpacing(10)
@@ -411,22 +415,28 @@ class OverallIndexView(QWidget):
         self.search_edit.textChanged.connect(lambda _t: self._debounce.start())
         row.addWidget(self.search_edit, stretch=1)
 
+        # Sized to their longest entry when there's room, but allowed to
+        # shrink - otherwise that entry sets the window's minimum width.
         self.area_combo = QComboBox()
+        self.area_combo.setMinimumWidth(round(theme.scaled(120)))
         self.area_combo.currentIndexChanged.connect(lambda _i: self.apply_filters())
         row.addWidget(self.area_combo)
 
         self.family_combo = QComboBox()
+        self.family_combo.setMinimumWidth(round(theme.scaled(120)))
         self.family_combo.currentIndexChanged.connect(lambda _i: self.apply_filters())
         row.addWidget(self.family_combo)
 
+        # At larger text sizes grouping and the status filter take a second row.
+        second = QHBoxLayout() if theme.scaled(1) >= 1.5 else row
         group_label = QLabel("Group by")
         group_label.setObjectName("FieldLabel")
-        row.addWidget(group_label)
+        second.addWidget(group_label)
         self.group_combo = QComboBox()
         for label, _key in GROUP_BY_OPTIONS:
             self.group_combo.addItem(label)
         self.group_combo.currentIndexChanged.connect(lambda _i: self.apply_filters())
-        row.addWidget(self.group_combo)
+        second.addWidget(self.group_combo)
 
         self.status_buttons = QButtonGroup(self)
         self.status_buttons.setExclusive(True)
@@ -437,10 +447,17 @@ class OverallIndexView(QWidget):
             btn.setChecked(value == "all")
             btn.clicked.connect(lambda _c, v=value: self._set_status_filter(v))
             self.status_buttons.addButton(btn)
-            row.addWidget(btn)
+            second.addWidget(btn)
         self.status_filter = "all"
 
-        return row
+        if second is row:
+            return row
+        second.addStretch()
+        rows = QVBoxLayout()
+        rows.setSpacing(8)
+        rows.addLayout(row)
+        rows.addLayout(second)
+        return rows
 
     def _set_status_filter(self, value):
         self.status_filter = value
@@ -474,14 +491,17 @@ class OverallIndexView(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        self.table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
+        self.table.verticalHeader().setDefaultSectionSize(round(theme.scaled(ROW_HEIGHT)))
         header = self.table.horizontalHeader()
         widths = [44, 170, 220, 260, 140, 130, 100]
         for i, w in enumerate(widths):
             header.setSectionResizeMode(i, QHeaderView.Interactive)
-            self.table.setColumnWidth(i, w)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)  # Service
-        header.setSectionResizeMode(3, QHeaderView.Stretch)  # Instrument Type
+            self.table.setColumnWidth(i, round(theme.scaled(w)))
+        if theme.scaled(1) < 1.25:
+            header.setSectionResizeMode(2, QHeaderView.Stretch)  # Service
+            header.setSectionResizeMode(3, QHeaderView.Stretch)  # Instrument Type
+        # At larger text sizes they keep their width and the table scrolls
+        # sideways - stretched, they were squeezed to a few pixels.
         header.setMinimumSectionSize(44)
         self.table.selectionModel().currentRowChanged.connect(self._on_current_changed)
         self.table.doubleClicked.connect(self._activate_index)
@@ -489,7 +509,7 @@ class OverallIndexView(QWidget):
 
     def _build_detail_panel(self):
         self.detail_panel = QFrame()
-        self.detail_panel.setFixedHeight(112)
+        self.detail_panel.setFixedHeight(round(theme.scaled(112)))
         # Explicit LIGHT-locked inline styling, not objectName("Card") +
         # the shared FieldLabel QSS rule - same reasoning as DisciplineCard
         # above: this panel is an always-white surface, and FieldLabel's
@@ -507,7 +527,7 @@ class OverallIndexView(QWidget):
             col = i // 3
             row = i % 3
             key_lbl = QLabel(label)
-            key_lbl.setStyleSheet(f"color:{theme.LIGHT['secondary']};font-size:12px;")
+            key_lbl.setStyleSheet(f"color:{theme.LIGHT['secondary']};font-size:{theme.px(12)}px;")
             val_lbl = QLabel("—")
             val_lbl.setStyleSheet(f"font-weight:600;color:{theme.LIGHT['ink']};")
             pair = QVBoxLayout()

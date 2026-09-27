@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 import data_access as da
+import theme
 
 DOC_CHIP_STYLE = {
     "IFC": "background:#eef6ff;color:#1d2d3d;",
@@ -134,11 +135,12 @@ class DocumentsDialog(QDialog):
             blayout.setContentsMargins(12, 10, 12, 10)
             blayout.setSpacing(6)
             label = QLabel(f"{ecn['id']} · OPEN")
-            label.setStyleSheet("color:#c0392b;font:600 11px 'Barlow Condensed SemiBold';letter-spacing:1px;")
+            label.setStyleSheet(f"color:#c0392b;font:600 {theme.px(11)}px 'Barlow Condensed SemiBold';"
+                                "letter-spacing:1px;")
             blayout.addWidget(label)
             body = QLabel(ecn.get("narrative", ""))
             body.setWordWrap(True)
-            body.setStyleSheet("color:#42474b;font-size:13px;")
+            body.setStyleSheet(f"color:#42474b;font-size:{theme.px(13)}px;")
             blayout.addWidget(body)
             row = QHBoxLayout()
             row.addStretch()
