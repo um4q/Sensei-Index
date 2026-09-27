@@ -126,7 +126,10 @@ class DocumentsDialog(QDialog):
         open_ecns = da.ecns_for_tag(self.key_value, open_only=True)
         for ecn in open_ecns:
             banner = QFrame()
-            banner.setStyleSheet("background:#fdecea;")
+            # Scoped: selector-less, the pink also filled the Acknowledge button
+            # and left its white label unreadable.
+            banner.setObjectName("EcnBanner")
+            banner.setStyleSheet("#EcnBanner { background:#fdecea; }")
             blayout = QVBoxLayout(banner)
             blayout.setContentsMargins(12, 10, 12, 10)
             blayout.setSpacing(6)
@@ -224,7 +227,7 @@ class DocumentsDialog(QDialog):
         for entry in entries:
             row = QHBoxLayout()
             marker = QLabel("■")
-            marker.setStyleSheet("color:#1d2d3d;")
+            marker.setObjectName("RevisionMarker")
             row.addWidget(marker)
             text = QLabel(f"{entry['date']} · {entry['who']}"
                           + (f" · {entry['ecn_id']}" if entry.get("ecn_id") else ""))
@@ -241,7 +244,7 @@ class DocumentsDialog(QDialog):
     # -------------------------------------------------------------- footer
     def _build_footer(self):
         bar = QFrame()
-        bar.setStyleSheet("background:#e9e9ea;border-top:1px solid rgba(29,31,32,.16);")
+        bar.setObjectName("DialogFooter")
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(16, 8, 16, 8)
         note = QLabel("Every entry is an undo-stack action already recorded - this pane reads it, it does not add bookkeeping.")

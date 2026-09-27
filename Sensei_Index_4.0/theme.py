@@ -37,7 +37,7 @@ every rule below does for :focus.
 """
 import logging
 
-from paths import FONTS_DIR
+from paths import ASSETS_DIR, FONTS_DIR
 
 _log = logging.getLogger(__name__)
 
@@ -67,6 +67,12 @@ LIGHT = {
     "zebra": "#f5f5f8", "error": "#c0392b", "ecn_bg": "#fdecea",
     "track": "#d4d4d7", "unchecked": "#7a7a7d", "white": "#ffffff",
     "light_blue": "#b5d9fd", "pale_blue": "#94bce3",
+    # "surface": cards, panels and buttons. "white" stays literal white for
+    # input fields and the light-locked data tables in every theme.
+    "surface": "#ffffff", "on_accent": "#ffffff",
+    # "rule": control outlines on theme-coloured surfaces; "accent_hover":
+    # hover shade for accent fills and links (navy would vanish in dark).
+    "rule": "rgba(29,31,32,.3)", "accent_hover": "#1d2d3d",
 }
 
 DARK = {
@@ -76,6 +82,8 @@ DARK = {
     "zebra": "#22384e", "error": "#f0b0b0", "ecn_bg": "#3a2226",
     "track": "#2c455d", "unchecked": "#5d7994", "white": "#ffffff",
     "light_blue": "#b5d9fd", "pale_blue": "#94bce3",
+    "surface": "#243b52", "on_accent": "#0f1a24",
+    "rule": "rgba(238,246,255,.24)", "accent_hover": "#b5d9fd",
 }
 
 # One color per Overall Index discipline (master_list.DISCIPLINES) - a
@@ -122,6 +130,13 @@ def _build_qss(c, zebra_on=True, contrast_borders=False):
     # c["zebra"] is a dark blue meant to alternate against DARK's own dark
     # ground, which would be unreadable against this table's white rows).
     zebra_rule = f'alternate-background-color: {LIGHT["zebra"]};' if zebra_on else ""
+    # QSS url() needs forward slashes, including on Windows.
+    chevron = (ASSETS_DIR / "chevron_down.png").as_posix()
+    # Tick drawn in the colour that sits on this theme's accent fill.
+    tick_name = "check_dark.png" if c["on_accent"] != "#ffffff" else "check_white.png"
+    tick = (ASSETS_DIR / tick_name).as_posix()
+    tick_light = (ASSETS_DIR / "check_white.png").as_posix()
+    rule = c["ink"] if contrast_borders else c["rule"]
     return f"""
 QMainWindow, QDialog, QWidget {{
     background: {c["ground"]};
@@ -129,6 +144,10 @@ QMainWindow, QDialog, QWidget {{
     font-family: "{BODY_FONT}", "Segoe UI", sans-serif;
     font-size: 13px;
 }}
+/* Text never paints its own backdrop - with the rule above it did, which
+   left grey patches behind every label on a white card and hid the white
+   wordmark on the navy header. */
+QLabel, QCheckBox, QRadioButton {{ background: transparent; }}
 
 *:focus {{
     border: 2px solid {c["accent2"]} !important;
@@ -154,7 +173,7 @@ QLabel#AppWordmark {{
 }}
 QLineEdit#GlobalSearch {{
     background: #ffffff;
-    color: {c["secondary"]};
+    color: {LIGHT["ink"]};
     border: 1px solid {c["pale_blue"]};
     border-radius: 0px;
     padding: 8px 12px;
@@ -172,7 +191,7 @@ QPushButton#HeaderPillButton:hover {{ background: rgba(255,255,255,.14); }}
 
 /* -------------------------------------------------------- priorities strip */
 QFrame#PrioritiesStrip {{
-    background: {c["white"] if not contrast_borders else c["ground"]};
+    background: {c["surface"] if not contrast_borders else c["ground"]};
     border: none;
     border-bottom: 2px solid {c["navy"]};
     min-height: 40px;
@@ -187,7 +206,7 @@ QLabel#PrioritiesKicker {{
 QPushButton#PriorityChip {{
     background: transparent;
     color: {c["ink"]};
-    border: 1px solid rgba(29,31,32,.28);
+    border: 1px solid {rule};
     border-radius: 0px;
     padding: 6px 11px;
     font-size: 13px;
@@ -204,7 +223,7 @@ QPushButton#PriorityChip[warning="true"] {{
 
 /* ------------------------------------------------------------ series rail */
 QFrame#SeriesRail {{
-    background: {c["white"]};
+    background: {c["surface"]};
     border: none;
     border-right: 1px solid {border_strong};
 }}
@@ -232,7 +251,7 @@ QPushButton#RailRow[active="true"] {{
 }}
 QPushButton#RailFooterButton {{
     background: transparent;
-    border: 1px solid rgba(29,31,32,.3);
+    border: 1px solid {rule};
     padding: 8px 12px;
     font-size: 13px;
     font-weight: 500;
@@ -268,7 +287,7 @@ QTabBar#EquipTabs::tab:selected {{
    toggle in place (EquipTab's "active" tab instead swaps in a whole new
    IndexView, so it's fixed for that widget's lifetime). */
 QPushButton#DensityButton {{
-    border: 1px solid rgba(29,31,32,.3);
+    border: 1px solid {rule};
     padding: 5px 10px;
     font-size: 12px;
     background: {c["chrome"]};
@@ -297,7 +316,7 @@ QPushButton#FilterChip {{
 }}
 QPushButton#AddFilterChip {{
     background: transparent;
-    border: 1px dashed rgba(29,31,32,.35);
+    border: 1px dashed {rule};
     color: {c["body"]};
     padding: 7px 10px;
     font-size: 12.5px;
@@ -309,12 +328,20 @@ QFrame#SystemLegend {{
     border: 1px solid rgba(29,31,32,.16);
 }}
 QLabel#LegendKicker {{
-    color: {c["secondary"]};
+    color: {LIGHT["secondary"]};
     font-family: "{HEADING_FONT}", sans-serif;
     font-size: 10.5px;
     font-weight: 600;
     letter-spacing: 1px;
 }}
+
+QWidget#LegendItem {{ background: {LIGHT["ground"]}; }}
+QFrame#SystemLegend QLabel#FieldLabel {{ color: {LIGHT["secondary"]}; }}
+
+/* Other tables (document register, datasheet import) sit on cards, so
+   they take the card surface rather than the page colour. */
+QTableView {{ background: {c["surface"]}; gridline-color: {rule}; }}
+QWidget#CellWrapper {{ background: transparent; }}
 
 /* -------------------------------------------------------------- index table */
 /* The index table itself (its header, row gutter, Stage/Doc/ECN chips, and
@@ -442,7 +469,7 @@ QLabel#DocChipSUP {{ background: {c["group_alt"]}; color: {c["secondary"]}; font
 
 /* ------------------------------------------------------------------ card */
 QFrame#Card {{
-    background: {c["white"]};
+    background: {c["surface"]};
     border: 1px solid rgba(29,31,32,.16);
 }}
 QLabel#StatNumber {{
@@ -475,7 +502,36 @@ QLineEdit, QComboBox, QTextEdit, QSpinBox, QDateEdit {{
 QLineEdit:focus, QComboBox:focus, QTextEdit:focus {{
     border: 1px solid {c["accent2"]};
 }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
+QComboBox {{ padding-right: 28px; }}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border: none;
+    width: 26px;
+}}
+QComboBox::down-arrow {{ image: url("{chevron}"); width: 10px; height: 6px; }}
+QComboBox QAbstractItemView {{
+    background: {LIGHT["white"]};
+    color: {LIGHT["ink"]};
+    border: 1px solid rgba(29,31,32,.28);
+    selection-background-color: {LIGHT["highlight"]};
+    selection-color: {LIGHT["ink"]};
+    outline: 0;
+}}
+
+/* Side navigation lists (Edit form sections, Settings categories). */
+QListWidget {{ background: transparent; border: none; outline: 0; }}
+QListWidget::item {{
+    padding: 7px 14px;
+    border-left: 3px solid transparent;
+    color: {c["ink"]};
+}}
+QListWidget::item:hover {{ background: {c["highlight"]}; }}
+QListWidget::item:selected {{
+    background: {c["highlight"]};
+    color: {c["ink"]};
+    border-left: 3px solid {c["accent2"]};
+}}
 QCheckBox, QRadioButton {{ spacing: 8px; color: {c["ink"]}; }}
 QCheckBox::indicator, QRadioButton::indicator {{
     width: 16px; height: 16px;
@@ -485,19 +541,26 @@ QCheckBox::indicator, QRadioButton::indicator {{
 QCheckBox::indicator {{ border-radius: 0px; }}
 QRadioButton::indicator {{ border-radius: 8px; }}
 QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {c["accent2"]}; }}
-QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
-    background: {c["accent"]}; border-color: {c["accent"]};
+QCheckBox::indicator:checked {{
+    background: {c["accent"]}; border-color: {c["accent"]}; image: url("{tick}");
 }}
+QRadioButton::indicator:checked {{
+    border-color: {c["accent"]};
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {c["accent"]}, stop:0.5 {c["accent"]}, stop:0.62 {c["white"]}, stop:1 {c["white"]});
+}}
+QCheckBox:disabled, QRadioButton:disabled {{ color: {c["unchecked"]}; }}
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
     background: {c["zebra"]}; border-color: rgba(29,31,32,.2);
 }}
+/* Item-view checkboxes sit on the light-locked tables, so LIGHT colours. */
 QTableView::indicator, QAbstractItemView::indicator {{
     width: 16px; height: 16px;
-    border: 2px solid {c["unchecked"]};
-    background: {c["white"]};
+    border: 2px solid {LIGHT["unchecked"]};
+    background: {LIGHT["white"]};
 }}
 QTableView::indicator:checked, QAbstractItemView::indicator:checked {{
-    background: {c["accent"]}; border-color: {c["accent"]};
+    background: {LIGHT["accent"]}; border-color: {LIGHT["accent"]}; image: url("{tick_light}");
 }}
 QGroupBox {{
     border: 1px solid rgba(29,31,32,.2);
@@ -507,12 +570,102 @@ QGroupBox {{
     font-weight: 600;
 }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}
+/* Form sections read as cards; the plain container widgets inside them
+   (tables of fields) must not paint the page colour over that. */
+QGroupBox {{ background: {c["surface"]}; }}
+QWidget#FormTable {{ background: transparent; }}
+
+/* Dialog chrome: the sticky record header and the section sidebar. */
+QFrame#DialogHeader {{
+    background: {c["surface"]};
+    border: none;
+    border-bottom: 1px solid {border_strong};
+}}
+QFrame#DialogSidebar {{
+    background: {c["surface"]};
+    border: none;
+    border-right: 1px solid {border_strong};
+}}
+QListWidget#SideNav {{
+    background: {c["surface"]};
+    border: none;
+    border-right: 1px solid {border_strong};
+    padding-top: 8px;
+}}
+QListWidget#SideNav:focus {{
+    border: none !important;
+    border-right: 1px solid {border_strong} !important;
+}}
+QListWidget#SideNav::item:selected:focus {{ border-left: 3px solid {c["accent"]}; }}
+QLabel#MutedValue {{ color: {c["secondary"]}; }}
+QLabel#StageDone {{ color: {c["ink"]}; font-size: 12.5px; }}
+QLabel#StagePending {{ color: {c["secondary"]}; font-size: 12.5px; }}
+
+/* Series rail progress: count, track and fill. */
+QLabel#RailCount {{ color: {c["secondary"]}; font-size: 13px; }}
+QFrame#RailTrack {{ background: {c["track"]}; border: none; }}
+QFrame#RailFill {{ background: {c["accent"]}; border: none; }}
+
+/* Instrumentation / Electrical switch - the page's main navigation, so it
+   reads differently from the small grey row-density picker beside it. */
+QPushButton#DisciplineButton {{
+    background: {c["surface"]};
+    color: {c["body"]};
+    border: 1px solid {rule};
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 500;
+}}
+QPushButton#DisciplineButton:hover {{ background: {c["highlight"]}; }}
+QPushButton#DisciplineButton:checked {{
+    background: {c["accent"]};
+    color: {c["on_accent"]};
+    border-color: {c["accent"]};
+    font-weight: 600;
+}}
+
+/* Segmented pickers (Settings > Appearance). */
+QFrame#Segmented {{ background: {c["surface"]}; border: 1px solid {rule}; }}
+QPushButton#SegmentButton {{
+    background: {c["surface"]};
+    color: {c["ink"]};
+    border: none;
+    border-right: 1px solid {rule};
+    padding: 7px 14px;
+    font-size: 13px;
+}}
+QPushButton#SegmentButton[last="true"] {{ border-right: none; }}
+QPushButton#SegmentButton:hover {{ background: {c["highlight"]}; }}
+QPushButton#SegmentButton:checked {{
+    background: {c["accent"]};
+    color: {c["on_accent"]};
+    font-weight: 600;
+}}
+QLabel#KeyCap {{
+    background: {c["chrome"]};
+    color: {c["ink"]};
+    font-family: {MONO_FONT};
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 7px;
+}}
+
+QLabel#RevisionMarker {{ color: {c["accent"]}; }}
+QFrame#DialogFooter {{
+    background: {c["chrome"]};
+    border: none;
+    border-top: 1px solid {border_strong};
+}}
+
+/* Record view stage markers: filled once reached. */
+QLabel#StageMarkerDone {{ background: {c["accent"]}; border: 2px solid {c["accent"]}; }}
+QLabel#StageMarkerPending {{ background: transparent; border: 2px solid {c["unchecked"]}; }}
 
 /* --------------------------------------------------------------- buttons */
 QPushButton {{
-    background: {c["white"]};
+    background: {c["surface"]};
     color: {c["ink"]};
-    border: 1px solid rgba(29,31,32,.3);
+    border: 1px solid {rule};
     border-radius: 0px;
     padding: 9px 16px;
     font-size: 13.5px;
@@ -521,27 +674,33 @@ QPushButton:hover {{ background: {c["zebra"]}; }}
 QPushButton:pressed {{ background: {c["group_alt"]}; }}
 QPushButton#Primary {{
     background: {c["accent"]};
-    color: #ffffff;
+    color: {c["on_accent"]};
     border: none;
     font-weight: 600;
 }}
-QPushButton#Primary:hover {{ background: {c["navy"]}; }}
+QPushButton#Primary:hover {{ background: {c["accent_hover"]}; }}
 QPushButton#Success {{ background: #2e6b48; color: #ffffff; border: none; font-weight: 600; }}
 QPushButton#Success:hover {{ background: #245939; }}
 QPushButton#Danger {{
-    background: {c["white"]}; color: {c["error"]};
+    background: {c["surface"]}; color: {c["error"]};
     border: 1px solid #e3b0a8; font-weight: 600;
 }}
 QPushButton#Danger:hover {{ background: {c["ecn_bg"]}; }}
-QPushButton#Ghost {{ background: transparent; border: 1px solid rgba(29,31,32,.3); color: {c["ink"]}; }}
+QPushButton#Ghost {{ background: transparent; border: 1px solid {rule}; color: {c["ink"]}; }}
 QPushButton#Ghost:hover {{ background: {c["zebra"]}; }}
 QPushButton#Link {{
     background: transparent; border: none; color: {c["accent"]};
     text-decoration: underline; padding: 4px 2px;
 }}
-QPushButton#Link:hover {{ color: {c["navy"]}; }}
+QPushButton#Link:hover {{ color: {c["accent_hover"]}; }}
+QPushButton:disabled {{ color: {c["unchecked"]}; }}
+QPushButton#Primary:disabled {{ background: {c["track"]}; color: {c["secondary"]}; }}
 
 /* -------------------------------------------------------------- scroll */
+/* Page-level scroll areas are flat, and taking focus as a dialog opens
+   shouldn't ring the whole page (tables and lists keep their ring). */
+QScrollArea {{ border: none; }}
+QScrollArea:focus {{ border: none !important; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; }}
 QScrollBar::handle:vertical {{ background: {c["unchecked"]}; border-radius: 5px; min-height: 24px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0px; }}
@@ -552,4 +711,6 @@ QMessageBox {{ background: {c["ground"]}; color: {c["ink"]}; }}
 
 LIGHT_QSS = _build_qss(LIGHT)
 DARK_QSS = _build_qss(DARK)
-HIGH_CONTRAST_QSS = _build_qss(LIGHT, zebra_on=False, contrast_borders=True)
+# LIGHT's secondary grey is 6.6:1 on white (5.9:1 on ground) - under the
+# 7:1 this theme promises - so high contrast darkens it (9.5:1 / 8.5:1).
+HIGH_CONTRAST_QSS = _build_qss(dict(LIGHT, secondary="#454548"), zebra_on=False, contrast_borders=True)

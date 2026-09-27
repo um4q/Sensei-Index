@@ -15,8 +15,8 @@ import os
 import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QItemSelectionModel, QDate
-from PySide6.QtGui import QFont, QColor, QKeySequence, QShortcut, QPixmap
+from PySide6.QtCore import Qt, QSize, QRect, QItemSelectionModel, QDate
+from PySide6.QtGui import QFont, QFontMetrics, QColor, QKeySequence, QShortcut, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFormLayout, QLabel, QPushButton, QLineEdit, QComboBox, QTextEdit,
@@ -235,6 +235,7 @@ def make_field_widget(field, initial_value):
         return text
     edit = QLineEdit()
     edit.setText(initial_value)
+    edit.setCursorPosition(0)  # show the start of long values, not the tail
     return edit
 
 
@@ -538,11 +539,14 @@ class MainWindow(QMainWindow):
         logo_label = QLabel()
         self._set_logo_pixmap(logo_label)
         logo_label.setObjectName("SidebarLogo")
+        logo_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         layout.addWidget(logo_label)
 
         wordmark = QLabel("SENSEI INDEX")
         wordmark.setObjectName("AppWordmark")
+        wordmark.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         layout.addWidget(wordmark)
+        layout.addSpacing(12)
 
         self.global_search = QLineEdit()
         self.global_search.setObjectName("GlobalSearch")
@@ -551,6 +555,7 @@ class MainWindow(QMainWindow):
         self.global_search.setMaximumWidth(520)
         self.global_search.returnPressed.connect(self._run_global_search)
         layout.addWidget(self.global_search, stretch=1)
+        layout.addStretch()
 
         for text, tip, handler in [
             ("Import datasheet…", "Pre-fill a new row from an engineering data sheet PDF (Ctrl+Shift+I)",
@@ -719,20 +724,22 @@ class MainWindow(QMainWindow):
             top.addWidget(name_lbl)
             top.addStretch()
             count_lbl = QLabel(f"{accepted} / {total}")
-            count_lbl.setStyleSheet("font-size:13px;color:#5d5d60;")
+            count_lbl.setObjectName("RailCount")
             top.addWidget(count_lbl)
             row_layout.addLayout(top)
 
             track = QFrame()
+            track.setObjectName("RailTrack")
             track.setFixedHeight(4)
-            track.setStyleSheet("background:#d4d4d7;")
             track_layout = QHBoxLayout(track)
             track_layout.setContentsMargins(0, 0, 0, 0)
-            frac = (accepted / total) if total else 0
-            fill = QFrame()
-            fill.setStyleSheet("background:#416180;")
-            track_layout.addWidget(fill, stretch=max(1, int(frac * 100)))
-            track_layout.addStretch(max(1, 100 - int(frac * 100)))
+            track_layout.setSpacing(0)
+            pct = int((accepted / total) * 100) if total else 0
+            if pct:
+                fill = QFrame()
+                fill.setObjectName("RailFill")
+                track_layout.addWidget(fill, stretch=pct)
+            track_layout.addStretch(max(1, 100 - pct))
             row_layout.addWidget(track)
 
             row.setAccessibleName(f"{label}, {accepted} of {total} accepted")
@@ -801,9 +808,8 @@ class MainWindow(QMainWindow):
         self.refresh_sidebar_and_dashboard()
 
     def _set_logo_pixmap(self, label):
-        theme = da.get_setting("theme") or "light"
-        filename = "oathplatehelm.png" if theme == "dark" else "oathplatehelm2.png"
-        pixmap = QPixmap(str(da.ASSETS_DIR / filename))
+        # The header is navy in every theme, so always the light (silver) helm.
+        pixmap = QPixmap(str(da.ASSETS_DIR / "oathplatehelm.png"))
         if not pixmap.isNull():
             label.setPixmap(pixmap.scaledToHeight(42, Qt.SmoothTransformation))
 
@@ -1246,9 +1252,12 @@ class DashboardPage(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         scroll.viewport().setAttribute(Qt.WA_StyledBackground, True)
         inner = QWidget()
         inner_layout = QVBoxLayout(inner)
+        inner_layout.setContentsMargins(0, 0, 12, 0)
+        inner_layout.setSpacing(14)
 
         cards_row = QHBoxLayout()
         cards_row.setSpacing(16)
@@ -1257,12 +1266,11 @@ class DashboardPage(QWidget):
             breakdown = da.count_by_system_all_series(equip_key)
             card = StatCard(f"{da.EQUIPMENT_TYPES[equip_key]['plural']} logged",
                             totals.get(equip_key, 0), breakdown)
-            cards_row.addWidget(card)
+            cards_row.addWidget(card, stretch=1)
         by_form = {da.EQUIPMENT_TYPES[k]["plural"]: totals.get(k, 0)
                    for k in da.types_in_discipline("Electrical")}
         cards_row.addWidget(StatCard("Electrical records logged", sum(by_form.values()), by_form,
-                                     breakdown_title="BY FORM"))
-        cards_row.addStretch()
+                                     breakdown_title="BY FORM"), stretch=1)
         inner_layout.addLayout(cards_row)
 
         inner_layout.addWidget(self._build_tips_card())
@@ -2396,7 +2404,7 @@ class RowDetailDialog(QDialog):
         outer.setSpacing(0)
 
         header = QFrame()
-        header.setStyleSheet("background:#fff;border-bottom:1px solid rgba(29,31,32,.16);")
+        header.setObjectName("DialogHeader")
         hlayout = QVBoxLayout(header)
         hlayout.setContentsMargins(20, 16, 20, 16)
         hlayout.setSpacing(10)
@@ -2417,17 +2425,16 @@ class RowDetailDialog(QDialog):
             done = bool(status.get(key))
             marker = QLabel()
             marker.setFixedSize(11, 11)
-            marker.setStyleSheet(f"background:{'#1d2d3d' if done else '#fff'};"
-                                  f"border:2px solid {'#1d2d3d' if done else '#7a7a7d'};")
+            marker.setObjectName("StageMarkerDone" if done else "StageMarkerPending")
             timeline.addWidget(marker)
             lbl = QLabel(word)
-            lbl.setStyleSheet(f"color:{'#1d1f20' if done else '#5d5d60'};font-size:12.5px;")
+            lbl.setObjectName("StageDone" if done else "StagePending")
             timeline.addWidget(lbl)
             if i < 2:
                 line = QFrame()
+                line.setObjectName("RailTrack")
                 line.setFixedWidth(20)
                 line.setFixedHeight(1)
-                line.setStyleSheet("background:#1d2d3d;")
                 timeline.addWidget(line)
         timeline.addStretch()
         hlayout.addLayout(timeline)
@@ -2435,13 +2442,14 @@ class RowDetailDialog(QDialog):
 
         filter_row = QHBoxLayout()
         filter_row.setContentsMargins(20, 10, 20, 0)
+        filter_row.setSpacing(0)
         self._filter_buttons = {}
         filled_n = sum(1 for f in schema.FIELDS if str(self.values.get(f["id"], "")).strip())
         blank_n = len(schema.FIELDS) - filled_n
         for key, text in [("all", f"All fields ({len(schema.FIELDS)})"),
                            ("filled", f"Filled only ({filled_n})"),
                            ("blank", f"Blank ({blank_n})")]:
-            btn = make_button(text, "Link" if key != "all" else "Primary")
+            btn = make_button(text, "DensityButton")
             btn.setCheckable(True)
             btn.setChecked(key == "all")
             btn.clicked.connect(lambda _c, k=key: self._set_field_filter(k))
@@ -2509,6 +2517,7 @@ class RowDetailDialog(QDialog):
             grid.setHorizontalSpacing(14)
             grid.setVerticalSpacing(6)
             grid.setColumnStretch(1, 1)
+            grid.setColumnMinimumWidth(0, 190)
             row = 0
             built = set()
             for field in fields_here:
@@ -2526,9 +2535,11 @@ class RowDetailDialog(QDialog):
                 label = QLabel(field["label"])
                 label.setObjectName("FieldLabel")
                 label.setWordWrap(True)
+                label.setFixedWidth(190)
                 raw = str(self.values.get(field["id"], "") or "").strip()
                 value = QLabel(raw if raw else "not recorded")
-                value.setStyleSheet("color:#5d5d60;" if not raw else "")
+                if not raw:
+                    value.setObjectName("MutedValue")
                 value.setWordWrap(True)
                 value.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 grid.addWidget(label, row, 0)
@@ -2553,6 +2564,7 @@ class RowDetailDialog(QDialog):
             return None
         fields_by_id = {f["id"]: f for f in self._schema.LOG_COLUMNS}
         table = QWidget()
+        table.setObjectName("FormTable")
         layout = QGridLayout(table)
         layout.setContentsMargins(0, 0, 0, 4)
         layout.setHorizontalSpacing(12)
@@ -2724,6 +2736,8 @@ class EditDialog(QDialog):
     values from nearby tags) aren't implemented - a real, disclosed scope
     cut, not a silent one."""
 
+    SECTION_NAV_WIDTH = 230
+
     def __init__(self, parent, series_number, equip_key, row_num, is_new, prefill=None):
         super().__init__(parent)
         self.series_number = series_number
@@ -2735,10 +2749,14 @@ class EditDialog(QDialog):
         schema = self.etype["schema"]
         self.schema = schema
         # Forms with tables need the extra width to show a full row of columns.
+        # One label width per dialog so fields line up from section to section
+        # (longer labels wrap).
         if getattr(schema, "GRIDS", None):
             self.resize(1180, 760)
+            self._label_width = 160
         else:
-            self.resize(1000, 720)
+            self.resize(1100, 740)
+            self._label_width = 140
         existing = {} if is_new else da.read_full_row(series_number, equip_key, row_num)
         effective = dict(existing)
         if is_new:
@@ -2755,7 +2773,7 @@ class EditDialog(QDialog):
 
         # ---------------------------------------------------- sticky header
         header = QFrame()
-        header.setStyleSheet("background:#fff;border-bottom:1px solid rgba(29,31,32,.16);")
+        header.setObjectName("DialogHeader")
         hlayout = QHBoxLayout(header)
         hlayout.setContentsMargins(20, 16, 20, 14)
         hlayout.setSpacing(16)
@@ -2800,8 +2818,8 @@ class EditDialog(QDialog):
         body_row.setSpacing(0)
 
         sidebar = QFrame()
-        sidebar.setFixedWidth(230)
-        sidebar.setStyleSheet("background:#fff;border-right:1px solid rgba(29,31,32,.16);")
+        sidebar.setFixedWidth(self.SECTION_NAV_WIDTH)
+        sidebar.setObjectName("DialogSidebar")
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 8, 0, 8)
         sidebar_layout.setSpacing(0)
@@ -2811,6 +2829,8 @@ class EditDialog(QDialog):
         sidebar_layout.addWidget(kicker)
         self.section_list = QListWidget()
         self.section_list.setFrameShape(QFrame.NoFrame)
+        self.section_list.setWordWrap(True)
+        self.section_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.section_list.itemClicked.connect(self._jump_to_section_item)
         sidebar_layout.addWidget(self.section_list, stretch=1)
         footnote = QLabel("Alt+↓ / Alt+↑ move between sections.")
@@ -2846,6 +2866,8 @@ class EditDialog(QDialog):
             grid.setVerticalSpacing(8)
             grid.setColumnStretch(1, 1)
             grid.setColumnStretch(3, 1)
+            grid.setColumnMinimumWidth(0, self._label_width)
+            grid.setColumnMinimumWidth(2, self._label_width)
             self._build_section_body(grid, fields_here, effective)
 
             inner_layout.addWidget(box)
@@ -2856,6 +2878,7 @@ class EditDialog(QDialog):
             item.setData(Qt.UserRole, section)
             self.section_list.addItem(item)
             self.section_list_items[section] = item
+            self._fit_section_item(item)
 
         inner_layout.addStretch()
         self.scroll.setWidget(inner)
@@ -2931,6 +2954,8 @@ class EditDialog(QDialog):
             label = QLabel(field["label"] + ("  *" if is_required else ""))
             label.setObjectName("RequiredLabel" if is_required else "FieldLabel")
             label.setWordWrap(True)
+            if field["ftype"] != "multiline":
+                label.setFixedWidth(self._label_width)
 
             if field["ftype"] == "multiline":
                 if col_pair != 0:
@@ -2955,6 +2980,7 @@ class EditDialog(QDialog):
         per item, each cell the same widget the loose layout would use."""
         fields_by_id = {f["id"]: f for f in self.schema.LOG_COLUMNS}
         table = QWidget()
+        table.setObjectName("FormTable")
         layout = QGridLayout(table)
         layout.setContentsMargins(0, 2, 0, 6)
         layout.setHorizontalSpacing(8)
@@ -3036,6 +3062,16 @@ class EditDialog(QDialog):
             item = self.section_list_items.get(section)
             if item:
                 item.setText(f"{self.section_boxes[section].title()}    {f}/{t}")
+                self._fit_section_item(item)
+
+    def _fit_section_item(self, item):
+        """Wrapped rows need an explicit height: Qt measures the wrap before the
+        stylesheet's item padding, which cut long section names off."""
+        self.section_list.ensurePolished()
+        text_width = self.SECTION_NAV_WIDTH - 31 - 10  # item padding + border, scrollbar room
+        fm = QFontMetrics(self.section_list.font())
+        height = fm.boundingRect(QRect(0, 0, text_width, 2000), Qt.TextWordWrap, item.text()).height()
+        item.setSizeHint(QSize(text_width, height + 14))
 
     def _jump_to_section_item(self, item):
         section = item.data(Qt.UserRole)
@@ -3123,6 +3159,7 @@ class SettingsDialog(QDialog):
         outer.setSpacing(0)
 
         nav = QListWidget()
+        nav.setObjectName("SideNav")
         nav.setFixedWidth(210)
         nav.setFrameShape(QFrame.NoFrame)
         nav.addItems(self.CATEGORIES)
@@ -3162,20 +3199,17 @@ class SettingsDialog(QDialog):
         """options: [(value, label)]. Returns the QFrame; on_pick(value)
         fires when a segment is clicked."""
         wrap = QFrame()
-        wrap.setStyleSheet("border:1px solid rgba(29,31,32,.3);")
+        wrap.setObjectName("Segmented")
         row = QHBoxLayout(wrap)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
         buttons = {}
-        for value, label in options:
+        for i, (value, label) in enumerate(options):
             btn = QPushButton(label)
+            btn.setObjectName("SegmentButton")
+            btn.setProperty("last", i == len(options) - 1)
             btn.setCheckable(True)
             btn.setChecked(value == current)
-            btn.setStyleSheet(
-                "QPushButton{border:none;border-right:1px solid rgba(29,31,32,.3);"
-                "padding:7px 14px;font-size:13px;background:#fff;color:#1d1f20;}"
-                "QPushButton:last-child{border-right:none;}"
-                "QPushButton:checked{background:#416180;color:#fff;font-weight:600;}")
             btn.clicked.connect(lambda _c, v=value: on_pick(v))
             row.addWidget(btn)
             buttons[value] = btn
@@ -3375,9 +3409,7 @@ class SettingsDialog(QDialog):
         ]
         for row, (keys, desc_text) in enumerate(shortcuts):
             key_label = QLabel(keys)
-            key_label.setStyleSheet(
-                "font:500 12px ui-monospace,Menlo,monospace;background:#e9e9ea;"
-                "padding:4px 7px;")
+            key_label.setObjectName("KeyCap")
             key_label.setAlignment(Qt.AlignCenter)
             grid.addWidget(key_label, row, 0)
             desc_label = QLabel(desc_text)
@@ -3871,6 +3903,7 @@ class DatasheetImportDialog(QDialog):
             box = QCheckBox()
             box.setChecked(True)
             wrapper = QWidget()
+            wrapper.setObjectName("CellWrapper")
             wlayout = QHBoxLayout(wrapper)
             wlayout.setContentsMargins(0, 0, 0, 0)
             wlayout.setAlignment(Qt.AlignCenter)

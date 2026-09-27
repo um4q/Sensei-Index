@@ -102,6 +102,14 @@ Source: "..\wizard_draft.json"; DestDir: "{app}"; Flags: onlyifdoesntexist unins
 Source: "..\Transmitter_Inspection_Test_Record_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "..\Pneumatically_Actuated_Valve_Check_Record_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "..\Gauge_Inspection_Record_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+; Electrical forms.
+Source: "..\Transformer_Test_Record_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\Small_Power_and_Control_Cable_Inspection_and_Test_Record_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\General_Electrical_Equipment_Installation_and_Test_Report_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\EHT_Removal_and_Reinstatement_Report_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\EHT_and_RTD_Installation_Inspection_Report_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\EHT_and_RTD_Pre-Insulation_Installation_Report_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\YCQE-EI-014_Torqueing_Report_TEMPLATE.pdf"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"

@@ -270,8 +270,11 @@ class DisciplineCard(QFrame):
         # on cascade order against the app-level stylesheet.
         border = theme.DISCIPLINE_COLORS.get(discipline, theme.LIGHT["navy"]) if active else "rgba(29,31,32,.16)"
         border_w = 2 if active else 1
+        # Scoped by objectName: a bare "QFrame" selector also matches every
+        # QLabel inside (QLabel is a QFrame) and boxed each one in a border.
+        self.setObjectName("DisciplineCard")
         self.setStyleSheet(
-            f"QFrame {{ background: {theme.LIGHT['white']}; border: {border_w}px solid {border}; }}")
+            f"#DisciplineCard {{ background: {theme.LIGHT['white']}; border: {border_w}px solid {border}; }}")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 10)
@@ -492,8 +495,9 @@ class OverallIndexView(QWidget):
         # above: this panel is an always-white surface, and FieldLabel's
         # color comes from the ACTIVE theme, which is unreadable against a
         # background that never changes with it.
+        self.detail_panel.setObjectName("DetailPanel")
         self.detail_panel.setStyleSheet(
-            f"QFrame {{ background: {theme.LIGHT['white']}; border: 1px solid rgba(29,31,32,.16); }}")
+            f"#DetailPanel {{ background: {theme.LIGHT['white']}; border: 1px solid rgba(29,31,32,.16); }}")
         self.detail_grid = QGridLayout(self.detail_panel)
         self.detail_grid.setContentsMargins(16, 10, 16, 10)
         self.detail_grid.setHorizontalSpacing(22)

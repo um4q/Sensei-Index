@@ -326,7 +326,7 @@ class IndexView(QWidget):
             total = sum(counts.get(k, 0) for k in keys)
             is_current = discipline == current
             btn = QPushButton(f"{discipline}  {total}")
-            btn.setObjectName("DensityButton")
+            btn.setObjectName("DisciplineButton")
             btn.setCheckable(True)
             btn.setChecked(is_current)
             btn.setAccessibleName(f"{discipline}, {total} records" + (", showing" if is_current else ""))
@@ -537,6 +537,7 @@ class IndexView(QWidget):
             lbl.setStyleSheet(f"font-size:12px;color:{_C['body']};")
             wrap.addWidget(lbl)
             holder = QWidget()
+            holder.setObjectName("LegendItem")
             holder.setLayout(wrap)
             self.legend_body.addWidget(holder)
 

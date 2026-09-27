@@ -86,7 +86,7 @@ class SplashScreen(QWidget):
     def __init__(self):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setFixedSize(660, 400)
+        self.setFixedSize(660, 420)
         self.setStyleSheet(f"background:{LIGHT['white']};")
         self._log_lines = []
         self._error = False
@@ -96,7 +96,9 @@ class SplashScreen(QWidget):
         outer.setSpacing(0)
         self.setLayout(outer)
         frame = QFrame()
-        frame.setStyleSheet(f"border:1px solid rgba(29,31,32,.3);background:{LIGHT['white']};")
+        # Scoped by objectName - a selector-less border here boxed every label inside.
+        frame.setObjectName("SplashFrame")
+        frame.setStyleSheet(f"#SplashFrame {{ border:1px solid rgba(29,31,32,.3);background:{LIGHT['white']}; }}")
         outer.addWidget(frame)
         root = QVBoxLayout(frame)
         root.setContentsMargins(0, 0, 0, 0)
@@ -115,11 +117,11 @@ class SplashScreen(QWidget):
         hlayout.addWidget(logo)
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
-        title = QLabel("SENSEI INDEX 3.0")
+        title = QLabel("SENSEI INDEX 4.0")
         title.setStyleSheet("font:600 30px 'Barlow Condensed SemiBold','Barlow Condensed',sans-serif;"
                              "letter-spacing:1px;color:#fff;")
         title_col.addWidget(title)
-        subtitle = QLabel("K1B Equipment Tracker · Instrumentation QA/QC")
+        subtitle = QLabel("K1B Equipment Tracker · Instrumentation & Electrical QA/QC")
         subtitle.setStyleSheet(f"font:400 13px 'Barlow',sans-serif;color:{LIGHT['light_blue']};")
         title_col.addWidget(subtitle)
         hlayout.addLayout(title_col)
@@ -201,10 +203,11 @@ class SplashScreen(QWidget):
 
         # ---- footer ----
         footer = QFrame()
-        footer.setStyleSheet("border-top:1px solid rgba(29,31,32,.14);")
+        footer.setObjectName("SplashFooter")
+        footer.setStyleSheet("#SplashFooter { border-top:1px solid rgba(29,31,32,.14); }")
         flayout = QHBoxLayout(footer)
         flayout.setContentsMargins(26, 10, 26, 10)
-        version_label = QLabel("Version 3.0")
+        version_label = QLabel("Version 4.0")
         version_label.setStyleSheet(f"font:400 12px 'Barlow',sans-serif;color:{LIGHT['secondary']};")
         flayout.addWidget(version_label)
         flayout.addStretch()
