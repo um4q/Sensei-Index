@@ -1,0 +1,47 @@
+TAG MISMATCH NOTES - Sharp Scanner 20260927_164727 vs Small Power Cable Prefilled Reports Schedule 29103
+=========================================================================================================
+Generated 2026-09-28. Part 7 of the scans was not read. The template's own Part 7 values were left as they were.
+All Part 3 initials were replaced with "LO". N/A entries stay N/A, and blank rows stay blank.
+
+1) TAG NUMBER MISMATCHES: none of the scanned cable tags appear in the prefilled schedule
+   (the schedule covers 29103 / Mainline Separator; the scans are Drain Tank cables).
+   The reports below were still filled from the scan data.
+
+   Scan pg | Scanned Cable Tag              | In Schedule 29103?
+   --------+--------------------------------+-------------------
+      1    | 29203-ET-PE5002-1-PWK-1        | NO
+      2    | 29152-ET-HC4202-1-PWK-1        | NO
+      3    | TANK2-4-PWK-1                  | NO
+      4    | 29203-ET-LIT0220-1-PWK-1       | NO
+      5    | 29152-ET-SC4202-1-PWK-1        | NO
+      6    | 29203-ET-ST5000-1-PWK-1        | NO
+      7    | 29203-ET-LIT0221-1-PWK-1       | NO
+      8    | 29152-ET-DR4200-1-PWK-1        | NO
+      9    | 29152-ET-MT0002-1-PWK-1        | NO
+     10    | TANK2-2-PWK-1                  | NO
+     11    | TANK2-5-PWK-1                  | NO
+     12    | TANK2-1-PWK-1                  | NO
+     13    | 29203-ET-DR5001-1-PWK-1        | NO
+     14    | 29152-ET-FG4202-1-PWK-1        | NO
+     15    | 29152-ET-PG4200-1-PWK-1        | NO
+     16    | TANK2-3-PWK-1                  | NO
+     25    | 29203-ET-HC5012-1-PWK-1        | NO
+
+   The 38 schedule tags (29103-AMB-015 ... 29103-ET-V004-1-PWK-2, plus the 29209-ET-* cables)
+   have no matching scanned record.
+
+2) OTHER TAG / DATA ISSUES FOUND IN THE SCANS
+   - Pg 1:  the handwritten tag reads "29203-ET-PES002-1-PWK-1". Entered as PE5002 to match EHT sheet pg 22 (29203-ET-PE5002-1).
+   - Pg 25: "29203-ET-HC5012-1-PWK-1" has Location "Drain Tank - 29151". The tag prefix (29203) does not match the location unit (29151).
+   - Pg 18 (EHT): Controller/Panel are 29151-HTC-39 / 29151-HTP-001 for TANK2-4. The other TANK2 sheets use 29152. Check this.
+   - Pg 4:  Model and Asset/Serial were written in each other's boxes (Model "72300003", Serial "1587 FC").
+            Entered as Model 1587 FC and Serial 72300003.
+   - Pg 5 and Pg 14: Asset/Serial was written as "7230000" (7 digits). Entered as written. Every other page has 72300003.
+   - Pg 6:  Model was written as "1587" (no "FC"). Entered as written.
+   - Pg 9:  Continuity C-C was written as 0.4, crossed out, and corrected to 0.3. Entered 0.3.
+
+3) PAGES NOT TRANSFERRED (not this form)
+   Scan pages 17-24 are EHT & RTD Installation Inspection Reports (YCQE-EHT-004), not
+   Small Power & Control Cable records. They were not entered on this template:
+     17 TANK2-3-R-1 | 18 TANK2-4-R-1 | 19 29152-ET-MT0002-1 | 20 29152-ET-DR4200-1
+     21 29203-ET-DR5001-1 | 22 29203-ET-PE5002-1 | 23 TANK2-2-R-1 | 24 TANK2-1-R-1
