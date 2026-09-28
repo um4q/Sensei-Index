@@ -37,7 +37,8 @@ Location is "KINOSIS K1B" on every report. The scans' handwritten "Drain Tank" w
    - Pg 18 (EHT): Controller/Panel are 29151-HTC-39 / 29151-HTP-001 for TANK2-4. The other TANK2 sheets use 29152. Check this.
    - Pg 4:  Model and Asset/Serial were written in each other's boxes (Model "72300003", Serial "1587 FC").
             Entered as Model 1587 FC and Serial 72300003.
-   - Pg 5 and Pg 14: Asset/Serial was written as "7230000" (7 digits). Entered as written. Every other page has 72300003.
+   - Pg 5 and Pg 14: Asset/Serial was written as "7230000" (last digit missing). Entered as 72300003, the same test
+            equipment as every other page.
    - Pg 6:  Model was written as "1587" (no "FC"). Entered as written.
    - Pg 9:  Continuity C-C was written as 0.4, crossed out, and corrected to 0.3. Entered 0.3.
 
