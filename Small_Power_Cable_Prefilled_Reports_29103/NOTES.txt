@@ -3,7 +3,7 @@ SMALL POWER CABLE PREFILLED REPORTS - AREA 29103 - NOTES
 Source: Google Drive > Instrumentation > 29103-65H-104-01_1A1 (12 Chemelex HT cable schedules).
 Template: YCQE-E&I-113 Rev.0. Filled: Location KINOSIS K1B, Cable Tag (TO DESTINATION),
 Cable Type, System (HTP panel), Cable Size, No. of Conductors, Rated Voltage.
-Part 7 left as on the template. Only TECK POWER cables are included; ACIC (RTD) cables are not small power cables.
+Part 7 (QA representative name, date, signature) left BLANK. Only TECK POWER cables are included; ACIC (RTD) cables are not small power cables.
 
 DUPLICATES IGNORED
  - 29103-HTP-102 (29103-65H-112-01): all 38 power cables are already in
