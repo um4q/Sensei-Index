@@ -1,6 +1,6 @@
 TAG MISMATCH NOTES - Sharp Scanner 20260927_164727 vs Small Power Cable Prefilled Reports Schedule 29103
 =========================================================================================================
-Generated 2026-09-28. Part 7 of the scans was not read. The template's own Part 7 values were left as they were.
+Generated 2026-09-28. Part 7 of the scans was not read. Part 7 on the reports (QA name, date, signature) is left BLANK.
 All Part 3 initials were replaced with "LO". N/A entries stay N/A, and blank rows stay blank.
 Location is "KINOSIS K1B" on every report. The scans' handwritten "Drain Tank" was not used.
 
