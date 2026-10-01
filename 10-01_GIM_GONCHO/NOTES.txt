@@ -12,9 +12,11 @@ NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
 1) Small Power Cables ITR 100/  (10 reports, YCQE-E&I-113, from defandRTD.pdf pages 4-13)
    Tags written in full dashed form, e.g. 29103ETP11041PWK1 -> 29103-ET-P1104-1-PWK-1.
    Location KINOSIS K1B. Cable type TECK as written.
+   System: 29103-HTP-002 on all 10. Cross-referenced to cable schedule 29103-65H-102-01_1A1 (Drive), which also
+   matches size 10 AWG, 2-conductor, 600 V for every cable.
+   The scan for P1104-2 read 'PE1104-2'. The schedule has no PE1104-2, only 29103-ET-P1104-2-PWK-1, so that tag was used.
    On 3 sheets (P1204-2, PE1201-1, PE1101-1) the date was written on the Signature line. It was moved to the Date field.
    PE1102-1: item 1 initials were "MA". Replaced with LO like all the others.
-   None of these 10 tags are in the 29103-65H cable schedules (HTP-003/004/005/100/101/102) from earlier.
 
 2) EHT Cable ITRS/  (10 RTD test records, YCQE-EHT-QF-13.2, from RTD.pdf)
    One form per trace. Where a trace has two RTDs (R-1 and R-2), both go on the same form.
@@ -26,6 +28,10 @@ NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
      Item 6, 7 wiring <- 1.8 Terminations (EHT-004: 1.7)
      Items 2, 8, 9    <- no source item, left blank. The RTD resistance was not recorded on the source forms.
    Trace continuity, megger readings and comments are in Remarks. Megger 500V marked X.
+   Panels cross-referenced to the cable schedules. P1800-7-1 was blank on the scan; it is on 29103-HTP-100 HTC-16 (65H-110-01).
+   P2800-7-2: the RTD 29103-ET-P2800-7-R-2 is NOT in any schedule. Only P2800-7-PWK-1 and -R-1 exist (HTP-101 HTC-38),
+   so System was set to 29103-HTP-101 and Controller left blank - confirm.
+   All other RTD panels and controllers on the scans match the schedules.
    29103-ET-PE1402-1-1: the megger FAILED (0.0 MOhm) and the trace was not released for insulation.
    29103-ET-PE1202-1-1: the megger was written as "550 Ohm" (no M). Entered as written.
 
@@ -34,6 +40,6 @@ NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
    Where the same tag was on both a punchlist and an ITR, they were combined into ONE row.
    Punchlist 3 item 3 was crossed out, so it was skipped.
    Punchlist 1 (2026-09-27, Drain Tank) tags are abbreviated (e.g. ETHC-4102-PWK). They were entered exactly as written.
-   Check: punchlist item ETP-11042 vs ITR tag 29103-ET-PE1104-2 (same remark, P vs PE). Combined as P1104-2.
+   Punchlist item ETP-11042 and the ITR are the same cable: 29103-ET-P1104-2-PWK-1 (confirmed by the schedule).
    Check: punchlist says PE1101-1 "not termed", but its Sept 28 ITR is fully initialed with no remarks.
    The file was edited without removing the dropdowns or formulas. IDs (DEF-0224..0249) calculate on open.
