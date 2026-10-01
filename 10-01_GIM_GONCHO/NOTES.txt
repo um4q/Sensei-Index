@@ -40,17 +40,20 @@ NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
    Type: M.I. (MI trace parts). Megger test voltage: 500 VDC.
    The readings go in section 2 "After installation megger" (pre-insulation): megger, MI continuity, status, LO, date.
    Status is only filled where the source said Passed/Failed (EHT-003). The EHT-004 forms don't state it, so it is blank.
-   Megger serial 72300003 and cal due 2027-06-22 are filled only for the EHT-004 forms. The EHT-003 forms give no equipment.
-   Length comes from the MI trace part number (e.g. D/32SQ3374/35.4M/... = 35.4 m). Watts/m left blank.
+   Megger: serial 72300003 / model Fluke 1587 FC (the same serial as on the small power ITRs) / cal due 2027-06-22, on the
+   EHT-004 forms only. The EHT-003 forms give no equipment.
+   Length and Watts/m are calculated from the MI trace part number: D/32SQ3374/35.4M/1635/... = 35.4 m and 1635 W,
+   so 1635 / 35.4 = 46.2 W/m.
    Part 5 initials come from the source checklist: 1<-1.1, 3<-1.2, 5<-1.9 (004: 1.8), 6<-1.10, 7<-1.5 (004: 1.3),
    8<-1.6 (004: 1.4). Items 2, 4, 9, 10, 11 and 12 have no source item and are left blank.
    Yanda name and signature are blank; the inspection date is kept.
 
-3) E&I-QAQC-Deficiency-Tracker- UPDATED.xlsx: 26 new rows (230-255), Last Updated 01-10-2026
+3) E&I-QAQC-Deficiency-Tracker- UPDATED.xlsx: 27 new rows (230-256), Last Updated 01-10-2026
    From the 3 punchlists (YCQE-PS-048) plus small power ITR remarks.
    Where the same tag was on both a punchlist and an ITR, they were combined into ONE row.
    Punchlist 3 item 3 was crossed out, so it was skipped.
    Punchlist 1 (2026-09-27, Drain Tank) tags are abbreviated (e.g. ETHC-4102-PWK). They were entered exactly as written.
    Punchlist item ETP-11042 and the ITR are the same cable: 29103-ET-P1104-2-PWK-1 (confirmed by the schedule).
    Check: punchlist says PE1101-1 "not termed", but its Sept 28 ITR is fully initialed with no remarks.
-   The file was edited without removing the dropdowns or formulas. IDs (DEF-0224..0249) calculate on open.
+   Row 256: 29103-ET-PE1402-1-1 failed megger (0.0 MOhm), not released for insulation. Category Testing, priority High.
+   The file was edited without removing the dropdowns or formulas. IDs (DEF-0224..0250) calculate on open.
