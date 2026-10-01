@@ -16,6 +16,7 @@ NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
    matches size 10 AWG, 2-conductor, 600 V for every cable.
    The scan for P1104-2 read 'PE1104-2'. The schedule has no PE1104-2, only 29103-ET-P1104-2-PWK-1, so that tag was used.
    On 3 sheets (P1204-2, PE1201-1, PE1101-1) the date was written on the Signature line. It was moved to the Date field.
+   P1104-2 and P1101-1 had '>550' with no unit; entered as >550 MOhm like the rest.
    PE1102-1: item 1 initials were "MA". Replaced with LO like all the others.
 
 2) EHT Cable ITRS/  (10 RTD test records, YCQE-EHT-QF-13.2, from RTD.pdf)
@@ -33,13 +34,14 @@ NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
    so System was set to 29103-HTP-101 and Controller left blank - confirm.
    All other RTD panels and controllers on the scans match the schedules.
    29103-ET-PE1402-1-1: the megger FAILED (0.0 MOhm) and the trace was not released for insulation.
-   29103-ET-PE1202-1-1: the megger was written as "550 Ohm" (no M). Entered as written.
+   Megger units standardised to MOhm. The scans wrote 550 'm' (P1800-7 etc.) and '550 Ohm' (PE1202-1-1); both are read as 550 MOhm.
 
 2b) EHT Cable ITRS/ - EHT Insulation Test Reports (YCQE-EHT-QF-13.1), 10 + combined PDF
    One per trace, from the same RTD.pdf scans (EHT-004 x4, EHT-003 x6).
    Type: M.I. (MI trace parts). Megger test voltage: 500 VDC.
    The readings go in section 2 "After installation megger" (pre-insulation): megger, MI continuity, status, LO, date.
-   Status is only filled where the source said Passed/Failed (EHT-003). The EHT-004 forms don't state it, so it is blank.
+   Status: PASS on all except PE1402-1-1 (FAIL, 0.0 MOhm). The EHT-003 forms state Passed/Failed. The 4 EHT-004 forms don't,
+   so they are marked PASS on the 550 MOhm reading.
    Megger: serial 72300003 / model Fluke 1587 FC (the same serial as on the small power ITRs) / cal due 2027-06-22, on the
    EHT-004 forms only. The EHT-003 forms give no equipment.
    Length and Watts/m are calculated from the MI trace part number: D/32SQ3374/35.4M/1635/... = 35.4 m and 1635 W,
