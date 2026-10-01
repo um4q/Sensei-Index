@@ -1,0 +1,39 @@
+10-01 TASK - NOTES (built 2026-10-01)
+=====================================
+Source: Google Drive > Instrumentation > 10-01. Output is laid out to match 39. GIM GONCHO.
+Rules applied: every initial replaced with LO (N/A kept). Yanda representative name and signature left blank. Handwritten date kept.
+
+NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
+  - rtdandEHT.pdf
+  - Sharp Scanner_20260929_190654.pdf
+  - Sharp Scanner_20261001_132151.pdf
+  Re-upload these or retry and they will be added the same way.
+
+1) Small Power Cables ITR 100/  (10 reports, YCQE-E&I-113, from defandRTD.pdf pages 4-13)
+   Tags written in full dashed form, e.g. 29103ETP11041PWK1 -> 29103-ET-P1104-1-PWK-1.
+   Location KINOSIS K1B. Cable type TECK as written.
+   On 3 sheets (P1204-2, PE1201-1, PE1101-1) the date was written on the Signature line. It was moved to the Date field.
+   PE1102-1: item 1 initials were "MA". Replaced with LO like all the others.
+   None of these 10 tags are in the 29103-65H cable schedules (HTP-003/004/005/100/101/102) from earlier.
+
+2) EHT Cable ITRS/  (10 RTD test records, YCQE-EHT-QF-13.2, from RTD.pdf)
+   One form per trace. Where a trace has two RTDs (R-1 and R-2), both go on the same form.
+   Source forms: 4 x YCQE-EHT-004 (Sept 20-21) and 6 x YCQE-EHT-003 (Aug 10-12).
+   The source forms are a different layout, so only matching items were carried over:
+     Item 1 tagging   <- 1.6 Tags labelled/installed
+     Item 3, 4 RTD    <- 1.5 RTDs installed per drawing (EHT-004: 1.3)
+     Item 5 equipment <- 1.3 EHT routed/installed (EHT-004: 1.5)
+     Item 6, 7 wiring <- 1.8 Terminations (EHT-004: 1.7)
+     Items 2, 8, 9    <- no source item, left blank. The RTD resistance was not recorded on the source forms.
+   Trace continuity, megger readings and comments are in Remarks. Megger 500V marked X.
+   29103-ET-PE1402-1-1: the megger FAILED (0.0 MOhm) and the trace was not released for insulation.
+   29103-ET-PE1202-1-1: the megger was written as "550 Ohm" (no M). Entered as written.
+
+3) E&I-QAQC-Deficiency-Tracker- UPDATED.xlsx: 26 new rows (230-255), Last Updated 01-10-2026
+   From the 3 punchlists (YCQE-PS-048) plus small power ITR remarks.
+   Where the same tag was on both a punchlist and an ITR, they were combined into ONE row.
+   Punchlist 3 item 3 was crossed out, so it was skipped.
+   Punchlist 1 (2026-09-27, Drain Tank) tags are abbreviated (e.g. ETHC-4102-PWK). They were entered exactly as written.
+   Check: punchlist item ETP-11042 vs ITR tag 29103-ET-PE1104-2 (same remark, P vs PE). Combined as P1104-2.
+   Check: punchlist says PE1101-1 "not termed", but its Sept 28 ITR is fully initialed with no remarks.
+   The file was edited without removing the dropdowns or formulas. IDs (DEF-0224..0249) calculate on open.
