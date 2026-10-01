@@ -33,7 +33,8 @@ Location is "KINOSIS K1B" on every report. The scans' handwritten "Drain Tank" w
 
 2) OTHER TAG / DATA ISSUES FOUND IN THE SCANS
    - Pg 1:  the handwritten tag reads "29203-ET-PES002-1-PWK-1". Entered as PE5002 to match EHT sheet pg 22 (29203-ET-PE5002-1).
-   - Pg 25: "29203-ET-HC5012-1-PWK-1" had "Drain Tank - 29151" written as the location on the scan. The tag prefix (29203) does not match that unit (29151).
+   - Pg 25: "29203-ET-HC5012-1-PWK-1" had "Drain Tank - 29151" written on the scan, but 29152-65H-102-01 puts HC5012 on
+            29152-HTP-001 (Drain Tank 2).
    - Pg 18 (EHT): Controller/Panel are 29151-HTC-39 / 29151-HTP-001 for TANK2-4. The other TANK2 sheets use 29152. Check this.
    - Pg 4:  Model and Asset/Serial were written in each other's boxes (Model "72300003", Serial "1587 FC").
             Entered as Model 1587 FC and Serial 72300003.
@@ -47,3 +48,9 @@ Location is "KINOSIS K1B" on every report. The scans' handwritten "Drain Tank" w
    Small Power & Control Cable records. They were not entered on this template:
      17 TANK2-3-R-1 | 18 TANK2-4-R-1 | 19 29152-ET-MT0002-1 | 20 29152-ET-DR4200-1
      21 29203-ET-DR5001-1 | 22 29203-ET-PE5002-1 | 23 TANK2-2-R-1 | 24 TANK2-1-R-1
+
+4) SYSTEM FIELD (updated)
+   System on all 17 power kit reports = 29152-HTP-001, cross-referenced to 29152-65H-102-01 (Drive):
+   every 29152-ET-* and 29203-ET-* circuit here (PE5002-1, LIT0220/0221, ST5000, DR5001, HC5012) is on
+   29152-HTP-001. TANK2-1/2/3 EHT sheets show 29152-HTP-001 (HTC-35/36/37).
+   TANK2-4: the EHT sheet (pg 18) says 29151-HTP-001 / HTC-39, against the Tank 2 pattern. 29152-HTP-001 was used - confirm.
