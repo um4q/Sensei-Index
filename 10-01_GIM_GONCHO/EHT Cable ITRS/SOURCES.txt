@@ -1,0 +1,27 @@
+EHT CABLE ITRS - SOURCES  (kept off the forms; for reference only)
+===================================================================
+Scan file: RTD.pdf (Drive > Instrumentation > 10-01). Applies to both the RTD Test Records (YCQE-EHT-QF-13.2)
+and the EHT Insulation Test Reports (YCQE-EHT-QF-13.1) for each trace below.
+
+Trace                 Scan  Source form        Inspected by / date       Rev    Location           Notes on derived values
+--------------------  ----  -----------------  ------------------------  -----  -----------------  ------------------------------------------
+29103-ET-P1800-7-1    p1    YCQE-EHT-004       Robert Dixon 2026-09-21   -      Module Yard        Panel/controller blank on scan -> 29103-HTP-100 HTC-16 from cable schedule 29103-65H-110-01
+29103-ET-P2800-7-2    p2    YCQE-EHT-004       Robert Dixon 2026-09-20   -      Module Yard        RTD 29103-ET-P2800-7-R-2 not in any schedule; panel 29103-HTP-101 taken from P2800-7 circuit - CONFIRM
+29103-ET-P2800-7-1    p3    YCQE-EHT-004       Robert Dixon 2026-09-20   1A0    Module Yard        Zone drawing 29103-65R-ET-P2800-07-01; matches schedule 29103-65H-111-01
+29103-ET-PE1802-5-1   p4    YCQE-EHT-004       Robert Dixon 2026-09-20   1A0    Module Yard        Zone drawing 29103-65R-ET-PE1802-05-01; matches schedule 29103-65H-110-01
+29103-ET-PE1102-1-1   p5    YCQE-EHT-003       Robert Dixon 2026-08-12   1A3    29103-WPM-101      Matches schedule 29103-65H-102-01
+29103-ET-PE1302-1-1   p6    YCQE-EHT-003       Robert Dixon 2026-08-12   1A2    29103-WPM-102      Matches schedule 29103-65H-102-01
+29103-ET-PE1202-1-1   p7    YCQE-EHT-003       Robert Dixon 2026-08-12   1A3    29103-WPM-101      Megger written "550 Ohm" on scan, entered as 550 MOhm
+29103-ET-PE1502-1-1   p8    YCQE-EHT-003       Robert Dixon 2026-08-10   1A2    Module Yard        Matches schedule 29103-65H-103-01
+29103-ET-PE1602-1-1   p9    YCQE-EHT-003       Robert Dixon 2026-08-10   1A2    Module Yard        Line written "DAPO" (as on scan); matches schedule 29103-65H-103-01
+29103-ET-PE1402-1-1   p10   YCQE-EHT-003       Robert Dixon 2026-08-12   1A3    29103-WPM-102      Megger 0.0 MOhm FAIL; item 1.10 (released for insulation) blank on scan
+
+Derived / cross-referenced values (all traces):
+- System (RTD records): line service code PE / P = PRODUCED EMULSION, per the Instrumentation Master List and the
+  Equipment Inspection Tracker.
+- Length and Watts/m (insulation reports): from the MI trace part number, e.g. D/32SQ3374/35.4M/1635/... -> 35.4 m and
+  1635 W / 35.4 m = 46.2 W/m.
+- Megger model Fluke 1587 FC: matched by serial 72300003, which appears with that model on the small power ITRs.
+  Serial and cal due date are on the EHT-004 scans only.
+- Status PASS on the 4 EHT-004 traces: inferred from the 550 MOhm reading. The EHT-003 scans state Passed/Failed.
+- Megger "550 m" on the EHT-004 scans read as 550 MOhm.
