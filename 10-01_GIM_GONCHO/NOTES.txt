@@ -2,6 +2,7 @@
 =====================================
 Source: Google Drive > Instrumentation > 10-01. Output is laid out to match 39. GIM GONCHO.
 Rules applied: every initial replaced with LO (N/A kept). Yanda representative name and signature left blank. Handwritten date kept.
+Client Representative name = Levy Ostrup on every form; client date and signatures left blank.
 
 NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
   - rtdandEHT.pdf
