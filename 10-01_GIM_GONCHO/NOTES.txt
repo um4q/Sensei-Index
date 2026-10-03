@@ -28,7 +28,8 @@ NOT DONE - COULD NOT DOWNLOAD (Drive connection kept expiring):
      Item 5 equipment <- 1.3 EHT routed/installed (EHT-004: 1.5)
      Item 6, 7 wiring <- 1.8 Terminations (EHT-004: 1.7)
      Items 2, 8, 9    <- no source item, left blank. The RTD resistance was not recorded on the source forms.
-   Trace continuity, megger readings and comments are in Remarks. Megger 500V marked X.
+   Remarks hold RTD findings only (tags, core markers, terminations). Megger / MI continuity readings, the trace part
+   number and the megger test equipment are NOT on the RTD records. They are on the EHT Insulation Test Reports (2b).
    RTD System = process service, taken from the line service code (Instrumentation Master List / Equipment Inspection
    Tracker convention): PE and P = PRODUCED EMULSION, ST = STEAM, FG = NATURAL GAS, PG = PRODUCED GAS.
    All 10 traces here are PRODUCED EMULSION. The HTP panel is shown in the Heat Trace Controller box.
