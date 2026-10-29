@@ -109,18 +109,22 @@ Rate/Reset = 0.115 / 0.46 = ¼ ✓</pre>
 <div class="q">
 <h2>Q4 · Checking a student's tuning (Kc 2.1, Ti 0.52, Td 0.13)</h2>
 <img src="q4-chart.png">
-<p class="note">Formula from the coursepack, Section 5.3 (Decay Ratio = DR = B/A); measurement done the way the solved sheets do it (Q8, Q9). Answers for b and c use the coursepack's fine-tuning rules (5.3 Step 5 and 5.5 Trial and Error).</p>
+<p class="note">Formula from the coursepack, Section 5.3 (Decay Ratio = DR = B/A), measured like the coursepack example; the solved-sheet method (Q8, Q9) is shown as a check. Answers for b and c use the coursepack's fine-tuning rules (5.3 Step 5 and 5.5 Trial and Error).</p>
 <h3>a) Decay ratio</h3>
-<pre>Measured: 1st peak ≈ 66.2%, trough after it ≈ 55.6%, 2nd peak ≈ 62.2%
+<pre>Measured: PV1 = 1st peak ≈ 66.2%    PV2 = 1st trough ≈ 55.6%
+          PV3 = 2nd peak ≈ 62.2%    PV4 = 2nd trough ≈ 57.9%
 
-Decay Ratio = DR = B / A
-  A = 1st peak − trough       = 66.2 − 55.6 = 10.6
-  B = 2nd peak − same trough  = 62.2 − 55.6 = 6.6
-  These are half-cycle swings, so square the ratio (as on the solved sheets):
-  DR = (B / A)² = (6.6 / 10.6)² = (0.62)² ≈ 0.39
+Decay Ratio = DR = B / A   (two full peak-to-trough swings, one cycle apart,
+                            as in the coursepack example: B = 46 − 36, A = 53 − 31)
+  A = PV1 − PV2 = 66.2 − 55.6 = 10.6
+  B = PV3 − PV4 = 62.2 − 57.9 = 4.3
+  DR = B / A = 4.3 / 10.6 ≈ 0.41
 
-Desired ¼ amplitude decay: DR = 0.25.   0.39 &gt; 0.25 → too oscillatory.</pre>
-<div class="ans"><b>Answer:</b> DR ≈ 0.39, which is more than ¼, so the response is too oscillatory (not stable enough).</div>
+Check, solved-sheet method (two half-swings sharing the 1st trough, so squared):
+  DR = ((62.2 − 55.6) / (66.2 − 55.6))² = (6.6 / 10.6)² ≈ 0.39
+
+Desired ¼ amplitude decay: DR = 0.25.   ≈ 0.4 &gt; 0.25 → too oscillatory.</pre>
+<div class="ans"><b>Answer:</b> DR ≈ 0.4, which is more than ¼, so the response is too oscillatory (not stable enough).</div>
 <h3>b) Kc</h3>
 <pre>Coursepack (5.3 Step 5): "Increasing KC increases the speed of response,
 but also makes the loop less stable."</pre>
