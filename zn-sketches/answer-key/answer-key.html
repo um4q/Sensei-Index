@@ -109,18 +109,28 @@ Rate/Reset = 0.115 / 0.46 = ¼ ✓</pre>
 <div class="q">
 <h2>Q4 · Checking a student's tuning (Kc 2.1, Ti 0.52, Td 0.13)</h2>
 <img src="q4-chart.png">
+<p class="note">Formula from the coursepack, Section 5.3 (Decay Ratio = DR = B/A); measurement done the way the solved sheets do it (Q8, Q9). Answers for b and c use the coursepack's fine-tuning rules (5.3 Step 5 and 5.5 Trial and Error).</p>
 <h3>a) Decay ratio</h3>
-<pre>A = 1st peak − trough       = 66.2 − 55.6 = 10.6
-B = 2nd peak − same trough  = 62.2 − 55.6 = 6.6
-DR = (B / A)² = (6.6 / 10.6)² = 0.39
+<pre>Measured: 1st peak ≈ 66.2%, trough after it ≈ 55.6%, 2nd peak ≈ 62.2%
 
-Check, measured from the final value (≈ 60%):
-DR = (62.2 − 60) / (66.2 − 60) = 2.2 / 6.2 = 0.35</pre>
-<div class="ans"><b>Answer:</b> DR ≈ 0.39, which is more than ¼, so the response is too oscillatory.</div>
+Decay Ratio = DR = B / A
+  A = 1st peak − trough       = 66.2 − 55.6 = 10.6
+  B = 2nd peak − same trough  = 62.2 − 55.6 = 6.6
+  These are half-cycle swings, so square the ratio (as on the solved sheets):
+  DR = (B / A)² = (6.6 / 10.6)² = (0.62)² ≈ 0.39
+
+Desired ¼ amplitude decay: DR = 0.25.   0.39 &gt; 0.25 → too oscillatory.</pre>
+<div class="ans"><b>Answer:</b> DR ≈ 0.39, which is more than ¼, so the response is too oscillatory (not stable enough).</div>
 <h3>b) Kc</h3>
-<div class="ans"><b>Decrease Kc.</b> Less proportional action gives a more stable loop, so the oscillations die out faster.</div>
+<pre>Coursepack (5.3 Step 5): "Increasing KC increases the speed of response,
+but also makes the loop less stable."</pre>
+<div class="ans"><b>Decrease Kc.</b> Lower Kc gives a more stable loop, so the oscillations die out faster and DR moves down toward ¼.</div>
 <h3>c) Keeping Kc = 2.1</h3>
-<div class="ans"><b>Increase Ti</b> (slower integral, so it adds less lag and the loop is more stable). <b>Increase Td by the same factor</b> to keep Rate/Reset = ¼ (now 0.13 / 0.52 = ¼, so keep Td = Ti/4).</div>
+<pre>Coursepack (5.3 Step 5): "Increasing KI (decreasing TI) increases the cyclic
+period, but also makes the loop less stable."
+Coursepack (5.5): "keep the ratio between reset and rate (reset/rate = ¼) the same."
+Current: Td / Ti = 0.13 / 0.52 = ¼</pre>
+<div class="ans"><b>Increase Ti</b> (less integral action, so the loop is more stable) and <b>increase Td by the same proportion</b>, so Td = Ti/4 is kept. For example, Ti 0.52 → 0.70 min/repeat gives Td 0.13 → 0.175 min. Then test again; the coursepack says tune coarse, because fairly large changes are needed to see a difference.</div>
 </div>
 
 </body></html>
