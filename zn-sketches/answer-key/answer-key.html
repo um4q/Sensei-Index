@@ -73,21 +73,37 @@ Ti = τ1 = 1.8 min/repeat</pre>
 <div class="q">
 <h2>Q3 · ZN open loop / reaction curve (+10% CO at t = 0)</h2>
 <img src="q3-chart.png">
+<p class="note">Method and definitions from the coursepack, Section 5.2 (Ziegler–Nichols Open Loop Tuning, Reaction Curve Method).</p>
 <h3>a) Reaction rate and dead time</h3>
-<table>
-<tr><th>Reading</th><th>Value</th></tr>
-<tr><td>Starting PV</td><td>40%</td></tr>
-<tr><td>Inflection (steepest point)</td><td>≈ 43.5% at ≈ 0.5 min</td></tr>
-<tr><td>Reaction rate R (tangent slope)</td><td><b>≈ 13 %/min</b></td></tr>
-<tr><td>Dead time L (tangent crosses 40%)</td><td><b>≈ 0.23 min</b></td></tr>
-<tr><td>LR = R × L</td><td>13 × 0.23 ≈ <b>3.0%</b></td></tr>
-</table>
-<h3>b) Tuning parameters</h3>
-<pre>Kc = 1.2 × ΔCO / LR = 1.2 × 10 / 3.0 = 4.0
-Ti = 2L   = 2 × 0.23   = 0.46 min/repeat
-Td = 0.5L = 0.5 × 0.23 = 0.115 min   (≥ 0.1 min, so PID is allowed)</pre>
-<div class="ans"><b>Answer:</b> PID with Kc = 4.0, Ti = 0.46 min/repeat, Td = 0.115 min.</div>
-<p class="note">Td is right at the 0.1 min limit. If your L reads under 0.2 min, Td comes out under 0.1 min, so use PI instead: Kc = 0.9 × ΔCO / LR (3.0 with LR = 3.0) and Ti = 3.33 L.</p>
+<pre>Obtain recording and determine LR &amp; L.  ΔCO = +10% (step at t = 0 min)
+
+Draw the tangent line at the inflection point (or steepest slope):
+   inflection ≈ 43.5% at ≈ 0.5 min
+
+R = slope of tangent line at inflection point
+R = ΔPV / time                  (units %/minute)
+  = (50 − 40)% / (1.0 − 0.23) min   ← two points read off the tangent
+  ≈ 13 %/min
+
+L = the dead time (time in minutes from step change to intersection of tangent line
+    with the original PV of 40%)
+  ≈ 0.23 min
+
+RL = R·L (units %) = measurement of the tangent line from the original PV
+                     at the time of output change (t = 0)
+   = 13 × 0.23 ≈ 3.0%
+   check: at t = 0 the tangent is at ≈ 37%, i.e. 40 − 37 = 3.0% below the original PV</pre>
+<div class="ans"><b>Answer:</b> Reaction rate R ≈ 13 %/min, dead time L ≈ 0.23 min (RL ≈ 3.0%).</div>
+<h3>b) Tuning parameters (Table 3: Open Loop Ziegler–Nichols Reaction Curve)</h3>
+<pre>PID:  Kc = 1.2 ΔCO / (LR) = 1.2 × 10 / 3.0 = 4.0
+      Ti = 2L             = 2 × 0.23      = 0.46 min/repeat
+      Td = 0.5L           = 0.5 × 0.23    = 0.115 min
+
+Check: Td ≥ 0.1 min, so PID is used.
+(Coursepack: "If calculated Td for a PID is less than 0.1 min use a PI controller (re-calculate).")
+Rate/Reset = 0.115 / 0.46 = ¼ ✓</pre>
+<div class="ans"><b>Answer:</b> PID with Kc = 4.0, Ti = 0.46 min/repeat, Td = 0.115 min. Then test the response; leave Reset and Rate as calculated and adjust Kc to suit.</div>
+<p class="note">Readings come from a photo, so yours may differ slightly. Read R and L from the same tangent line. If your L gives Td under 0.1 min, re-calculate as PI: Kc = 0.9 ΔCO / (LR), Ti = 3.33 L.</p>
 </div>
 
 <div class="q">
