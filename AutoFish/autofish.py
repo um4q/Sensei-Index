@@ -35,10 +35,11 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
+MISS_DIR = os.path.join(HERE, "miss_reports")
 IS_WINDOWS = sys.platform.startswith("win")
 
 
@@ -48,9 +49,10 @@ IS_WINDOWS = sys.platform.startswith("win")
 @dataclass
 class Settings:
     # --- reel timing -------------------------------------------------------
-    lead_ms: float = 30.0          # how far ahead to predict the fish (input lag)
+    lead_ms: float = 30.0          # input lag to plan for until it has been measured
+    auto_lead: bool = True         # measure the real press -> game delay and use that
     zone_margin_pct: float = 18.0  # ignore this % of the gold zone on each side
-    press_cooldown_s: float = 0.30 # never press twice within this time while reeling
+    min_press_gap_s: float = 0.10 # minimum time between two reel presses
     # --- casting -----------------------------------------------------------
     recast_delay_s: float = 1.0    # pause after a catch before casting again
     bite_timeout_s: float = 45.0   # no bite after this long -> reel in & recast
@@ -63,6 +65,7 @@ class Settings:
     require_focus: bool = True     # only press keys while Roblox is the active window
     window_title: str = "Roblox"   # title of the game window
     dry_run: bool = False          # detect + log only, never press anything
+    stop_on_miss: bool = True      # stop the macro on the first miss (and save a miss report)
     # --- ui ----------------------------------------------------------------
     always_on_top: bool = True
 
@@ -113,6 +116,23 @@ class Settings:
 #  Every rule is a ratio/difference test, so small colour shifts (gamma,
 #  HDR, video compression, brightness) do not break it.
 # =============================================================================
+def write_png(path: str, rgb: np.ndarray) -> None:
+    """Save an HxWx3 uint8 RGB image as PNG (no extra packages needed)."""
+    import struct
+    import zlib
+    img = np.ascontiguousarray(rgb, dtype=np.uint8)
+    H, W = img.shape[:2]
+    raw = b"".join(b"\x00" + img[y].tobytes() for y in range(H))
+
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+    with open(path, "wb") as fh:
+        fh.write(png)
+
+
 def channels(rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """HxWx3 uint8 RGB -> three int16 planes (so subtraction can go negative)."""
     a = rgb.astype(np.int16, copy=False)
@@ -164,7 +184,7 @@ class BarGeom:
         the bar plus the progress dots / miss boxes underneath it."""
         pad = max(4, self.h // 2)
         left = self.x0 - pad
-        top = self.y0 - 2
+        top = self.y0 - max(3, int(0.3 * self.h))
         right = self.x1 + pad
         bottom = self.y1 + int(round(1.3 * self.h))
         return left, top, right - left + 1, bottom - top + 1
@@ -200,10 +220,24 @@ def locate_bar(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> Optional[Ba
     r, g, b = channels(rgb[rows])
     navy = mask_navy(r, g, b)
     gold = mask_gold(r, g, b)
+    bright = np.maximum(np.maximum(r, g), b) > 45   # fish / pointer line, not panel background
     good = []  # (y, x0, x1)
     for i, y in enumerate(rows):
         both = navy[i] | gold[i]
+        # the fish icon / pointer line can cut a row in two: join pieces that
+        # are separated by a gap that is small next to the pieces themselves
+        # (never across the dark panel background next to the bar's ends)
+        joined: List[Tuple[int, int]] = []
         for s, e in runs(both, gap=4):
+            if joined:
+                ps, pe = joined[-1]
+                gap_px = bright[i, pe + 1:s]
+                if (s - pe - 1 <= max(6, 0.12 * (e - ps + 1))
+                        and (gap_px.size == 0 or float(gap_px.mean()) >= 0.6)):
+                    joined[-1] = (ps, e)
+                    continue
+            joined.append((s, e))
+        for s, e in joined:
             n = e - s + 1
             if n < 60:
                 continue
@@ -230,24 +264,64 @@ def locate_bar(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> Optional[Ba
         if len(grp) < 3:
             continue
         ys = [it[0] for it in grp]
-        y0, y1 = min(ys), max(ys)
-        h = y1 - y0 + 1
         x0 = int(np.median([it[1] for it in grp]))
         x1 = int(np.median([it[2] for it in grp]))
         w = x1 - x0 + 1
-        if h < 4 or not (4.0 <= w / h <= 40.0):
+        # measure the bar's true height: rows whose [x0, x1] span is mostly bar
+        ym = int(np.median(ys))
+        ya, yb = max(0, ym - w // 3), min(H, ym + w // 3 + 1)
+        r2, g2, b2 = channels(rgb[ya:yb, x0:x1 + 1])
+        cov = (mask_navy(r2, g2, b2) | mask_gold(r2, g2, b2)).mean(axis=1)
+        k = ym - ya
+        if cov[k] < 0.55:
             continue
-        if len(grp) < 0.3 * h:  # too sparse to be one solid bar
+        top = k
+        while top - 1 >= 0 and cov[top - 1] >= 0.55:
+            top -= 1
+        bot = k
+        while bot + 1 < cov.size and cov[bot + 1] >= 0.55:
+            bot += 1
+        y0, y1 = ya + top, ya + bot
+        h = y1 - y0 + 1
+        # the fish can sit on (and hide) an end of the bar: walk outwards (at
+        # most ~one bar height) over columns that still show navy/gold above or
+        # below the fish, stepping over the thin pointer line
+        reach = int(1.2 * h) + 2
+        off_x = max(0, x0 - reach)
+        rb, gb, bb_ = channels(rgb[y0:y1 + 1, off_x:min(W, x1 + reach + 1)])
+        barish = (mask_navy(rb, gb, bb_) | mask_gold(rb, gb, bb_)).mean(axis=0) >= 0.3
+        skip = max(3, int(0.2 * h))
+        for direction in (-1, 1):
+            edge = x0 if direction < 0 else x1
+            x, misses_in_row = edge, 0
+            while 0 <= x + direction - off_x < barish.size and abs(x + direction - edge) <= reach:
+                x += direction
+                if barish[x - off_x]:
+                    misses_in_row = 0
+                    if direction < 0:
+                        x0 = x
+                    else:
+                        x1 = x
+                else:
+                    misses_in_row += 1
+                    if misses_in_row > skip:
+                        break
+        w = x1 - x0 + 1
+        if h < 4 or not (6.0 <= w / h <= 30.0):
+            continue
+        if len(grp) < 0.25 * h:  # too few rows agree on the ends
             continue
         # the bar sits on the minigame panel's dark background: the rows just
         # above and below it must be dark (rules out sunsets on water, etc.)
         off = max(2, int(round(0.12 * h)))
         dark_ok = True
         for yy in (y0 - off, y1 + off):
-            if 0 <= yy < H:
-                seg = rgb[yy, x0:x1 + 1].astype(np.int16)
-                if float((seg.max(axis=1) <= 70).mean()) < 0.6:
-                    dark_ok = False
+            if not (0 <= yy < H):
+                dark_ok = False  # the panel always has room above and below the bar
+                break
+            seg = rgb[yy, x0:x1 + 1].astype(np.int16)
+            if float((seg.max(axis=1) <= 70).mean()) < 0.6:
+                dark_ok = False
         if not dark_ok:
             continue
         score = len(grp) * w
@@ -295,7 +369,9 @@ def read_minigame(strip: np.ndarray, geom: BarGeom, strip_origin: Tuple[int, int
     need = 2 if len(gy) >= 3 else 1
     gcols = gold.sum(axis=0) >= need
     best = None
-    for s, e in runs(gcols, gap=max(2, int(round(0.12 * h)))):
+    # there is only one gold zone: pieces split by the pointer line (or a big
+    # fish icon) belong together
+    for s, e in runs(gcols, gap=max(2, int(round(0.5 * h)))):
         n = e - s + 1
         if n >= max(3, 0.25 * h) and (best is None or n > best[1] - best[0] + 1):
             best = (s, e)
@@ -327,9 +403,10 @@ def read_minigame(strip: np.ndarray, geom: BarGeom, strip_origin: Tuple[int, int
         y_b = geom.y1 + int(round(1.15 * h)) - oy
         y_a, y_b = max(0, y_a), min(Hs, y_b + 1)
         if y_b - y_a >= 2:
-            span = int(round(0.30 * geom.w))
+            span = int(round(0.40 * geom.w))
             left = strip[y_a:y_b, lx0:min(Ws, lx0 + span)]
-            right = strip[y_a:y_b, max(0, lx1 - span + 1):lx1 + 1]
+            rspan = int(round(0.30 * geom.w))
+            right = strip[y_a:y_b, max(0, lx1 - rspan + 1):lx1 + 1]
             r, g, b = channels(left)
             filled = (r >= 185) & (g >= 145) & (b <= 160) & (r - b >= 70)
             mx = np.maximum(np.maximum(r, g), b)
@@ -414,22 +491,34 @@ def read_prompt(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> PromptRead
             uniq.append(bx)
     cx, cy = W / 2.0, H / 2.0
     uniq.sort(key=lambda bx: (((bx[0] + bx[2]) / 2 - cx) ** 2 + ((bx[1] + bx[3]) / 2 - cy) ** 2))
+    truncated = None
     for (x0, y0, x1, y1) in uniq:
         bw, bh = x1 - x0 + 1, y1 - y0 + 1
+        if bw < 2.5 * bh:
+            # the real prompt is ~3.1x as wide as it is tall; a narrower box means
+            # something (usually the mouse cursor) cut its border - don't guess
+            truncated = (x0 + origin[0], y0 + origin[1], x1 + origin[0], y1 + origin[1])
+            continue
         inner = rgb[y0 + 2:y1 - 1, x0 + 2:x1 - 1]
         if inner.size == 0 or float(inner.mean()) > 90:
             continue  # not a dark box
         # the prompt has a gold-framed key icon on its left: one of its frame
         # columns is a tall gold line (rules out other dark boxes, e.g. the
         # minigame panel while it fades out)
-        kr, kg, kb = channels(rgb[y0 + 1:y1, x0:x0 + max(3, int(0.27 * bw))])
+        # (search a little left of x0 too: the cursor can cut the border's left end)
+        kx0 = max(0, x0 - int(0.3 * bh))
+        kr, kg, kb = channels(rgb[y0 + 1:y1, kx0:x0 + max(3, int(0.9 * bh))])
         keygold = ((kr >= 100) & (kg >= 85) & (kr - kb >= 30) & (kg - kb >= 15)
                    & (np.abs(kr - kg) <= 45))
-        if keygold.size == 0 or int(keygold.sum(axis=0).max()) < 0.35 * bh:
+        if keygold.size == 0:
+            continue
+        tall = np.flatnonzero(keygold.sum(axis=0) >= 0.35 * bh)
+        if tall.size == 0:
             continue
         ya = y0 + max(2, int(0.06 * bh))
         yb = y0 + int(0.55 * bh)
-        xa = x0 + int(0.26 * bw)
+        # the title starts just right of the key square's right frame
+        xa = kx0 + int(tall[-1]) + max(2, int(0.08 * bh))
         xb = x1 - max(2, int(0.03 * bw))
         if yb <= ya or xb <= xa:
             continue
@@ -437,7 +526,8 @@ def read_prompt(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> PromptRead
         mx = np.maximum(np.maximum(rr, gg), bb)
         mn = np.minimum(np.minimum(rr, gg), bb)
         pure_white = int((mn >= 236).sum())  # cursor (white); title text is cream
-        text = (rr >= 140) & (gg >= 130) & (bb >= 100) & (mx - mn <= 80) & (mn < 236)
+        # cream title text is nearly grey (chroma <= ~30); the gold key frame (~60) is not
+        text = (rr >= 140) & (gg >= 130) & (bb >= 100) & (mx - mn <= 45) & (mn < 236)
         box = (x0 + origin[0], y0 + origin[1], x1 + origin[0], y1 + origin[1])
         if pure_white >= 3:
             return PromptReading(None, box, 0.0, "mouse cursor is over the prompt")
@@ -450,102 +540,199 @@ def read_prompt(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> PromptRead
         if 0.78 <= ratio <= 1.20:
             return PromptReading(PROMPT_REEL, box, ratio, "Reel in")
         return PromptReading(None, box, ratio, f"unreadable prompt (ratio {ratio:.2f})")
+    if truncated is not None:
+        return PromptReading(None, truncated, 0.0, "prompt partly hidden (mouse cursor?)")
     return PromptReading(note="no prompt")
 
 
 # =============================================================================
 #  Timing - predict where the pointer will be when our key press lands
 # =============================================================================
-class PointerTracker:
-    def __init__(self) -> None:
-        self.samples: deque = deque(maxlen=48)
+class MotionTracker:
+    """Follows something that slides left/right (the fish, or the gold zone).
+
+    The game only moves things when it draws a new frame, and we usually look
+    at the screen several times per game frame.  So a sample is only stored
+    when the value actually changed, stamped with the time we FIRST saw it -
+    that is (to within one loop) when the frame appeared, which makes speed
+    and position estimates frame-accurate even at 30 fps."""
+
+    def __init__(self, window: float, bounce_cut: bool, eps: float = 0.3) -> None:
+        self.window = window
+        self.bounce_cut = bounce_cut
+        self.eps = eps
+        self.samples: deque = deque(maxlen=64)
 
     def reset(self) -> None:
         self.samples.clear()
 
     def add(self, t: float, x: float) -> None:
-        if self.samples and t <= self.samples[-1][0]:
-            return
+        if self.samples:
+            t0, x0 = self.samples[-1]
+            if abs(x - x0) < self.eps or t <= t0:
+                return  # same frame as before
         self.samples.append((t, x))
 
-    def velocity(self, window: float = 0.08) -> Optional[float]:
-        """Pixels/second over the most recent stretch of one-directional motion."""
+    def last(self) -> Optional[Tuple[float, float]]:
+        return self.samples[-1] if self.samples else None
+
+    def velocity(self, now: float, walls: Optional[Tuple[float, float]] = None) -> Optional[float]:
+        """Pixels/second, from the most recent run of one-directional motion.
+
+        Right after a bounce that run is short, so with `walls` (where the
+        fish turns around) the speed comes from the recent step sizes - the
+        fish keeps its speed through a bounce - and a bounce that happened
+        between two frames (invisible as a direction change) is detected by
+        checking the newest sample against the walls."""
         if len(self.samples) < 2:
             return None
         pts = list(self.samples)
         t_new, x_new = pts[-1]
+        if now - t_new > 0.15:
+            return 0.0  # nothing has moved for a while
+        run = [pts[-1]]
         direction = 0
-        oldest = None
-        prev_x = x_new
+        turned = False
         for t, x in reversed(pts[:-1]):
-            if t_new - t > window:
+            if t_new - t > self.window:
                 break
-            step = prev_x - x  # movement from this sample to the next one
-            if abs(step) >= 0.75:
-                sgn = 1 if step > 0 else -1
-                if direction == 0:
-                    direction = sgn
-                elif sgn != direction:
-                    break  # bounced - ignore anything before the bounce
-            oldest = (t, x)
-            prev_x = x
-        if oldest is None or t_new - oldest[0] < 0.006:
-            # fall back to the last two samples
+            if self.bounce_cut:
+                step = run[-1][1] - x
+                if abs(step) >= 0.75:
+                    sgn = 1 if step > 0 else -1
+                    if direction == 0:
+                        direction = sgn
+                    elif sgn != direction:
+                        turned = True
+                        break
+            run.append((t, x))
+        if turned and len(run) > 1:
+            run.pop()  # the sample at the turn is ambiguous: the fish turned around near it
+        if walls is None or not self.bounce_cut:
+            if len(run) >= 2:
+                return _slope(run)
             t0, x0 = pts[-2]
             if t_new - t0 <= 0 or t_new - t0 > 0.25:
                 return None
             return (x_new - x0) / (t_new - t0)
-        return (x_new - oldest[1]) / (t_new - oldest[0])
+        lo, hi = walls
+        t_p, x_p = pts[-2]
+        if len(run) >= 3:
+            v_prev = _slope(run[1:])
+            if v_prev is not None and 0 < t_new - t_p < 0.1:
+                # did the fish hit a wall between the last two samples?
+                x_unf = x_p + v_prev * (t_new - t_p)
+                if (x_unf < lo or x_unf > hi) and abs(reflect(x_unf, lo, hi) - x_new) < abs(x_unf - x_new):
+                    return -v_prev
+            return _slope(run)
+        # short run (just bounced): speed from the recent step sizes
+        speeds = sorted(abs(xb - xa) / (tb - ta) for (ta, xa), (tb, xb) in zip(pts[:-1], pts[1:])
+                        if tb > ta and t_new - ta <= 0.15 and abs(xb - xa) >= 0.75)
+        if not speeds or not (0 < t_new - t_p < 0.25):
+            return None
+        speed = speeds[len(speeds) // 2] if len(speeds) >= 3 else max(speeds)
+        v = speed if x_new >= x_p else -speed
+        x_unf = x_p + v * (t_new - t_p)
+        if (x_unf < lo or x_unf > hi) and abs(reflect(x_unf, lo, hi) - x_new) < abs(x_unf - x_new):
+            return -v
+        return v
+
+
+def _slope(pts) -> Optional[float]:
+    """Least-squares slope of (t, x) points."""
+    n = len(pts)
+    if n < 2:
+        return None
+    mt = sum(u[0] for u in pts) / n
+    mx = sum(u[1] for u in pts) / n
+    den = sum((u[0] - mt) ** 2 for u in pts)
+    if den <= 1e-12:
+        return None
+    return sum((u[0] - mt) * (u[1] - mx) for u in pts) / den
+
+
+# kept for compatibility with older test code
+PointerTracker = lambda: MotionTracker(window=0.08, bounce_cut=True)  # noqa: E731
+
+
+def bounce_wall(sm, width: int) -> Optional[Tuple[str, float]]:
+    """Look at the last five fish samples (t, x).  If the fish turned around
+    at the middle one, work out exactly where it turned: the steps just
+    before and just after the turn give its speed, and the two samples around
+    the turn then pin down the turning point.  Returns ("lo" | "hi", x)."""
+    if len(sm) < 5:
+        return None
+    (ta, xa), (t0, x0), (t1, x1), (t2, x2), (tb, xb) = list(sm)[-5:]
+    d_pre, d1, d2, d_post = x0 - xa, x1 - x0, x2 - x1, xb - x2
+    if min(abs(d_pre), abs(d1), abs(d2), abs(d_post)) < 0.75:
+        return None
+    if not ((d_pre > 0) == (d1 > 0) and (d2 > 0) == (d_post > 0) and (d1 > 0) != (d2 > 0)):
+        return None
+    if t0 <= ta or tb <= t2 or t2 <= t0:
+        return None
+    speed = 0.5 * (abs(d_pre) / (t0 - ta) + abs(d_post) / (tb - t2))
+    w1 = float(width - 1)
+    if d1 > 0 and x1 > 0.75 * w1:      # right end: x0 + x2 = 2*hi - speed*(t2 - t0)
+        pos = 0.5 * (x0 + x2 + speed * (t2 - t0))
+        return ("hi", min(max(pos, x1), 1.03 * w1))
+    if d1 < 0 and x1 < 0.25 * w1:      # left end
+        pos = 0.5 * (x0 + x2 - speed * (t2 - t0))
+        return ("lo", max(min(pos, x1), -0.03 * w1))
+    return None
 
 
 def reflect(x: float, lo: float, hi: float) -> float:
     """Fold a predicted position back inside [lo, hi] (the pointer bounces)."""
     if hi <= lo:
         return lo
-    for _ in range(4):
-        if x < lo:
-            x = 2 * lo - x
-        elif x > hi:
-            x = 2 * hi - x
-        else:
-            break
-    return min(max(x, lo), hi)
+    period = 2.0 * (hi - lo)
+    y = (x - lo) % period
+    if y > hi - lo:
+        y = period - y
+    return lo + y
 
 
-def should_press(reading: MinigameReading, velocity: Optional[float], lead_s: float,
-                 margin_frac: float, loop_dt: float) -> Tuple[bool, float]:
-    """Decide whether pressing *now* will land with the pointer in the gold zone.
+def plan_press(p: float, v: float, c0: float, hw: float, vz: float, width: int,
+               lead: float, margin_frac: float, tau_now: float, dz: float = 0.0,
+               horizon: float = 0.30, step: float = 0.0005,
+               walls: Optional[Tuple[float, float]] = None) -> Optional[float]:
+    """When must the key go down so the game checks the fish at the CENTRE of
+    the gold zone?
 
-    Aims for the centre of the zone: press on the sample that is closest to the
-    centre (or the last sample still inside the safe part of the zone).
-    Returns (press?, predicted pointer position)."""
-    if not reading.visible or reading.zone is None or reading.pointer is None:
-        return False, -1.0
-    if velocity is None:
-        return False, reading.pointer  # need two samples to know where it's going
-    zl, zr = reading.zone
-    zw = zr - zl + 1
-    c = (zl + zr) / 2.0
-    v = velocity
-    p_pred = reflect(reading.pointer + v * lead_s, 0.0, float(reading.width - 1))
-    m = max(1.0, margin_frac * zw)
-    il, ir = zl + m, zr - m
-    if il > ir:
-        il = ir = c
-    tol = 0.5
-    if not (il - tol <= p_pred <= ir + tol):
-        return False, p_pred
-    speed = abs(v)
-    if speed < 0.05 * reading.width:  # (nearly) still: anywhere safe is fine
-        return True, p_pred
-    step = speed * max(loop_dt, 0.002)
-    ahead = (c - p_pred) if v > 0 else (p_pred - c)  # distance left to the centre
-    if ahead <= step / 2.0:
-        return True, p_pred               # this is the sample nearest the centre
-    nxt = p_pred + (step if v > 0 else -step)
-    if not (il - tol <= nxt <= ir + tol):
-        return True, p_pred               # last chance before leaving the safe area
-    return False, p_pred
+    p, v   fish position (bar px) when it was seen, and its speed (px/s)
+    c0, hw zone centre / half width when seen (dz = how much later than the
+           fish it was seen), vz = zone speed (px/s)
+    lead   delay between key-down and the game checking the fish (s)
+    tau_now  seconds since the fish position p was on screen
+    Works for any speed: it predicts the fish (bouncing off the bar ends) and
+    the drifting zone a few hundred ms ahead and finds the exact moment they
+    meet.  Returns seconds from now until the key should go down (0 = now),
+    or None if this is not the moment (yet)."""
+    if hw <= 0.5 or width < 4:
+        return None
+    w1 = float(width - 1)
+    safe = max(0.5, hw * (1.0 - 2.0 * margin_frac))
+    n = int(horizon / step) + 1
+    t = tau_now + lead + np.arange(n) * step          # when the game checks
+    lo, hi = walls if walls is not None else (0.0, w1)
+    span = max(1.0, hi - lo)
+    u = np.mod(p - lo + v * t, 2.0 * span)
+    y = lo + np.where(u > span, 2.0 * span - u, u)    # fish, bouncing between its turn points
+    if w1 > 2 * hw:
+        c = np.clip(c0 + vz * (t - dz), hw, w1 - hw)  # zone centre
+    else:
+        c = np.full(n, w1 / 2.0)
+    e = y - c
+    sg = np.sign(e)
+    hits = np.flatnonzero(sg[:-1] * sg[1:] <= 0)
+    if hits.size:
+        i = int(hits[0])
+        e0, e1 = float(e[i]), float(e[i + 1])
+        frac = e0 / (e0 - e1) if e0 != e1 else 0.0
+        return (i + frac) * step
+    if abs(float(e[0])) <= safe:
+        return 0.0   # already past the centre but still well inside: now
+    return None
 
 
 # =============================================================================
@@ -562,6 +749,13 @@ class GameEnv:
     def press_key(self, key: str, hold_s: float) -> None: raise NotImplementedError
     def click(self, hold_s: float) -> None: raise NotImplementedError
     def key_down(self, name: str) -> bool: return False
+    def send_input(self, key: str, down: bool) -> None:
+        """Key (or "click") down/up without blocking.  Default: tap on down."""
+        if down:
+            if key == "click":
+                self.click(0.0)
+            else:
+                self.press_key(key, 0.0)
     def close(self) -> None: pass
 
 
@@ -764,6 +958,17 @@ if IS_WINDOWS:
             time.sleep(max(0.0, hold_s))
             self._send(up)
 
+        def send_input(self, key: str, down: bool) -> None:
+            inp = INPUT(type=INPUT_MOUSE if key == "click" else INPUT_KEYBOARD)
+            if key == "click":
+                inp.mi = MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN if down else MOUSEEVENTF_LEFTUP, 0, 0)
+            else:
+                vk = vk_from_name(key) or 0x45  # default 'E'
+                scan = _user32.MapVirtualKeyW(vk, 0)  # MAPVK_VK_TO_VSC
+                flags = KEYEVENTF_SCANCODE | (0 if down else KEYEVENTF_KEYUP)
+                inp.ki = KEYBDINPUT(0, scan, flags, 0, 0)
+            self._send(inp)
+
         def key_down(self, name: str) -> bool:
             vk = vk_from_name(name)
             return bool(vk) and bool(_user32.GetAsyncKeyState(vk) & 0x8000)
@@ -820,7 +1025,21 @@ class FishingBot:
         self.stats = Stats()
         self.lock = threading.Lock()
         self.geom: Optional[BarGeom] = None
-        self.tracker = PointerTracker()
+        self.tracker = MotionTracker(window=0.08, bounce_cut=True)
+        self.ztracker = MotionTracker(window=0.15, bounce_cut=False)
+        self._held: Optional[str] = None      # key currently held down
+        self._release_at = 0.0
+        self._fb_t: Optional[float] = None    # press waiting for its hit/miss to show
+        self._fb_hist: deque = deque(maxlen=15)  # measured press -> result delays (s)
+        self._armed = True
+        self._outcome_seen = True
+        self._strip = None                    # (time, image, origin) of the last strip grab
+        self._rec: deque = deque(maxlen=900)  # flight recorder: one entry per reel tick
+        self._rec_imgs: deque = deque(maxlen=150)  # ... and pictures of the last game frames
+        self._geom_seen: deque = deque(maxlen=9)
+        self._walls_lo: deque = deque(maxlen=9)   # where the fish turns around (bar px)
+        self._walls_hi: deque = deque(maxlen=9)
+        self._geom_check_t = -1e9
         self.region: Optional[Tuple[int, int, int, int]] = None
         self._region_t = -1e9
         self._last_full = -1e9
@@ -856,10 +1075,18 @@ class FishingBot:
         self.round_last_visible = -1e9
         self.round_filled = 0
         self.round_total = 0
+        self._totals = {}
         self.round_misses = 0
         self.round_presses = 0
         self.last_press_t = -1e9
-        self.tracker = PointerTracker()
+        self.tracker = MotionTracker(window=0.08, bounce_cut=True)
+        self.ztracker = MotionTracker(window=0.15, bounce_cut=False)
+        self._fb_t = None
+        self._armed = True
+        self._outcome_seen = True
+        self._rec.clear()
+        self._rec_imgs.clear()
+        self._last_press_info = None
 
     def start(self) -> None:
         with self.lock:
@@ -882,6 +1109,7 @@ class FishingBot:
             self.running = False
             self.stats.run_time += self.env.now() - self.stats.started_at
             self._set_state(ST_STOPPED, "")
+        self._release_key()
         self.log("Stopped.")
 
     def toggle(self) -> None:
@@ -896,19 +1124,52 @@ class FishingBot:
             if self.running:
                 st.run_time += self.env.now() - st.started_at
             return {"state": self.state, "detail": self.detail, "stats": st,
-                    "running": self.running}
+                    "running": self.running, "lead_ms": self.current_lead() * 1000.0,
+                    "lead_auto": self.lead_is_measured()}
+
+    def lead_is_measured(self) -> bool:
+        return bool(self.s.auto_lead and len(self._fb_hist) >= 1)
+
+    def walls(self, width: int) -> Tuple[float, float]:
+        """Where the fish turns around: learned from bounces, else a default
+        (its centre stops about half a fish short of the bar's ends)."""
+        w1 = float(width - 1)
+        lo = float(np.median(self._walls_lo)) if self._walls_lo else 0.012 * w1
+        hi = float(np.median(self._walls_hi)) if self._walls_hi else 0.985 * w1
+        if hi - lo < 0.5 * w1:
+            return 0.0, w1
+        return lo, hi
+
+    def current_lead(self) -> float:
+        """Seconds between our key-down and the game checking the fish."""
+        if self.lead_is_measured():
+            d = sorted(self._fb_hist)
+            return min(0.25, max(0.0, d[len(d) // 2]))
+        return max(0.0, self.s.lead_ms / 1000.0)
 
     def _press(self, why: str, reel: bool = False) -> None:
+        """Key down now; the key is released by a later tick (never blocks)."""
+        self._release_key()
         self._last_key_t = self.env.now()
         self.stats.presses += 1
         if self.s.dry_run:
             self.log(f"(dry run) would press for: {why}")
             return
-        hold = max(0.0, self.s.key_hold_ms / 1000.0)
-        if reel and self.s.reel_with_click:
-            self.env.click(hold)
-        else:
-            self.env.press_key(self.s.key or "e", hold)
+        key = "click" if (reel and self.s.reel_with_click) else (self.s.key or "e")
+        self.env.send_input(key, True)
+        self._held = key
+        self._release_at = self._last_key_t + max(0.0, self.s.key_hold_ms / 1000.0)
+
+    def _release_key(self, now: Optional[float] = None) -> None:
+        if self._held is None:
+            return
+        if now is not None and now < self._release_at:
+            return
+        key, self._held = self._held, None
+        try:
+            self.env.send_input(key, False)
+        except Exception as exc:
+            self.log(f"Could not release the key: {exc!r}")
 
     # ------------------------------------------------------------- sensing
     def _refresh_region(self, now: float) -> None:
@@ -929,11 +1190,14 @@ class FishingBot:
         geom = locate_bar(img, (ox, oy))
         reading = None
         if geom is not None:
-            if self.geom is None or (abs(geom.x0 - self.geom.x0) > 3 or abs(geom.y0 - self.geom.y0) > 3
-                                     or abs(geom.w - self.geom.w) > 4):
-                self.log(f"Found the reel bar: {geom.w}x{geom.h}px at ({geom.x0},{geom.y0}).")
-            self.geom = geom
             reading = read_minigame(img, geom, (ox, oy))
+            if reading.visible:  # only trust a bar that reads like a real minigame
+                if self.geom is None or (abs(geom.x0 - self.geom.x0) > 3 or abs(geom.y0 - self.geom.y0) > 3
+                                         or abs(geom.w - self.geom.w) > 4):
+                    self.log(f"Found the reel bar: {geom.w}x{geom.h}px at ({geom.x0},{geom.y0}).")
+                    self._walls_lo.clear()
+                    self._walls_hi.clear()
+                self.geom = geom
         if reading is None or not reading.visible:
             pr = read_prompt(img, (ox, oy))
             if now - self._last_key_t >= self.PROMPT_SETTLE:
@@ -947,6 +1211,7 @@ class FishingBot:
             return None
         reg = self.geom.strip_region()
         img = self.env.grab(reg)
+        self._strip = (self.env.now(), img, (reg[0], reg[1]))
         return read_minigame(img, self.geom, (reg[0], reg[1]))
 
     def _fresh_prompt(self, since: float) -> Optional[str]:
@@ -976,6 +1241,7 @@ class FishingBot:
     def tick(self) -> float:
         env, s = self.env, self.s
         now = env.now()
+        self._release_key(now)
 
         # ---- safety: only act while the game is the active window
         if s.require_focus and not env.is_game_focused():
@@ -1025,15 +1291,77 @@ class FishingBot:
         self._set_state(ST_REEL)
         self.round_last_visible = now
 
-        # progress bookkeeping (for the stats only)
-        if rd.filled > self.round_filled:
+        # progress: a dot filled = hit, a red box = miss
+        hit = rd.filled > self.round_filled
+        miss = rd.misses > self.round_misses
+        if hit:
             self.stats.hits += rd.filled - self.round_filled
             self.round_filled = rd.filled
-        if rd.total > self.round_total:
-            self.round_total = rd.total
-        if rd.misses > self.round_misses:
+            self.ztracker.reset()  # the zone shrinks / turns around after a hit
+        if rd.total:
+            self._totals[rd.total] = self._totals.get(rd.total, 0) + 1
+            self.round_total = max(self._totals, key=self._totals.get)
+        if miss:
             self.stats.misses += rd.misses - self.round_misses
             self.round_misses = rd.misses
+        shown_after = None
+        if hit or miss:
+            self._outcome_seen = True
+            if self._fb_t is not None:
+                # how long from our key-down until the game showed the result:
+                # that is exactly the lead we have to plan with
+                d = now - self._fb_t
+                shown_after = d
+                if 0.0 < d < 0.4:
+                    self._fb_hist.append(d)
+                self._fb_t = None
+        elif self._fb_t is not None and now - self._fb_t > 0.5:
+            self._fb_t = None
+
+        # flight recorder (what the bot saw, for miss reports)
+        ev = "hit" if hit else ("MISS" if miss else "")
+        self._rec.append((now, rd.pointer, rd.zone, rd.filled, rd.misses, ev))
+        if self._strip is not None and self._strip[0] >= now and (
+                not self._rec_imgs or ev or rd.pointer != self._rec_imgs[-1][2]):
+            self._rec_imgs.append((now, self._strip, rd.pointer, rd.zone, ev))  # new game frame
+
+        if miss:
+            info = self._last_press_info
+            where = (f"fish now at {rd.pointer:.0f}" if rd.pointer is not None else "fish not seen")
+            if info is not None:
+                self.log(f"MISS: pressed with fish at {info['p']:.0f} ({info['v']:+.0f}px/s), gold "
+                         f"{info['zl']:.0f}-{info['zr']:.0f}, timing {info['lead'] * 1000:.0f}ms; "
+                         f"result showed {('%.0fms' % (shown_after * 1000)) if shown_after else '?'} later, {where}.")
+            if s.stop_on_miss:
+                path = None
+                try:
+                    path = self.save_miss_report(now)
+                except Exception as exc:
+                    self.log(f"Could not save the miss report: {exc!r}")
+                self.log("Stopped on the first miss (untick 'Stop on the first miss' to keep going)."
+                         + (f" Report: {path}" if path else ""))
+                self.stop()
+                return 0.05
+
+        # refine the bar's ends while reeling (the fish can hide an end of the
+        # bar on the very first look): median of several measurements
+        if self._strip is not None and now - self._geom_check_t > 0.3:
+            self._geom_check_t = now
+            t_s, simg, sorg = self._strip
+            g2 = locate_bar(np.asarray(simg), sorg)
+            if g2 is not None and abs(g2.y0 - self.geom.y0) <= 2 and abs(g2.y1 - self.geom.y1) <= 2:
+                self._geom_seen.append(g2)
+                if len(self._geom_seen) >= 3:
+                    med = BarGeom(int(np.median([g.x0 for g in self._geom_seen])),
+                                  int(np.median([g.x1 for g in self._geom_seen])),
+                                  self.geom.y0, self.geom.y1)
+                    if abs(med.x0 - self.geom.x0) >= 2 or abs(med.x1 - self.geom.x1) >= 2:
+                        self.geom = med
+                        self.tracker.reset()   # bar-local coordinates changed
+                        self.ztracker.reset()
+                        self._walls_lo.clear()
+                        self._walls_hi.clear()
+                        return 0.0
 
         if self._last_tick is not None:
             dt = now - self._last_tick
@@ -1041,17 +1369,59 @@ class FishingBot:
                 self._loop_dt = 0.8 * self._loop_dt + 0.2 * dt
         self._last_tick = now
         if rd.pointer is not None:
+            n_before = len(self.tracker.samples)
             self.tracker.add(now, rd.pointer)
-        v = self.tracker.velocity()
-        press, p_pred = should_press(rd, v, s.lead_ms / 1000.0, s.zone_margin_pct / 100.0, self._loop_dt)
+            if len(self.tracker.samples) != n_before or len(self.tracker.samples) == self.tracker.samples.maxlen:
+                if len(self.tracker.samples) >= 5:
+                    wb = bounce_wall(self.tracker.samples, rd.width)
+                    if wb is not None:
+                        (self._walls_lo if wb[0] == "lo" else self._walls_hi).append(wb[1])
+        if rd.zone is not None:
+            self.ztracker.add(now, (rd.zone[0] + rd.zone[1]) / 2.0)
         zl, zr = rd.zone if rd.zone else (0, 0)
         self.detail = (f"fish {rd.pointer if rd.pointer is not None else -1:5.0f}  "
                        f"gold {zl:4.0f}-{zr:4.0f}  dots {self.round_filled}/{self.round_total or '?'}")
-        if press and now - self.last_press_t >= s.press_cooldown_s:
-            self.last_press_t = now
-            self.round_presses += 1
-            self._press(f"fish at {rd.pointer:.0f}, gold {zl:.0f}-{zr:.0f}", reel=True)
+
+        # ready for the next press?  (one press per pass through the zone)
+        since = now - self.last_press_t
+        if not self._armed:
+            inside = (rd.pointer is not None and rd.zone is not None
+                      and rd.zone[0] <= rd.pointer <= rd.zone[1])
+            if (since >= s.min_press_gap_s and (self._outcome_seen or since > 0.25)
+                    and (not inside or since > 0.6)):
+                self._armed = True
+        if not self._armed or rd.pointer is None or rd.zone is None:
             return 0.0
+
+        fish = self.tracker.last()
+        walls = self.walls(rd.width)
+        v = self.tracker.velocity(now, walls)
+        if fish is None or v is None:
+            return 0.0
+        zone_t = self.ztracker.last()
+        vz = self.ztracker.velocity(now) or 0.0
+        t_fish, p = fish
+        c0 = (zl + zr) / 2.0
+        dz = (zone_t[0] - t_fish) if zone_t is not None else 0.0
+        if zone_t is not None:
+            c0 = zone_t[1]
+        wait = plan_press(p, v, c0, (zr - zl) / 2.0, vz, rd.width, self.current_lead(),
+                          s.zone_margin_pct / 100.0, self.env.now() - t_fish, dz, walls=walls)
+        if wait is None or wait > min(0.04, max(1.5 * self._loop_dt, 0.004)):
+            return 0.0  # not yet - look again
+        if wait > 0:
+            self.env.sleep(wait)  # sub-frame precise timing
+        self._armed = False
+        self._outcome_seen = False
+        self.round_presses += 1
+        lead = self.current_lead()
+        self._press(f"fish at {p:.0f} ({v:+.0f}px/s), gold {zl:.0f}-{zr:.0f}", reel=True)
+        self.last_press_t = self._last_key_t
+        self._fb_t = self._last_key_t
+        self._last_press_info = dict(t=self._last_key_t, p=p, t_fish=t_fish, v=v, zl=zl, zr=zr, c0=c0,
+                                     vz=vz, lead=lead, wait=wait, loop_dt=self._loop_dt)
+        self._rec.append((self._last_key_t, None, None, None, None,
+                          f"KEY DOWN (planned wait {wait * 1000:.1f}ms, timing {lead * 1000:.0f}ms)"))
         return 0.0  # reel as fast as the screen can be read
 
     # ------------------------------------------------------- not reeling
@@ -1120,6 +1490,17 @@ class FishingBot:
                     self._verified = True  # give up checking; timeout will handle it
                 elif waited >= self.VERIFY_AFTER + 2.0:
                     self._verified = True  # can't see the prompt; trust the cast
+            elif self._verified and waited >= self.VERIFY_AFTER:
+                # The line can come back in while we wait (the fish got away while
+                # the game was in the background, a cast that got reeled in...):
+                # three "Cast" readings in a row -> cast again instead of idling
+                # until the bite timeout.
+                since = max(self._cast_t + 0.6, self._last_key_t + self.PROMPT_SETTLE)
+                recent = [st for (t, st) in self.prompt_hist if t >= since]
+                if len(recent) >= 3 and all(st == PROMPT_CAST for st in recent[-3:]):
+                    self.log("The Cast prompt is showing - the line is not out. Casting.")
+                    self._do_cast(now)
+                    return 0.02
             if waited >= s.bite_timeout_s:
                 return self._on_bite_timeout(now)
             return 0.02
@@ -1142,10 +1523,10 @@ class FishingBot:
         self._timeouts += 1
         prompt = self._fresh_prompt(now - 1.5)
         self.log(f"No bite for {self.s.bite_timeout_s:.0f}s.")
-        if prompt == PROMPT_CAST and self._timeouts <= 2:
+        if prompt == PROMPT_CAST:
             self.log("The line is not out - casting.")
             self._do_cast(now)
-        elif prompt == PROMPT_REEL and self._timeouts <= 2:
+        elif prompt == PROMPT_REEL:
             self.log("Reeling in to recast.")
             self._press("reel in (timeout)")
             self._set_state(ST_AFTER, "recasting")
@@ -1163,10 +1544,75 @@ class FishingBot:
         return 0.05
 
     # ------------------------------------------------------------ debug
+    def save_miss_report(self, now: float) -> Optional[str]:
+        """Write what the bot saw around the last press: a picture with one
+        row per game frame (green = gold zone, red = fish, yellow frame = the
+        last picture before the key went down, magenta = the miss showing)
+        and a timeline.txt with the numbers."""
+        rec = list(self._rec)
+        if not rec or self.geom is None:
+            return None
+        info = self._last_press_info or {}
+        t_press = info.get("t", now)
+        t_from = t_press - 0.45
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        folder = os.path.join(MISS_DIR, f"miss_{stamp}")
+        os.makedirs(folder, exist_ok=True)
+        g = self.geom
+        lines = [f"AutoFish {APP_VERSION} miss report {stamp}",
+                 f"bar x {g.x0}-{g.x1} y {g.y0}-{g.y1} ({g.w}x{g.h}px)",
+                 f"timing in use {self.current_lead() * 1000:.1f}ms "
+                 f"({'measured' if self.lead_is_measured() else 'from settings'}); "
+                 f"measured press->result delays (ms): {[round(d * 1000) for d in self._fb_hist]}",
+                 f"loop interval {self._loop_dt * 1000:.1f}ms, zone margin {self.s.zone_margin_pct:.0f}%",
+                 "last press: " + ", ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                                            for k, v in info.items()),
+                 "", "t_ms(rel. to key down)  frame  fish   gold_l gold_r  dots misses  event"]
+        pics = [pc for pc in self._rec_imgs if pc[0] >= t_from]
+        pic_index = {pc[0]: i for i, pc in enumerate(pics)}
+        prev = None
+        for (t, ptr, zone, filled, misses, ev) in rec:
+            if t < t_from:
+                continue
+            idx = str(pic_index[t]) if t in pic_index else ""
+            key = (ptr, zone, filled, misses)
+            if not ev and not idx and key == prev:
+                continue  # nothing new on screen
+            prev = key
+            z = f"{zone[0]:6.1f} {zone[1]:6.1f}" if zone else "     -      -"
+            pp = f"{ptr:6.1f}" if ptr is not None else "     -"
+            lines.append(f"{(t - t_press) * 1000:9.1f}  {idx:>5}  {pp} {z}  {'' if filled is None else filled:>4} "
+                         f"{'' if misses is None else misses:>6}  {ev}")
+        with open(os.path.join(folder, "timeline.txt"), "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        if pics:
+            rows = []
+            before = max((i for i, p in enumerate(pics) if p[0] <= t_press), default=-1)
+            for i, (t, simg, ptr, zone, ev) in enumerate(pics):
+                im = np.array(simg[1], dtype=np.uint8, copy=True)
+                ox = g.x0 - simg[2][0]
+                hh, ww = im.shape[:2]
+                if zone:
+                    for x in (int(round(zone[0])), int(round(zone[1]))):
+                        if 0 <= ox + x < ww:
+                            im[:max(2, hh // 8), ox + x] = (0, 255, 0)
+                if ptr is not None and 0 <= ox + int(round(ptr)) < ww:
+                    im[hh - max(2, hh // 8):, ox + int(round(ptr))] = (255, 0, 0)
+                col = (255, 255, 0) if i == before else ((255, 0, 255) if ev == "MISS" else None)
+                if col:
+                    im[:2, :] = col
+                    im[-2:, :] = col
+                    im[:, :2] = col
+                    im[:, -2:] = col
+                rows.append(im)
+                rows.append(np.full((2, ww, 3), 40, np.uint8))
+            wmax = max(r.shape[1] for r in rows)
+            rows = [np.pad(r, ((0, 0), (0, wmax - r.shape[1]), (0, 0))) for r in rows]
+            write_png(os.path.join(folder, "frames.png"), np.vstack(rows))
+        return folder
+
     def debug_snapshot(self) -> str:
         """Save an annotated screenshot of what the bot sees. Returns the path."""
-        import zlib
-        import struct
         self._refresh_region(self.env.now())
         img = np.ascontiguousarray(self.env.grab(self.region)).copy()
         ox, oy = self.region[0], self.region[1]
@@ -1202,15 +1648,7 @@ class FishingBot:
         notes.append(f"prompt={pr.state} ratio={pr.ratio:.2f} note={pr.note}")
         os.makedirs(DEBUG_DIR, exist_ok=True)
         path = os.path.join(DEBUG_DIR, time.strftime("snapshot_%Y%m%d_%H%M%S.png"))
-        raw = b"".join(b"\x00" + img[y].tobytes() for y in range(H))
-
-        def chunk(tag, data):
-            c = struct.pack(">I", len(data)) + tag + data
-            return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-        png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
-               + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
-        with open(path, "wb") as fh:
-            fh.write(png)
+        write_png(path, img)
         with open(path[:-4] + ".txt", "w", encoding="utf-8") as fh:
             fh.write("\n".join(notes) + "\n")
         self.log("Snapshot saved: " + path)
@@ -1275,7 +1713,8 @@ def run_gui() -> None:
     stats_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=6)
     stat_vars = {}
     for i, (key, label) in enumerate([("caught", "Caught"), ("lost", "Lost"), ("hits", "Hits"),
-                                      ("misses", "Misses"), ("casts", "Casts"), ("run_time", "Run time")]):
+                                      ("misses", "Misses"), ("casts", "Casts"), ("lead", "Timing"),
+                                      ("run_time", "Run time")]):
         f = ttk.Frame(stats_frame)
         f.grid(row=0, column=i, padx=6)
         v = tk.StringVar(value="0")
@@ -1298,7 +1737,7 @@ def run_gui() -> None:
         ttk.Label(sf, text=tip, style="Muted.TLabel", font=("Segoe UI", 8)).grid(row=row, column=2, sticky="w", padx=4)
         num_vars[attr] = (v, lo, hi)
 
-    add_num(0, "Timing lead (ms)", "lead_ms", 0, 250, 5, "raise if presses land late")
+    add_num(0, "Timing lead (ms)", "lead_ms", 0, 250, 5, "start value; auto timing refines it")
     add_num(1, "Gold zone margin (%)", "zone_margin_pct", 0, 45, 1, "higher = only the zone centre")
     add_num(2, "Recast delay (s)", "recast_delay_s", 0.2, 10, 0.1, "pause after each catch")
     add_num(3, "Bite timeout (s)", "bite_timeout_s", 10, 600, 5, "reel in + recast if no bite")
@@ -1316,10 +1755,12 @@ def run_gui() -> None:
         ttk.Checkbutton(sf, text=label, variable=v).grid(row=row, column=0, columnspan=3, sticky="w", padx=6, pady=1)
         bool_vars[attr] = v
 
-    add_bool(5, "Reel with left-click instead of the key", "reel_with_click")
-    add_bool(6, "Only press keys while Roblox is the active window (recommended)", "require_focus")
-    add_bool(7, "Dry run - detect and log only, never press anything", "dry_run")
-    add_bool(8, "Keep this window on top", "always_on_top")
+    add_bool(5, "Auto timing - measure the game's input delay (recommended)", "auto_lead")
+    add_bool(6, "Stop on the first miss (saves a miss report)", "stop_on_miss")
+    add_bool(7, "Reel with left-click instead of the key", "reel_with_click")
+    add_bool(8, "Only press keys while Roblox is the active window (recommended)", "require_focus")
+    add_bool(9, "Dry run - detect and log only, never press anything", "dry_run")
+    add_bool(10, "Keep this window on top", "always_on_top")
 
     def apply_settings(*_):
         for attr, (v, lo, hi) in num_vars.items():
@@ -1428,6 +1869,7 @@ def run_gui() -> None:
         st = snap["stats"]
         for k in ("caught", "lost", "hits", "misses", "casts"):
             stat_vars[k].set(str(getattr(st, k)))
+        stat_vars["lead"].set(f"{snap['lead_ms']:.0f}ms" + ("*" if snap["lead_auto"] else ""))
         secs = int(st.run_time)
         stat_vars["run_time"].set(f"{secs // 3600}:{secs // 60 % 60:02d}:{secs % 60:02d}")
         root.after(30, poll)

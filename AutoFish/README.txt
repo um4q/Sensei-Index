@@ -33,16 +33,26 @@ TIPS
 
 SETTINGS (in the AutoFish window, changes apply instantly)
 --------
-Timing lead (ms)      How far ahead it predicts the fish. If you see
-                      misses where the fish had just LEFT the gold zone,
-                      raise it (e.g. 30 -> 50). If it presses too EARLY,
-                      lower it.
+Auto timing           ON (recommended). AutoFish measures how long the game
+                      takes to react to a key press (shown as "Timing" in
+                      the stats, with a * once measured) and times every
+                      press with it - this is what makes very fast fish
+                      work. It works for any fish speed: each press is
+                      timed to the moment the fish reaches the middle of
+                      the gold zone, including when the zone is moving
+                      and when the fish bounces off the end of the bar.
+Timing lead (ms)      Starting value before the delay has been measured
+                      (or the fixed value if Auto timing is off).
 Gold zone margin (%)  How much of each edge of the gold zone to avoid.
                       Higher = only presses near the middle.
 Recast delay (s)      Pause after a catch before casting again.
 Bite timeout (s)      If nothing bites for this long it reels in and
                       recasts.
 Game key              The key that casts/reels (E in this game).
+Stop on the first miss
+                      ON by default: the moment a press misses, AutoFish
+                      stops and saves a miss report (see below). Untick it
+                      to keep fishing through misses.
 Reel with left-click  Use a mouse click instead of the key while reeling.
 Dry run               Watches and logs what it WOULD do without pressing
                       anything - handy to check it sees the game.
@@ -51,10 +61,24 @@ Dry run               Watches and logs what it WOULD do without pressing
 (they are also saved when you close the window).
 
 
+MISS REPORTS
+------------
+When it stops on a miss, AutoFish saves a folder in miss_reports\ with:
+  frames.png    one row per game frame from just before the press until
+                the miss showed: green ticks = gold zone edges, red tick =
+                the fish, yellow box = the last picture before the key
+                went down, magenta box = the frame where the miss showed.
+  timeline.txt  the same moments as numbers (fish position, gold zone,
+                speed, the timing it used, the measured delays).
+Send that folder if you want the timing looked at.
+
+
 IF SOMETHING ISN'T WORKING
 --------------------------
 * Status says "waiting for the Roblox window to be active": click into
   the Roblox window.
+* It stopped by itself: it stopped on a miss ("Stop on the first miss").
+  Press START / F6 to carry on; the log shows where the report is.
 * It never says "Found the reel bar": make sure the minigame bar isn't
   covered by another window, and that Roblox's graphics aren't using an
   unusual colour filter.
