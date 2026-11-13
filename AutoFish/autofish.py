@@ -35,7 +35,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -51,6 +51,7 @@ class Settings:
     # --- reel timing -------------------------------------------------------
     lead_ms: float = 30.0          # input lag to plan for until it has been measured
     auto_lead: bool = True         # measure the real press -> game delay and use that
+    measured_lead_ms: float = 0.0  # last measured delay (saved; start value next time, 0 = none)
     zone_margin_pct: float = 18.0  # ignore this % of the gold zone on each side
     min_press_gap_s: float = 0.10 # minimum time between two reel presses
     # --- casting -----------------------------------------------------------
@@ -421,10 +422,11 @@ def read_minigame(strip: np.ndarray, geom: BarGeom, strip_origin: Tuple[int, int
             out.total = f_best + e_best
             r, g, b = channels(right)
             red = (r >= 130) & (r - g >= 60) & (r - b >= 60)
-            m_best = 0
-            for i in range(right.shape[0]):
-                m_best = max(m_best, sum(1 for s, e in runs(red[i], gap=1) if e - s + 1 >= min_dot))
-            out.misses = m_best
+            # each red box has a dark X across it, which splits single rows of
+            # one box into two pieces at high resolutions: project the red
+            # pixels onto columns first, so one box always counts once
+            rcols = red.sum(axis=0) >= max(1, int(0.15 * h))
+            out.misses = sum(1 for s, e in runs(rcols, gap=0) if e - s + 1 >= min_dot)
     except Exception:
         pass
     return out
@@ -562,12 +564,21 @@ class MotionTracker:
         self.bounce_cut = bounce_cut
         self.eps = eps
         self.samples: deque = deque(maxlen=64)
+        self._first: Optional[float] = None   # first value seen (time unknown)
 
     def reset(self) -> None:
         self.samples.clear()
+        self._first = None
 
     def add(self, t: float, x: float) -> None:
-        if self.samples:
+        if not self.samples:
+            # the first value we look at may have been on screen for a while
+            # (we poll slowly while waiting for a bite), so its time is unknown:
+            # start the track at the first CHANGE, which we see within one loop
+            if self._first is None or abs(x - self._first) < self.eps:
+                self._first = x
+                return
+        else:
             t0, x0 = self.samples[-1]
             if abs(x - x0) < self.eps or t <= t0:
                 return  # same frame as before
@@ -692,6 +703,54 @@ def reflect(x: float, lo: float, hi: float) -> float:
     return lo + y
 
 
+def miss_verdict(info: dict, rd: "MinigameReading", pics, shown_after: Optional[float]) -> str:
+    """One line for the log / miss report: did the game judge the press too
+    EARLY or too LATE, and by about how much?
+
+    The miss shows up in the very game frame the press was judged in, so the
+    fish and the gold zone on that frame are what the game judged.  The
+    recorded frames since the key went down show whether the fish had already
+    passed the gold centre (late) or not reached it yet (early)."""
+    if rd is None or rd.pointer is None or rd.zone is None:
+        return ""
+    zl, zr = rd.zone
+    c, pm = (zl + zr) / 2.0, rd.pointer
+    fr = [(pc[0], pc[2], (pc[3][0] + pc[3][1]) / 2.0) for pc in pics if pc[2] is not None and pc[3] is not None]
+    t_press = info.get("t")
+    if t_press is not None and fr:
+        i0 = max((i for i, f in enumerate(fr) if f[0] <= t_press), default=0)
+        fr = fr[i0:]                                  # the frame the press was planned on, and later
+    steps = sorted(abs(b[1] - a[1]) / (b[0] - a[0]) for a, b in zip(fr, fr[1:]) if b[0] > a[0])
+    v_obs = steps[len(steps) // 2] if steps else None
+    lead = float(info.get("lead", 0.0))
+    tail = (f" Result showed {shown_after * 1000:.0f}ms after key-down; timing used {lead * 1000:.0f}ms."
+            if shown_after is not None else "")
+    v_used = info.get("v")
+    if v_used is not None and v_obs and abs(abs(v_used) - v_obs) > 0.2 * v_obs:
+        tail += f" Fish speed was planned as {abs(v_used):.0f}px/s; the frames show ~{v_obs:.0f}px/s."
+    where = f"fish {pm:.0f}, gold {zl:.0f}-{zr:.0f}"
+    if zl <= pm <= zr:
+        return (f"On the judged frame the fish reads INSIDE the gold zone ({where}): the game judged "
+                f"a different moment than this frame (see frames.png).{tail}")
+    cross = None
+    for a, b in zip(fr, fr[1:]):
+        ea, eb = a[1] - a[2], b[1] - b[2]
+        if ea == 0 or (ea > 0) != (eb > 0):
+            cross = a[0] + (b[0] - a[0]) * (ea / (ea - eb) if ea != eb else 0.0)
+    t_res = fr[-1][0] if fr else None
+    if cross is not None and t_res is not None:
+        return (f"Too LATE: the fish passed the gold centre about {(t_res - cross) * 1000:.0f}ms before "
+                f"the frame the game judged ({where}).{tail}")
+    e0, e1 = (fr[0][1] - fr[0][2], fr[-1][1] - fr[-1][2]) if fr else (0.0, 0.0)
+    if fr and abs(e1) > abs(e0):
+        return (f"Too LATE: the fish was already past the gold centre when the key went down and "
+                f"moving away ({where}).{tail}")
+    spd = abs(v_used) if v_used else (v_obs or 0.0)
+    ms = f", ~{abs(pm - c) / spd * 1000:.0f}ms" if spd > 1 else ""
+    return (f"Too EARLY: the fish had not reached the gold yet - {abs(pm - c):.0f}px{ms} short of the gold "
+            f"centre when judged ({where}).{tail}")
+
+
 def plan_press(p: float, v: float, c0: float, hw: float, vz: float, width: int,
                lead: float, margin_frac: float, tau_now: float, dz: float = 0.0,
                horizon: float = 0.30, step: float = 0.0005,
@@ -719,7 +778,10 @@ def plan_press(p: float, v: float, c0: float, hw: float, vz: float, width: int,
     u = np.mod(p - lo + v * t, 2.0 * span)
     y = lo + np.where(u > span, 2.0 * span - u, u)    # fish, bouncing between its turn points
     if w1 > 2 * hw:
-        c = np.clip(c0 + vz * (t - dz), hw, w1 - hw)  # zone centre
+        c = c0 + vz * (t - dz)                        # zone centre: it bounces off the bar ends
+        zspan = w1 - 2.0 * hw
+        cu = np.mod(c - hw, 2.0 * zspan)
+        c = hw + np.where(cu > zspan, 2.0 * zspan - cu, cu)
     else:
         c = np.full(n, w1 / 2.0)
     e = y - c
@@ -742,6 +804,7 @@ def plan_press(p: float, v: float, c0: float, hw: float, vz: float, width: int,
 class GameEnv:
     def now(self) -> float: return time.perf_counter()
     def sleep(self, s: float) -> None: time.sleep(max(0.0, s))
+    def sleep_precise(self, s: float) -> None: self.sleep(s)
     def game_region(self) -> Optional[Tuple[int, int, int, int]]: raise NotImplementedError
     def is_game_focused(self) -> bool: raise NotImplementedError
     def focus_game(self) -> bool: return False
@@ -969,6 +1032,15 @@ if IS_WINDOWS:
                 inp.ki = KEYBDINPUT(0, scan, flags, 0, 0)
             self._send(inp)
 
+        def sleep_precise(self, s: float) -> None:
+            """Sleep `s` seconds to well under a millisecond (OS sleeps overshoot
+            by 0.5-2 ms): sleep most of it, spin the rest."""
+            end = time.perf_counter() + max(0.0, s)
+            if s > 0.002:
+                time.sleep(s - 0.0015)
+            while time.perf_counter() < end:
+                pass
+
         def key_down(self, name: str) -> bool:
             vk = vk_from_name(name)
             return bool(vk) and bool(_user32.GetAsyncKeyState(vk) & 0x8000)
@@ -1144,7 +1216,11 @@ class FishingBot:
         """Seconds between our key-down and the game checking the fish."""
         if self.lead_is_measured():
             d = sorted(self._fb_hist)
-            return min(0.25, max(0.0, d[len(d) // 2]))
+            n = len(d)
+            med = d[n // 2] if n % 2 else 0.5 * (d[n // 2 - 1] + d[n // 2])
+            return min(0.25, max(0.0, med))
+        if self.s.auto_lead and self.s.measured_lead_ms > 0:
+            return min(0.25, self.s.measured_lead_ms / 1000.0)  # measured in an earlier session
         return max(0.0, self.s.lead_ms / 1000.0)
 
     def _press(self, why: str, reel: bool = False) -> None:
@@ -1283,11 +1359,19 @@ class FishingBot:
     def _on_minigame(self, now: float, rd: MinigameReading) -> float:
         s = self.s
         if self.state != ST_REEL:
+            joined = self.state == ST_START
             self._reset_round()
             self.round_seen_t = now
             self._timeouts = 0
-            waited = now - self._cast_t if self.state == ST_WAIT else 0
-            self.log("Fish hooked! Reeling..." + (f" (bite after {waited:.1f}s)" if waited else ""))
+            if joined and (rd.filled or rd.misses):
+                # started (or restarted with F6) while a minigame was already
+                # running: the dots / red boxes already on screen are not ours
+                self.round_filled, self.round_misses = rd.filled, rd.misses
+                self.log(f"Joined a minigame in progress ({rd.filled} hit(s), {rd.misses} miss(es) already "
+                         "on screen - not counted).")
+            else:
+                waited = now - self._cast_t if self.state == ST_WAIT else 0
+                self.log("Fish hooked! Reeling..." + (f" (bite after {waited:.1f}s)" if waited else ""))
         self._set_state(ST_REEL)
         self.round_last_visible = now
 
@@ -1314,6 +1398,7 @@ class FishingBot:
                 shown_after = d
                 if 0.0 < d < 0.4:
                     self._fb_hist.append(d)
+                    self.s.measured_lead_ms = round(self.current_lead() * 1000.0, 1)
                 self._fb_t = None
         elif self._fb_t is not None and now - self._fb_t > 0.5:
             self._fb_t = None
@@ -1323,24 +1408,42 @@ class FishingBot:
         self._rec.append((now, rd.pointer, rd.zone, rd.filled, rd.misses, ev))
         if self._strip is not None and self._strip[0] >= now and (
                 not self._rec_imgs or ev or rd.pointer != self._rec_imgs[-1][2]):
-            self._rec_imgs.append((now, self._strip, rd.pointer, rd.zone, ev))  # new game frame
+            # new game frame (+ the bar's x0 it was read with: the geometry can be refined later)
+            self._rec_imgs.append((now, self._strip, rd.pointer, rd.zone, ev, self.geom.x0))
+            while now - self._rec_imgs[0][0] > 1.2:   # a report needs < 1 s; keep memory small
+                self._rec_imgs.popleft()
 
         if miss:
             info = self._last_press_info
+            # ours = a press of this bot can have caused it (not a dry run, not a
+            # red box that was already there, not someone pressing by hand)
+            ours = (not s.dry_run) and (self.round_presses > 0 or now - self._last_key_t < 0.6)
             where = (f"fish now at {rd.pointer:.0f}" if rd.pointer is not None else "fish not seen")
-            if info is not None:
+            if rd.zone is not None:
+                where += f", gold now {rd.zone[0]:.0f}-{rd.zone[1]:.0f}"
+            if info is not None and ours:
                 self.log(f"MISS: pressed with fish at {info['p']:.0f} ({info['v']:+.0f}px/s), gold "
                          f"{info['zl']:.0f}-{info['zr']:.0f}, timing {info['lead'] * 1000:.0f}ms; "
                          f"result showed {('%.0fms' % (shown_after * 1000)) if shown_after else '?'} later, {where}.")
-            if s.stop_on_miss:
+                verdict = miss_verdict(info, rd, list(self._rec_imgs), shown_after)
+                if verdict:
+                    self.log("  " + verdict)
+            elif ours:
+                self.log(f"MISS right after a cast / recovery key press (no reel press this round; {where}).")
+            else:
+                self.log(f"A miss showed up that AutoFish did not press for "
+                         f"({'dry run' if s.dry_run else 'pressed by hand?'}; {where}).")
+            if s.stop_on_miss and ours:
+                self._release_key()   # never hold the key while the report is written
+                snap = self._miss_snapshot(now, rd, shown_after)
+                self.stop()           # before the (slow) report: the GUI shows Stopped at once
                 path = None
                 try:
-                    path = self.save_miss_report(now)
+                    path = self.save_miss_report(now, snap)
                 except Exception as exc:
                     self.log(f"Could not save the miss report: {exc!r}")
                 self.log("Stopped on the first miss (untick 'Stop on the first miss' to keep going)."
                          + (f" Report: {path}" if path else ""))
-                self.stop()
                 return 0.05
 
         # refine the bar's ends while reeling (the fish can hide an end of the
@@ -1356,6 +1459,9 @@ class FishingBot:
                                   int(np.median([g.x1 for g in self._geom_seen])),
                                   self.geom.y0, self.geom.y1)
                     if abs(med.x0 - self.geom.x0) >= 2 or abs(med.x1 - self.geom.x1) >= 2:
+                        self._rec.append((now, None, None, None, None,
+                                          f"BAR ENDS REFINED x {self.geom.x0}-{self.geom.x1} -> {med.x0}-{med.x1} "
+                                          f"(fish/gold columns above and below differ by {self.geom.x0 - med.x0:+d}px)"))
                         self.geom = med
                         self.tracker.reset()   # bar-local coordinates changed
                         self.ztracker.reset()
@@ -1410,16 +1516,18 @@ class FishingBot:
         if wait is None or wait > min(0.04, max(1.5 * self._loop_dt, 0.004)):
             return 0.0  # not yet - look again
         if wait > 0:
-            self.env.sleep(wait)  # sub-frame precise timing
+            self.env.sleep_precise(wait)  # sub-frame precise timing
         self._armed = False
         self._outcome_seen = False
         self.round_presses += 1
         lead = self.current_lead()
         self._press(f"fish at {p:.0f} ({v:+.0f}px/s), gold {zl:.0f}-{zr:.0f}", reel=True)
         self.last_press_t = self._last_key_t
-        self._fb_t = self._last_key_t
+        # (a dry run presses nothing: a result showing now was someone else's press)
+        self._fb_t = None if s.dry_run else self._last_key_t
         self._last_press_info = dict(t=self._last_key_t, p=p, t_fish=t_fish, v=v, zl=zl, zr=zr, c0=c0,
-                                     vz=vz, lead=lead, wait=wait, loop_dt=self._loop_dt)
+                                     vz=vz, dz=dz, lead=lead, wait=wait, loop_dt=self._loop_dt,
+                                     tau=self._last_key_t - t_fish, walls=walls, width=rd.width)
         self._rec.append((self._last_key_t, None, None, None, None,
                           f"KEY DOWN (planned wait {wait * 1000:.1f}ms, timing {lead * 1000:.0f}ms)"))
         return 0.0  # reel as fast as the screen can be read
@@ -1544,71 +1652,137 @@ class FishingBot:
         return 0.05
 
     # ------------------------------------------------------------ debug
-    def save_miss_report(self, now: float) -> Optional[str]:
-        """Write what the bot saw around the last press: a picture with one
-        row per game frame (green = gold zone, red = fish, yellow frame = the
-        last picture before the key went down, magenta = the miss showing)
-        and a timeline.txt with the numbers."""
-        rec = list(self._rec)
-        if not rec or self.geom is None:
+    def _miss_snapshot(self, now: float, rd: Optional[MinigameReading] = None,
+                       shown_after: Optional[float] = None) -> dict:
+        """Copy everything a miss report needs (start() on the GUI thread clears
+        the recorder, so the report must not read the live deques)."""
+        return dict(now=now, rec=list(self._rec), pics=list(self._rec_imgs),
+                    info=dict(self._last_press_info or {}), geom=self.geom, region=self.region,
+                    lead_now=self.current_lead(), measured=self.lead_is_measured(),
+                    fb=list(self._fb_hist), loop_dt=self._loop_dt, rd=rd, shown_after=shown_after)
+
+    def save_miss_report(self, now: float, snap: Optional[dict] = None) -> Optional[str]:
+        """Write what the bot saw around the last press: frames.png with one
+        row per game frame (green = gold zone edges, red = fish, cyan = where
+        the fish was predicted to be when the game judges the press, yellow
+        frame = the last picture before the key went down, magenta = the frame
+        the miss showed up in = the frame the game judged) and timeline.txt."""
+        snap = snap or self._miss_snapshot(now)
+        rec, info, g, rd = snap["rec"], snap["info"], snap["geom"], snap["rd"]
+        if not rec or g is None:
             return None
-        info = self._last_press_info or {}
         t_press = info.get("t", now)
         t_from = t_press - 0.45
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        folder = os.path.join(MISS_DIR, f"miss_{stamp}")
-        os.makedirs(folder, exist_ok=True)
-        g = self.geom
+        base = os.path.join(MISS_DIR, f"miss_{stamp}")
+        folder, n = base, 1
+        while True:                      # never overwrite an earlier report
+            try:
+                os.makedirs(folder)
+                break
+            except FileExistsError:
+                n += 1
+                folder = f"{base}_{n}"
+        pics = [pc for pc in snap["pics"] if pc[0] >= t_from]
+        dts = [b[0] - a[0] for a, b in zip(pics, pics[1:]) if b[0] > a[0]]
+        fps = 1.0 / float(np.median(dts)) if dts else 0.0
+        # where the plan expected the fish / gold centre when the game judges the press
+        y_pred = c_pred = t_eval = None
+        if all(k in info for k in ("p", "v", "tau", "lead", "walls", "width", "c0", "vz", "zl", "zr")):
+            T = info["tau"] + info["lead"]
+            t_eval = t_press + info["lead"]
+            y_pred = reflect(info["p"] + info["v"] * T, *info["walls"])
+            hw, w1 = (info["zr"] - info["zl"]) / 2.0, info["width"] - 1.0
+            c_pred = (min(max(info["c0"] + info["vz"] * (T - info.get("dz", 0.0)), hw), w1 - hw)
+                      if w1 > 2 * hw else w1 / 2.0)
+        sa = snap["shown_after"]
+        s = self.s
+        fmt = lambda v: (f"{v:.4f}" if isinstance(v, float) else  # noqa: E731
+                         ("(" + ", ".join(f"{u:.1f}" for u in v) + ")" if isinstance(v, tuple) else str(v)))
         lines = [f"AutoFish {APP_VERSION} miss report {stamp}",
-                 f"bar x {g.x0}-{g.x1} y {g.y0}-{g.y1} ({g.w}x{g.h}px)",
-                 f"timing in use {self.current_lead() * 1000:.1f}ms "
-                 f"({'measured' if self.lead_is_measured() else 'from settings'}); "
-                 f"measured press->result delays (ms): {[round(d * 1000) for d in self._fb_hist]}",
-                 f"loop interval {self._loop_dt * 1000:.1f}ms, zone margin {self.s.zone_margin_pct:.0f}%",
-                 "last press: " + ", ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
-                                            for k, v in info.items()),
-                 "", "t_ms(rel. to key down)  frame  fish   gold_l gold_r  dots misses  event"]
-        pics = [pc for pc in self._rec_imgs if pc[0] >= t_from]
+                 f"game area {snap['region']}; bar x {g.x0}-{g.x1} y {g.y0}-{g.y1} ({g.w}x{g.h}px)",
+                 (f"timing used for this press {info['lead'] * 1000:.1f}ms; the result showed "
+                  f"{('%.0fms' % (sa * 1000)) if sa is not None else '?'} after key-down"
+                  if "lead" in info else "no press of AutoFish's in this round"),
+                 f"timing now {snap['lead_now'] * 1000:.1f}ms ({'measured' if snap['measured'] else 'from settings'}); "
+                 f"measured press->result delays (ms): {[round(d * 1000) for d in snap['fb']]}",
+                 f"game frames ~{fps:.0f}/s, loop interval {snap['loop_dt'] * 1000:.1f}ms; settings: zone margin "
+                 f"{s.zone_margin_pct:.0f}%, start timing {s.lead_ms:.0f}ms, auto timing {s.auto_lead}, "
+                 f"min press gap {s.min_press_gap_s * 1000:.0f}ms, key hold {s.key_hold_ms:.0f}ms",
+                 "last press: " + ", ".join(f"{k}={fmt(v)}" for k, v in info.items()),
+                 ]
+        if y_pred is not None:
+            lines.append(f"plan: game judges at key-down + {info['lead'] * 1000:.0f}ms -> fish {y_pred:.1f}, "
+                         f"gold centre {c_pred:.1f}")
+            if rd is not None and rd.pointer is not None and rd.zone is not None:
+                c_res = (rd.zone[0] + rd.zone[1]) / 2.0
+                lines.append(f"judged frame: fish {rd.pointer:.1f}, gold centre {c_res:.1f} -> prediction error "
+                             f"fish {rd.pointer - y_pred:+.1f}px, gold centre {c_res - c_pred:+.1f}px")
+        verdict = miss_verdict(info, rd, snap["pics"], sa) if info else ""
+        if verdict:
+            lines.append("diagnosis: " + verdict)
+        lines += ["", "(fish / gold in bar pixels, fish_v in px/s from the previous game frame)",
+                  "t_ms(rel. to key down)  frame  fish  fish_v  gold_l gold_r  dots misses  event"]
         pic_index = {pc[0]: i for i, pc in enumerate(pics)}
+        pic_v = {}
+        for a, b in zip(pics, pics[1:]):
+            if a[2] is not None and b[2] is not None and b[0] > a[0] and (len(a) < 6 or a[5] == b[5]):
+                pic_v[b[0]] = (b[2] - a[2]) / (b[0] - a[0])
+        rows = [r for r in rec if r[0] >= t_from]
+        if t_eval is not None:
+            k = next((i for i, r in enumerate(rows) if r[0] >= t_eval), len(rows))
+            rows.insert(k, (t_eval, None, None, None, None,
+                            f"(planned judgement: fish {y_pred:.1f}, gold centre {c_pred:.1f})"))
         prev = None
-        for (t, ptr, zone, filled, misses, ev) in rec:
-            if t < t_from:
-                continue
-            idx = str(pic_index[t]) if t in pic_index else ""
+        for (t, ptr, zone, filled, misses, ev) in rows:
+            new_frame = ptr is not None and t in pic_index   # (event rows can share a time stamp)
+            idx = str(pic_index[t]) if new_frame else ""
             key = (ptr, zone, filled, misses)
             if not ev and not idx and key == prev:
                 continue  # nothing new on screen
             prev = key
             z = f"{zone[0]:6.1f} {zone[1]:6.1f}" if zone else "     -      -"
             pp = f"{ptr:6.1f}" if ptr is not None else "     -"
-            lines.append(f"{(t - t_press) * 1000:9.1f}  {idx:>5}  {pp} {z}  {'' if filled is None else filled:>4} "
+            vv = f"{pic_v[t]:+7.0f}" if new_frame and t in pic_v else "       "
+            lines.append(f"{(t - t_press) * 1000:9.1f}  {idx:>5}  {pp} {vv} {z}  {'' if filled is None else filled:>4} "
                          f"{'' if misses is None else misses:>6}  {ev}")
         with open(os.path.join(folder, "timeline.txt"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
         if pics:
-            rows = []
             before = max((i for i, p in enumerate(pics) if p[0] <= t_press), default=-1)
-            for i, (t, simg, ptr, zone, ev) in enumerate(pics):
+            left0 = min(pc[1][2][0] for pc in pics)
+            rows_img = []
+            for i, pc in enumerate(pics):
+                t, simg, ptr, zone, ev = pc[:5]
+                gx0 = pc[5] if len(pc) > 5 else g.x0      # the bar's x0 when this frame was read
                 im = np.array(simg[1], dtype=np.uint8, copy=True)
-                ox = g.x0 - simg[2][0]
+                ox = gx0 - simg[2][0]
                 hh, ww = im.shape[:2]
+                k = max(2, hh // 8)
+
+                def tick(x, ys, col):
+                    xi = ox + int(round(x))
+                    if 0 <= xi < ww:
+                        im[ys, xi] = col
                 if zone:
-                    for x in (int(round(zone[0])), int(round(zone[1]))):
-                        if 0 <= ox + x < ww:
-                            im[:max(2, hh // 8), ox + x] = (0, 255, 0)
-                if ptr is not None and 0 <= ox + int(round(ptr)) < ww:
-                    im[hh - max(2, hh // 8):, ox + int(round(ptr))] = (255, 0, 0)
+                    tick(zone[0], slice(0, k), (0, 255, 0))
+                    tick(zone[1], slice(0, k), (0, 255, 0))
+                if ptr is not None:
+                    tick(ptr, slice(hh - k, hh), (255, 0, 0))
+                if ev == "MISS" and y_pred is not None:
+                    tick(y_pred, slice(hh - 2 * k, hh - k), (0, 255, 255))
                 col = (255, 255, 0) if i == before else ((255, 0, 255) if ev == "MISS" else None)
                 if col:
                     im[:2, :] = col
                     im[-2:, :] = col
                     im[:, :2] = col
                     im[:, -2:] = col
-                rows.append(im)
-                rows.append(np.full((2, ww, 3), 40, np.uint8))
-            wmax = max(r.shape[1] for r in rows)
-            rows = [np.pad(r, ((0, 0), (0, wmax - r.shape[1]), (0, 0))) for r in rows]
-            write_png(os.path.join(folder, "frames.png"), np.vstack(rows))
+                # line rows up by screen position (the strip can move when the bar is re-measured)
+                rows_img.append((simg[2][0] - left0, im))
+                rows_img.append((simg[2][0] - left0, np.full((2, ww, 3), 40, np.uint8)))
+            wmax = max(dx + r.shape[1] for dx, r in rows_img)
+            write_png(os.path.join(folder, "frames.png"),
+                      np.vstack([np.pad(r, ((0, 0), (dx, wmax - dx - r.shape[1]), (0, 0))) for dx, r in rows_img]))
         return folder
 
     def debug_snapshot(self) -> str:
