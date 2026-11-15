@@ -185,8 +185,8 @@ If a name/price is read wrong, set "save_debug_images": true in
 auction_settings.json, run a scan and send me the auction_debug folder.
 
 
-AUCTION BOT (auction_bot.py) - trades by itself (version 2.3)
-=============================================================
+AUCTION BOT (auction_bot.py) - trades by itself (version 2.3.1)
+===============================================================
 1. Open the auction board (Browse tab), double-click START_AUCTION_BOT.bat,
    press START or F8. Hands off the mouse while it runs.
 2. Start with "Paper trading" ticked for an hour: it makes every decision
@@ -279,6 +279,17 @@ from 2.1 are kept.
  - a seller's name containing "limited" no longer makes an item "Limited".
  - enchanted listings are never bought (the Sell tab can't tell them apart).
  - the window can no longer freeze (which also stopped F8).
+
+2.3.1:
+ - enchants are remembered after their listings sell, so your enchanted item
+   (e.g. a Phoenix Whitescale Plate) is never listed as the bot's plain copy
+ - the bag is only counted when the Sell tab really opened (a missed tab
+   click no longer counts the Browse/My Listings rows as your bag)
+ - a listing whose row's price can't be read cleanly isn't booked SOLD
+ - a listing that sold before the bot saw it in My Listings is booked as sold
+ - coin balance: a lost or garbled first digit (",287,955", "O87,955") is
+   rejected, "687.955" is read as 687,955, and a balance that hasn't changed
+   yet after Buy gets a second look
 
 GRAPH: blue = coins, green = net worth (coins + bought items at today's
 floor after the fee). Buying turns coins into items, so coins dip while net

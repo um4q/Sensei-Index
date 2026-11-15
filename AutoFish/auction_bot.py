@@ -51,7 +51,7 @@ import autofish as af            # noqa: E402
 import auction_reader as ar      # noqa: E402
 
 APP = "AuctionBot"
-VERSION = "2.3"
+VERSION = "2.3.1"
 
 
 def ver(v) -> Tuple[int, ...]:
@@ -246,6 +246,7 @@ class Market:
         self.seed: Dict[str, dict] = d.get("seed", {})
         self.floors: Dict[str, List[list]] = d.get("floors", {})     # item -> [[time, floor, listed]]
         self.scan_id: int = d.get("scan_id", 0)
+        self.enchants: Dict[str, int] = d.get("enchants", {})       # enchant -> listings seen with it (kept)
         if "colours" not in d:
             for n, c in d.get("colour", {}).items():
                 self.colours[n] = {c: 3}
@@ -262,7 +263,7 @@ class Market:
         return {"obs": self.obs, "sales": [s for s in self.sales if now - s["gone_at"] < 14 * DAY],
                 "names": self.names, "rarity": self.rarity, "colours": self.colours,
                 "true_rarity": self.true_rarity, "seed": self.seed, "floors": floors,
-                "scan_id": self.scan_id}
+                "scan_id": self.scan_id, "enchants": self.enchants}
 
     @staticmethod
     def key(item: str, seller: str, price: int, colour: str = "", extra: str = "", qty: int = 1) -> str:
@@ -326,6 +327,11 @@ class Market:
                                    "colour": colour, "extra": extra, "first": now, "last": now, "hl": hl, "listed": listed,
                                    "mine": bool(own), "scans": 0, "scan": -1, "pos": [], "copies": 1,
                                    "prev_copies": 1, "ok": bool(r.get("price_ok", True))}
+                ce = compact(extra)
+                if len(ce) >= 6 and not any(ce in w for w in RARITY_RANK):
+                    # remember enchants after their listings are gone (never a piece of a rarity word:
+                    # 'imited' would match every Limited row in the bag for good)
+                    self.enchants[ce] = self.enchants.get(ce, 0) + 1
                 if colour:   # count each listing once per scan towards the item's usual colour
                     self.colours.setdefault(n, {})
                     self.colours[n][colour] = self.colours[n].get(colour, 0) + 1
@@ -805,15 +811,19 @@ class AuctionBot(ar.AuctionReader):
         if re.search(r"\d\s*[kKmMbB]\b", t) or re.search(r"\d\.\d{1,2}\b", t):
             return None                     # an abbreviated number - can't trust its digits
         t = re.sub(r"(?<=\d)[oO]|[oO](?=\d)", "0", t)
-        m = re.search(r"(\d[\d,\s]{2,})", t)
+        m = re.search(r"(\d[\d,.\s]{2,})", t)     # ',' or '.' between groups ('687.955')
         if not m:
             return None
-        pre = t[:m.start()].rstrip(" ,.")
-        if pre and not re.search(r"(?:coins?|[:;])$", pre, re.I):
+        if m.group(1).startswith("0"):
+            return None                     # no balance starts with 0: its first digit was read as 'O'/'o'
+        pre = t[:m.start()].rstrip()        # a ',' or '.' glued to the digits = a lost leading digit (',287,955')
+        if pre and not re.search(r"(?:coins?[.,]?|[:;])$", pre, re.I):
             return None                     # not the "Coins:" label right before the digits: a leading
                                             # digit read as something else ('l,287,955', '$72,955')
-        txt = re.sub(r"\s", "", m.group(1)).strip(",")
-        if "," in txt and not re.fullmatch(r"\d{1,3}(,\d{3})+", txt):
+        if re.search(r"[,.]\s*$", m.group(1)) and t[m.end():].strip():
+            return None                     # cut right after a separator: a digit read as a letter ('687,g55')
+        txt = re.sub(r"\s", "", m.group(1)).strip(",.")
+        if re.search(r"[,.]", txt) and not re.fullmatch(r"\d{1,3}([,.]\d{3})+", txt):
             return None
         return int(re.sub(r"\D", "", txt) or 0)
 
@@ -1148,7 +1158,7 @@ class AuctionBot(ar.AuctionReader):
         self.click(self.button_x(board), y)
         time.sleep(0.6)
         after = self.read_coins_stable(board, 5.0, changed_from=before)
-        if after is None:
+        if after is None or after == before:
             after = self.read_coins_stable(board, 5.0, changed_from=before)   # 18: still settling: look once more
         msg = self.read_message(board)
         drop = (before - after) if after is not None else 0
@@ -1245,14 +1255,20 @@ class AuctionBot(ar.AuctionReader):
         for l, match in plan:
             if match is not None:
                 continue
+            if any(norm(r["item"]) == norm(l["item"]) and not r.get("price_ok", True) for r in shown):
+                continue                       # a row of this item whose price wasn't read cleanly may be it
             l["missing"] = l.get("missing", 0) + 1
             if l["missing"] < 2:
                 continue                       # missing once could be a misread: look again next cycle
             if l.get("unconfirmed"):
-                # 2: missing from two good reads and never seen: it didn't go up, the item is in the bag
+                # 2: missing from two good reads and never seen: it didn't go up (the item is in the bag) - or it
+                # went up and SOLD before a read saw it: once the user's own count is known, sellable again only
+                # when the Sell tab shows the copy (else it is booked sold)
                 self.listings.remove(l)
-                self.holdings.setdefault(norm(l["item"]), []).append({"cost": l.get("cost"), "at": now,
-                                                                      "qty": self.qty_of(l)})
+                known = self.own_count is not None and self.own_count.get(norm(l["item"]), 0) is not None
+                self.holdings.setdefault(norm(l["item"]), []).append(
+                    {"cost": l.get("cost"), "at": now, "qty": self.qty_of(l),
+                     **({"unverified": "listing", "price": l["price"]} if known else {})})
                 self.log(f"{l['item']} at {l['price']:,} never appeared in My Listings - back to the bag.")
                 continue
             hours = (now - l["listed_at"]) / H
@@ -1368,7 +1384,8 @@ class AuctionBot(ar.AuctionReader):
 
     def enchant_names(self) -> set:
         return {compact(o["extra"]) for o in list(self.market.obs.values())
-                if len(compact(o.get("extra", ""))) >= 4 and compact(o["extra"]) not in RARITY_RANK}
+                if len(compact(o.get("extra", ""))) >= 4 and compact(o["extra"]) not in RARITY_RANK} | \
+            set(self.market.enchants)              # also enchants whose listings have sold since
 
     @staticmethod
     def enchanted(r: dict, enchants: set) -> bool:
@@ -1425,11 +1442,12 @@ class AuctionBot(ar.AuctionReader):
                 if h["checks"] <= -3:
                     self.holdings[n].remove(h)
                     name = self.market.names.get(n, n)
-                    if h["unverified"] == "expired":
+                    if h["unverified"] in ("expired", "listing"):     # listed, and not back: it sold
                         p = h.get("price") or 0
                         profit = int(FEE_KEEP * p - h["cost"]) if h.get("cost") else None
                         t = next((t for t in reversed(self.trades) if t.get("type") == "expired"
-                                  and norm(t.get("item", "")) == n and t.get("price") == p), None)
+                                  and norm(t.get("item", "")) == n and t.get("price") == p), None) \
+                            if h["unverified"] == "expired" else None
                         if t is not None:
                             t.update(type="sold", qty=q, cost=h.get("cost"), profit=profit, note="sold while not watched")
                             self.recount()
@@ -1468,8 +1486,10 @@ class AuctionBot(ar.AuctionReader):
                                           "listed_at": now, "paper": True, "missing": 0})
                     self.trade(type="list", item=item, price=price, cost=h.get("cost"))
             return
-        if not any(not h.get("paper") for v in self.holdings.values() for h in v):
-            return                                    # (unverified holdings still need a Sell-tab look)
+        if not any(not h.get("paper") for v in self.holdings.values() for h in v) and \
+                (self.own_count is not None or not self.s.sell_only_bought):
+            return                                    # (unverified holdings still need a Sell-tab look; the first
+                                                      # run reads the bag once to learn the user's own copies)
         self.tab(board, "sell")
         for _ in range(self.s.max_active_listings):
             if len([l for l in self.listings if not l.get("paper")]) >= self.s.max_active_listings or not self.running:
@@ -1521,8 +1541,9 @@ class AuctionBot(ar.AuctionReader):
             if rows is not None and self.scan_complete:
                 self.inventory_seen = [(r["item"], r.get("sub", "")) for r in rows.values()]
             if not pick:
-                if rows and not self.aborted and getattr(self, "scan_complete", True):
-                    self.settle_bag(rows, enchants)
+                if rows and not self.aborted and getattr(self, "scan_complete", True) and \
+                        all(self.button_is(board, int(r["screen_y"]), "sell") for r in list(rows.values())[-3:]):
+                    self.settle_bag(rows, enchants)          # (not when the buttons say Buy/Cancel: wrong tab)
                 for n_ in unread_stacks - tried:
                     if time.time() - self._stack_told.get(n_, 0) > 2 * H:
                         self._stack_told[n_] = time.time()
