@@ -35,7 +35,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -67,6 +67,9 @@ class Settings:
     window_title: str = "Roblox"   # title of the game window
     dry_run: bool = False          # detect + log only, never press anything
     stop_on_miss: bool = True      # stop the macro on the first miss (and save a miss report)
+    leviathan: bool = False        # only trigger the bite: miss on purpose so the round ends fast
+    multi_window: bool = True      # fish in every Roblox window at once (switches between them)
+    focus_settle_ms: float = 60.0  # wait after switching windows before pressing
     # --- ui ----------------------------------------------------------------
     always_on_top: bool = True
 
@@ -805,6 +808,7 @@ class GameEnv:
     def now(self) -> float: return time.perf_counter()
     def sleep(self, s: float) -> None: time.sleep(max(0.0, s))
     def sleep_precise(self, s: float) -> None: self.sleep(s)
+    def ensure_focus(self) -> None: pass
     def game_region(self) -> Optional[Tuple[int, int, int, int]]: raise NotImplementedError
     def is_game_focused(self) -> bool: raise NotImplementedError
     def focus_game(self) -> bool: return False
@@ -911,11 +915,87 @@ if IS_WINDOWS:
         except Exception:
             pass
 
+    _user32.EnumWindows.argtypes = (ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM),
+                                     wintypes.LPARAM)
+    _user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+    _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    _user32.AttachThreadInput.argtypes = (wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
+    _user32.BringWindowToTop.argtypes = (wintypes.HWND,)
+    _kernel32 = ctypes.WinDLL("kernel32")
+    _FOCUS_LOCK = threading.Lock()
+
+    def window_title(hwnd) -> str:
+        n = _user32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return ""
+        buf = ctypes.create_unicode_buffer(n + 1)
+        _user32.GetWindowTextW(hwnd, buf, n + 1)
+        return buf.value
+
+    def list_game_windows(title: str) -> List[int]:
+        """All visible, non-minimised top-level windows with this exact title,
+        sorted top-left to bottom-right (so window 1/2/3/4 stay stable)."""
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def cb(hwnd, _):
+            try:
+                if (_user32.IsWindowVisible(hwnd) and not _user32.IsIconic(hwnd)
+                        and window_title(hwnd).strip() == title):
+                    found.append(hwnd)
+            except Exception:
+                pass
+            return True
+        _user32.EnumWindows(cb, 0)
+        out = []
+        for h in found:
+            rc = wintypes.RECT()
+            _user32.GetClientRect(h, ctypes.byref(rc))
+            pt = wintypes.POINT(0, 0)
+            _user32.ClientToScreen(h, ctypes.byref(pt))
+            if rc.right - rc.left >= 200 and rc.bottom - rc.top >= 150:
+                out.append((pt.y // 50, pt.x, h))
+        return [h for _, _, h in sorted(out)]
+
+    def force_foreground(hwnd) -> bool:
+        """Bring a window to the front so it gets our key presses.  Windows only
+        lets the foreground process do that, so borrow the foreground thread's
+        input state (AttachThreadInput); fall back to an Alt tap."""
+        with _FOCUS_LOCK:
+            fg = _user32.GetForegroundWindow()
+            if fg == hwnd:
+                return True
+            if _user32.IsIconic(hwnd):
+                _user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            me = _kernel32.GetCurrentThreadId()
+            other = _user32.GetWindowThreadProcessId(fg, None) if fg else 0
+            attached = False
+            try:
+                if other and other != me:
+                    attached = bool(_user32.AttachThreadInput(me, other, True))
+                _user32.BringWindowToTop(hwnd)
+                _user32.SetForegroundWindow(hwnd)
+            finally:
+                if attached:
+                    _user32.AttachThreadInput(me, other, False)
+            if _user32.GetForegroundWindow() == hwnd:
+                return True
+            # Alt tap: Windows then allows SetForegroundWindow
+            down = INPUT(type=INPUT_KEYBOARD)
+            down.ki = KEYBDINPUT(0x12, 0, 0, 0, 0)
+            up = INPUT(type=INPUT_KEYBOARD)
+            up.ki = KEYBDINPUT(0x12, 0, KEYEVENTF_KEYUP, 0, 0)
+            arr = (INPUT * 2)(down, up)
+            _user32.SendInput(2, arr, ctypes.sizeof(INPUT))
+            _user32.SetForegroundWindow(hwnd)
+            return _user32.GetForegroundWindow() == hwnd
+
     class WindowsEnv(GameEnv):
-        def __init__(self, settings: Settings) -> None:
+        def __init__(self, settings: Settings, hwnd=None) -> None:
             self.settings = settings
             self._tls = threading.local()
-            self._hwnd = None
+            self._fixed = hwnd                 # one Roblox window of several (multi-window)
+            self._hwnd = hwnd
             self._hwnd_checked = 0.0
             if _winmm is not None:
                 try:
@@ -934,6 +1014,8 @@ if IS_WINDOWS:
             return buf.value
 
         def _game_hwnd(self):
+            if self._fixed is not None:
+                return self._fixed
             now = time.perf_counter()
             if self._hwnd and now - self._hwnd_checked < 1.0:
                 return self._hwnd
@@ -965,7 +1047,16 @@ if IS_WINDOWS:
 
         def is_game_focused(self) -> bool:
             fg = _user32.GetForegroundWindow()
+            if self._fixed is not None:
+                return bool(fg) and fg == self._fixed
             return bool(fg) and self._title(fg).strip() == (self.settings.window_title or "Roblox")
+
+        def ensure_focus(self) -> None:
+            """Multi-window: make this window the active one before pressing."""
+            if self._fixed is None or _user32.GetForegroundWindow() == self._fixed:
+                return
+            force_foreground(self._fixed)
+            time.sleep(max(0.0, self.settings.focus_settle_ms / 1000.0))
 
         def focus_game(self) -> bool:
             hwnd = self._game_hwnd()
@@ -1002,6 +1093,7 @@ if IS_WINDOWS:
             _user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
 
         def press_key(self, key: str, hold_s: float) -> None:
+            self.ensure_focus()
             vk = vk_from_name(key) or 0x45  # default 'E'
             scan = _user32.MapVirtualKeyW(vk, 0)  # MAPVK_VK_TO_VSC
             down = INPUT(type=INPUT_KEYBOARD)
@@ -1013,6 +1105,7 @@ if IS_WINDOWS:
             self._send(up)
 
         def click(self, hold_s: float) -> None:
+            self.ensure_focus()
             down = INPUT(type=INPUT_MOUSE)
             down.mi = MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, 0)
             up = INPUT(type=INPUT_MOUSE)
@@ -1022,6 +1115,8 @@ if IS_WINDOWS:
             self._send(up)
 
         def send_input(self, key: str, down: bool) -> None:
+            if down:
+                self.ensure_focus()
             inp = INPUT(type=INPUT_MOUSE if key == "click" else INPUT_KEYBOARD)
             if key == "click":
                 inp.mi = MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN if down else MOUSEEVENTF_LEFTUP, 0, 0)
@@ -1072,6 +1167,7 @@ class Stats:
     hits: int = 0
     misses: int = 0
     casts: int = 0
+    bites: int = 0
     presses: int = 0
     started_at: float = 0.0
     run_time: float = 0.0
@@ -1086,7 +1182,10 @@ class FishingBot:
     PROMPT_SETTLE = 0.35       # ignore prompt readings this soon after a key press
 
     def __init__(self, settings: Settings, env: GameEnv,
-                 log: Optional[Callable[[str], None]] = None) -> None:
+                 log: Optional[Callable[[str], None]] = None, name: str = "") -> None:
+        self.name = name                     # "Window 2" etc. when fishing in several windows
+        self.ignore_focus = False            # multi-window: the controller handles focus
+        self.stopped_by_miss = False
         self.s = settings
         self.env = env
         self._log_cb = log or (lambda m: print(m))
@@ -1134,7 +1233,7 @@ class FishingBot:
     # ---------------------------------------------------------------- utils
     def log(self, msg: str) -> None:
         stamp = time.strftime("%H:%M:%S")
-        self._log_cb(f"[{stamp}] {msg}")
+        self._log_cb(f"[{stamp}] " + (f"{self.name}: " if self.name else "") + msg)
 
     def _set_state(self, st: str, detail: str = "") -> None:
         if st != self.state:
@@ -1165,6 +1264,7 @@ class FishingBot:
             if self.running:
                 return
             self.running = True
+            self.stopped_by_miss = False
             self.stats.started_at = self.env.now()
             self._reset_round()
             self._timeouts = 0
@@ -1320,7 +1420,7 @@ class FishingBot:
         self._release_key(now)
 
         # ---- safety: only act while the game is the active window
-        if s.require_focus and not env.is_game_focused():
+        if s.require_focus and not self.ignore_focus and not env.is_game_focused():
             if self._paused_since is None:
                 self._paused_since = now
                 self.log("Roblox is not the active window - paused (click into the game).")
@@ -1371,7 +1471,12 @@ class FishingBot:
                          "on screen - not counted).")
             else:
                 waited = now - self._cast_t if self.state == ST_WAIT else 0
-                self.log("Fish hooked! Reeling..." + (f" (bite after {waited:.1f}s)" if waited else ""))
+                self.stats.bites += 1
+                if s.leviathan:
+                    self.log(f"Bite #{self.stats.bites} (Leviathan mode: missing on purpose)"
+                             + (f" after {waited:.1f}s" if waited else ""))
+                else:
+                    self.log("Fish hooked! Reeling..." + (f" (bite after {waited:.1f}s)" if waited else ""))
         self._set_state(ST_REEL)
         self.round_last_visible = now
 
@@ -1413,6 +1518,9 @@ class FishingBot:
             while now - self._rec_imgs[0][0] > 1.2:   # a report needs < 1 s; keep memory small
                 self._rec_imgs.popleft()
 
+        if miss and s.leviathan:
+            miss = False  # intended
+            self._outcome_seen = True
         if miss:
             info = self._last_press_info
             # ours = a press of this bot can have caused it (not a dry run, not a
@@ -1434,6 +1542,7 @@ class FishingBot:
                 self.log(f"A miss showed up that AutoFish did not press for "
                          f"({'dry run' if s.dry_run else 'pressed by hand?'}; {where}).")
             if s.stop_on_miss and ours:
+                self.stopped_by_miss = True
                 self._release_key()   # never hold the key while the report is written
                 snap = self._miss_snapshot(now, rd, shown_after)
                 self.stop()           # before the (slow) report: the GUI shows Stopped at once
@@ -1496,6 +1605,8 @@ class FishingBot:
             if (since >= s.min_press_gap_s and (self._outcome_seen or since > 0.25)
                     and (not inside or since > 0.6)):
                 self._armed = True
+        if s.leviathan:
+            return self._leviathan_press(now, rd)
         if not self._armed or rd.pointer is None or rd.zone is None:
             return 0.0
 
@@ -1532,6 +1643,31 @@ class FishingBot:
                           f"KEY DOWN (planned wait {wait * 1000:.1f}ms, timing {lead * 1000:.0f}ms)"))
         return 0.0  # reel as fast as the screen can be read
 
+    def _leviathan_press(self, now: float, rd: MinigameReading) -> float:
+        """Leviathan mode: the bite is all that matters, so end the round fast
+        with deliberate misses: press whenever the fish is well away from the
+        gold zone (one press per result, so every press counts as a miss)."""
+        if rd.pointer is None or rd.zone is None:
+            return 0.0
+        since = now - self.last_press_t
+        if not self._armed:
+            if since >= 0.12 and (self._outcome_seen or since > 0.35):
+                self._armed = True
+            else:
+                return 0.0
+        zl, zr = rd.zone
+        hw = (zr - zl) / 2.0
+        safe = hw + max(0.12 * rd.width, hw)   # far outside the gold, even after our input lag
+        if abs(rd.pointer - (zl + zr) / 2.0) < safe:
+            return 0.0
+        self._armed = False
+        self._outcome_seen = False
+        self.round_presses += 1
+        self._press(f"leviathan miss (fish at {rd.pointer:.0f}, gold {zl:.0f}-{zr:.0f})", reel=True)
+        self.last_press_t = self._last_key_t
+        self._fb_t = None
+        return 0.0
+
     # ------------------------------------------------------- not reeling
     def _on_no_minigame(self, now: float) -> float:
         s = self.s
@@ -1543,6 +1679,8 @@ class FishingBot:
                 self.stats.caught += 1
                 self.log(f"Caught it! ({self.round_filled}/{self.round_total}, {self.round_misses} missed)"
                          f"  total caught: {self.stats.caught}")
+            elif s.leviathan:
+                self.log(f"Round ended ({self.round_misses} deliberate misses) - recasting.")
             elif self.round_misses >= 3:
                 self.stats.lost += 1
                 self.log(f"The fish got away ({self.round_misses} misses).")
@@ -1832,6 +1970,199 @@ class FishingBot:
 
 
 # =============================================================================
+#  Several Roblox windows at once: one FishingBot per window, one controller
+#  that reads them all and switches the active window when one needs a key.
+# =============================================================================
+class MultiBot:
+    RESCAN_S = 3.0
+
+    def __init__(self, settings: Settings, make_env: Callable, list_windows: Callable,
+                 foreground: Callable, log: Callable[[str], None]) -> None:
+        self.s = settings
+        self.make_env = make_env          # hwnd -> GameEnv for that window
+        self.list_windows = list_windows  # () -> [hwnd, ...] (stable order)
+        self.foreground = foreground      # () -> hwnd of the active window
+        self._log_cb = log
+        self.lanes: List[Tuple[int, FishingBot]] = []
+        self.running = False
+        self.alive = True
+        self.lock = threading.Lock()
+        self._scan_t = -1e9
+        self._paused_since: Optional[float] = None
+        self._next_num = 1
+
+    def log(self, msg: str) -> None:
+        self._log_cb(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
+    # ---------------------------------------------------------------- windows
+    def _rescan(self) -> None:
+        self._scan_t = time.perf_counter()
+        try:
+            hwnds = list(self.list_windows())
+        except Exception as exc:
+            self.log(f"Could not list the Roblox windows: {exc!r}")
+            return
+        if not self.s.multi_window:
+            fg = self.foreground()
+            hwnds = [fg] if fg in hwnds else hwnds[:1]
+        known = {h for h, _ in self.lanes}
+        for h, b in list(self.lanes):
+            if h not in hwnds:
+                b.stop()
+                self.lanes.remove((h, b))
+                self.log(f"{b.name or 'The Roblox window'} closed - no longer fishing there.")
+        for h in hwnds:
+            if h not in known:
+                bot = FishingBot(self.s, self.make_env(h), self._log_cb, name=f"Window {self._next_num}")
+                self._next_num += 1
+                bot.ignore_focus = True
+                self.lanes.append((h, bot))
+                if self.running:
+                    bot.start()
+                self.log(f"Fishing in {bot.name}.")
+        if len(self.lanes) == 1:
+            self.lanes[0][1].name = ""
+
+    def focus_any(self) -> bool:
+        if not self.lanes:
+            self._rescan()
+        if not self.lanes:
+            return False
+        env = self.lanes[0][1].env
+        return bool(getattr(env, "focus_game", lambda: False)())
+
+    def window_count(self) -> int:
+        return len(self.lanes)
+
+    # -------------------------------------------------------------- control
+    def start(self) -> None:
+        with self.lock:
+            if self.running:
+                return
+            self.running = True
+        self._rescan()
+        if not self.lanes:
+            self.log(f"No window titled '{self.s.window_title}' found yet - waiting for one.")
+        for _, b in self.lanes:
+            b.start()
+
+    def stop(self) -> None:
+        with self.lock:
+            was = self.running
+            self.running = False
+        for _, b in self.lanes:
+            b.stop()
+        if was and len(self.lanes) > 1:
+            self.log("Stopped all windows.")
+
+    def toggle(self) -> None:
+        if self.running:
+            self.stop()
+        else:
+            self.start()
+
+    def run_forever(self) -> None:
+        while self.alive:
+            if not self.running:
+                time.sleep(0.05)
+                continue
+            try:
+                delay = self._step()
+            except Exception as exc:
+                self.log(f"Error (continuing): {exc!r}")
+                traceback.print_exc()
+                delay = 0.5
+            if delay > 0:
+                time.sleep(delay)
+
+    def _step(self) -> float:
+        now = time.perf_counter()
+        if now - self._scan_t > self.RESCAN_S:
+            self._rescan()
+        bots = [b for _, b in self.lanes]
+        if not bots:
+            return 0.5
+        # safety: only act while one of the Roblox windows is the active window
+        if self.s.require_focus and self.foreground() not in [h for h, _ in self.lanes]:
+            if self._paused_since is None:
+                self._paused_since = now
+                for b in bots:
+                    b._release_key()
+                self.log("No Roblox window is active - paused (click into any Roblox window).")
+            for b in bots:
+                b.detail = "paused - click into a Roblox window"
+            return 0.1
+        if self._paused_since is not None:
+            paused = now - self._paused_since
+            for b in bots:
+                b._cast_t += paused
+                b._state_t += paused
+                b.prompt_hist.clear()
+            self._paused_since = None
+            self.log("Resuming.")
+        if any(b.stopped_by_miss for b in bots):
+            self.stop()
+            return 0.05
+        # a window that is reeling gets the whole loop (fast, precise presses)
+        for h, b in self.lanes:
+            if b.running and b.state == ST_REEL:
+                for _, o in self.lanes:
+                    if o is not b:
+                        o._release_key(now)
+                if not self.s.dry_run:
+                    b.env.ensure_focus()
+                return b.tick()
+        delay = 0.03
+        for h, b in self.lanes:
+            if not b.running:
+                continue
+            d = b.tick()
+            if b.state == ST_REEL:
+                if not self.s.dry_run:
+                    b.env.ensure_focus()
+                return 0.0
+            delay = min(delay, max(0.0, d))
+        return delay
+
+    # ---------------------------------------------------------------- status
+    def current_lead(self) -> float:
+        for _, b in self.lanes:
+            if b.lead_is_measured():
+                return b.current_lead()
+        return self.lanes[0][1].current_lead() if self.lanes else self.s.lead_ms / 1000.0
+
+    def snapshot(self) -> dict:
+        snaps = [b.snapshot() for _, b in self.lanes]
+        tot = Stats()
+        for sn in snaps:
+            for f in fields(Stats):
+                if f.name in ("started_at",):
+                    continue
+                if f.name == "run_time":
+                    tot.run_time = max(tot.run_time, sn["stats"].run_time)
+                else:
+                    setattr(tot, f.name, getattr(tot, f.name) + getattr(sn["stats"], f.name))
+        if len(snaps) == 1:
+            state, detail = snaps[0]["state"], snaps[0]["detail"]
+        elif snaps:
+            short = {ST_REEL: "reeling", ST_WAIT: "waiting", ST_AFTER: "casting", ST_CAST: "casting",
+                     ST_START: "starting", ST_STOPPED: "stopped", ST_PAUSED: "paused"}
+            state = f"{len(snaps)} windows" + ("  (Leviathan)" if self.s.leviathan else "")
+            detail = "  ".join(f"W{i + 1}:{short.get(sn['state'], sn['state'])}" for i, sn in enumerate(snaps))
+        else:
+            state, detail = ("Waiting for Roblox" if self.running else ST_STOPPED), "no Roblox window found"
+        return {"state": state, "detail": detail, "stats": tot, "running": self.running,
+                "lead_ms": self.current_lead() * 1000.0,
+                "lead_auto": any(b.lead_is_measured() for _, b in self.lanes)}
+
+    def debug_snapshot(self) -> str:
+        if not self.lanes:
+            self._rescan()
+        paths = [b.debug_snapshot() for _, b in self.lanes]
+        return ", ".join(paths)
+
+
+# =============================================================================
 #  GUI
 # =============================================================================
 def run_gui() -> None:
@@ -1846,7 +2177,9 @@ def run_gui() -> None:
         print(msg)
         log_q.put(msg)
 
-    bot = FishingBot(settings, env, log)
+    bot = MultiBot(settings, lambda h: WindowsEnv(settings, h),
+                   lambda: list_game_windows(settings.window_title or "Roblox"),
+                   lambda: _user32.GetForegroundWindow(), log)
     worker = threading.Thread(target=bot.run_forever, name="autofish-bot", daemon=True)
     worker.start()
 
@@ -1886,7 +2219,7 @@ def run_gui() -> None:
     stats_frame = ttk.Frame(root)
     stats_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=6)
     stat_vars = {}
-    for i, (key, label) in enumerate([("caught", "Caught"), ("lost", "Lost"), ("hits", "Hits"),
+    for i, (key, label) in enumerate([("caught", "Caught"), ("bites", "Bites"), ("lost", "Lost"), ("hits", "Hits"),
                                       ("misses", "Misses"), ("casts", "Casts"), ("lead", "Timing"),
                                       ("run_time", "Run time")]):
         f = ttk.Frame(stats_frame)
@@ -1935,6 +2268,8 @@ def run_gui() -> None:
     add_bool(8, "Only press keys while Roblox is the active window (recommended)", "require_focus")
     add_bool(9, "Dry run - detect and log only, never press anything", "dry_run")
     add_bool(10, "Keep this window on top", "always_on_top")
+    add_bool(11, "Fish in EVERY Roblox window (switches between them)", "multi_window")
+    add_bool(12, "Leviathan mode - only trigger the bite, then miss on purpose", "leviathan")
 
     def apply_settings(*_):
         for attr, (v, lo, hi) in num_vars.items():
@@ -1998,9 +2333,9 @@ def run_gui() -> None:
             bot.stop()
         else:
             if from_button and settings.require_focus:
-                if env.focus_game():
+                if bot.focus_any():
                     log("Switched to the Roblox window.")
-                elif not env.game_window_found():
+                elif not bot.window_count():
                     log(f"Couldn't find a window titled '{settings.window_title}'. "
                         "Open Roblox, then click into it.")
             bot.start()
@@ -2041,7 +2376,7 @@ def run_gui() -> None:
         state_var.set(snap["state"] + ("  [DRY RUN]" if settings.dry_run and running else ""))
         detail_var.set(snap["detail"][:80])
         st = snap["stats"]
-        for k in ("caught", "lost", "hits", "misses", "casts"):
+        for k in ("caught", "bites", "lost", "hits", "misses", "casts"):
             stat_vars[k].set(str(getattr(st, k)))
         stat_vars["lead"].set(f"{snap['lead_ms']:.0f}ms" + ("*" if snap["lead_auto"] else ""))
         secs = int(st.run_time)

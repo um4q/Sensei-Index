@@ -20,6 +20,30 @@ gold zone, and recasts after each catch - forever, until you stop it.
 5. F6 (or the STOP button) stops it at any time.
 
 
+SEVERAL ROBLOX WINDOWS (e.g. 4 accounts)
+----------------------------------------
+"Fish in EVERY Roblox window" is ON by default. AutoFish finds every
+window titled "Roblox" (it re-checks every few seconds), casts in each one,
+watches all of them at once and switches to whichever window needs a key
+press (a cast, or the reel minigame). The log names them Window 1, 2, ...
+* Tile the windows so NONE of them overlap each other (and keep the
+  AutoFish window off them) - it reads each window from the screen.
+* Only one minigame can be played at a time; if two bite together the
+  second waits its turn.
+* Click into any Roblox window to start/resume; if you click into another
+  program, everything pauses.
+
+
+LEVIATHAN MODE
+--------------
+Tick "Leviathan mode" when you only need the bite (the "!") to happen and
+don't care about catching the fish. As soon as the reel bar appears,
+AutoFish presses while the fish is far from the gold zone - three quick
+deliberate misses end the round - and then recasts straight away.
+"Stop on the first miss" is ignored in this mode. The "Bites" counter
+shows how many bites were triggered.
+
+
 TIPS
 ----
 * Keep the Roblox window visible - AutoFish reads the screen. It can be
