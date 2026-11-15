@@ -44,7 +44,7 @@ sys.path.insert(0, HERE)
 import autofish as af  # noqa: E402  (screen capture, keys, PNG writer)
 
 APP = "AuctionReader"
-VERSION = "1.3"
+VERSION = "1.4"
 SETTINGS_PATH = os.path.join(HERE, "auction_settings.json")
 
 
@@ -520,6 +520,16 @@ class AuctionReader:
         self.ocr = None
         self.last_file = ""
         self.vocab: Dict[str, int] = {}     # item names seen (spelling -> times seen)
+        self.partial: Optional[List[dict]] = None   # listings read so far in the running scan
+
+    def excel_path(self) -> str:
+        return self.s.excel_path if os.path.isabs(self.s.excel_path) else os.path.join(HERE, self.s.excel_path)
+
+    def save_partial(self) -> None:
+        """Keep the Excel file up to date while scanning (and when stopped early)."""
+        if self.partial:
+            p = save_excel(self.partial, self.excel_path(), self.log, history=False, quiet=True)
+            self.last_file = p or self.last_file
 
     def canonical(self, name: str) -> str:
         """Snap small OCR misspellings onto a name already seen."""
@@ -691,27 +701,30 @@ class AuctionReader:
         return self.grab((x0, y0, x1 - x0, y1 - y0)).astype(np.int16)
 
     def _type_search(self, board: Board, term: str) -> bool:
-        """Click the search bar, clear it, type `term`.  Checks that the text
-        really went into the box (if not, clicks again) - True when it did."""
+        """Click the search bar, clear it, type `term`, move the mouse away.
+        One quick check that something appeared; one retry if not."""
         sx, sy = board.search_point()
-        for attempt in range(4):
+        px, py = board.scroll_point()
+        for attempt in range(2):
+            before = self._search_box_img(board)
             self.click(sx, sy)
-            time.sleep(0.25 + 0.2 * attempt)
+            time.sleep(0.3)
             self.clear_search()
-            time.sleep(0.2)
-            empty = self._search_box_img(board)
-            if not term:
-                return True
+            time.sleep(0.15)
             for ch in term:
                 self.key(ch)
                 time.sleep(0.03)
+            self.move(px, py)                # keep the mouse off the search bar
             time.sleep(0.3)
-            typed = self._search_box_img(board)
-            changed = int((np.abs(typed - empty).max(axis=2) > 60).sum())
-            if changed >= max(6, int(8 * board.s * board.s)):
+            if not term:
                 return True
-            self.log(f"The search bar didn't take the text (try {attempt + 1}) - clicking it again.")
-        return False
+            after = self._search_box_img(board)
+            changed = int((np.abs(after - before).max(axis=2) > 40).sum())
+            if changed >= max(3, int(3 * board.s * board.s)):
+                return True
+            if attempt == 0:
+                self.log(f"Couldn't see '{term}' appear in the search bar - typing it once more.")
+        return True   # carry on anyway: the results check below shows what the list holds
 
     def clear_search(self) -> None:
         """Empty the search bar wherever the text cursor is: End + Backspaces,
@@ -873,7 +886,10 @@ class AuctionReader:
                     overall[k] = (n, overall[k][1])
             total = sum(n for n, _ in overall.values())
             self.log(f"'{term}': {len(by_pos)} listing(s) shown, {total} different listings so far.")
+            self.partial = [dict(r) for n, r in overall.values() for _ in range(n)]
+            self.save_partial()
         self._type_search(board, "")
+        self.partial = None
         out = []
         for n, row in overall.values():
             out.extend(dict(row) for _ in range(n))
@@ -901,6 +917,10 @@ class AuctionReader:
                     self.load_vocab(xl)
                 self.status = "Scanning"
                 rows = self.scan()
+                if rows is None and self.partial:
+                    self.save_partial()
+                    self.log(f"Stopped early: {len(self.partial)} listings saved to {self.last_file}.")
+                    self.partial = None
                 if rows is not None:
                     path = save_excel(rows, os.path.join(HERE, self.s.excel_path) if not os.path.isabs(
                         self.s.excel_path) else self.s.excel_path, self.log)
@@ -925,7 +945,7 @@ class AuctionReader:
 # =============================================================================
 #  Excel
 # =============================================================================
-def save_excel(rows: List[dict], path: str, log) -> Optional[str]:
+def save_excel(rows: List[dict], path: str, log, history: bool = True, quiet: bool = False) -> Optional[str]:
     try:
         from openpyxl import Workbook, load_workbook
         from openpyxl.styles import Font, PatternFill
@@ -983,9 +1003,10 @@ def save_excel(rows: List[dict], path: str, log) -> Optional[str]:
             c = wh.cell(row=1, column=i)
             c.font, c.fill = bold, fill
         wh.freeze_panes = "A2"
-    wh = wb["History"]
-    for r in rows:
-        wh.append([r.get(c, "") for c in cols])
+    if history:   # only finished scans go into the history (partial saves don't)
+        wh = wb["History"]
+        for r in rows:
+            wh.append([r.get(c, "") for c in cols])
     for name in list(wb.sheetnames):
         if name not in ("Latest scan", "Items", "History"):
             del wb[name]
@@ -993,7 +1014,7 @@ def save_excel(rows: List[dict], path: str, log) -> Optional[str]:
     for target in (path, path.replace(".xlsx", f"_{time.strftime('%H%M%S')}.xlsx")):
         try:
             wb.save(target)
-            if target != path:
+            if target != path and not quiet:
                 log(f"{os.path.basename(path)} is open in Excel - saved to {os.path.basename(target)} instead.")
             return target
         except PermissionError:
