@@ -51,7 +51,7 @@ import autofish as af            # noqa: E402
 import auction_reader as ar      # noqa: E402
 
 APP = "AuctionBot"
-VERSION = "2.0"
+VERSION = "2.1"
 STATE_PATH = os.path.join(HERE, "auction_bot_state.json")
 SETTINGS_PATH = os.path.join(HERE, "auction_bot_settings.json")
 FEE_KEEP = 0.95                  # the auction house keeps 5%
@@ -249,16 +249,28 @@ class Market:
                 "scan_id": self.scan_id}
 
     @staticmethod
-    def key(item: str, seller: str, price: int, colour: str = "", extra: str = "") -> str:
-        return f"{norm(item)}|{norm(seller)}|{int(price)}|{colour or ''}|{norm(extra)}"
+    def key(item: str, seller: str, price: int, colour: str = "", extra: str = "", qty: int = 1) -> str:
+        return f"{norm(item)}|{norm(seller)}|{int(price)}|{colour or ''}|{norm(extra)}|{int(qty or 1)}"
+
+    @staticmethod
+    def row_key(r: dict) -> str:
+        return Market.key(r["item"], r["seller"], r["price"], r.get("colour", "") if r.get("colour") != "?" else "",
+                          r.get("extra", ""), r.get("qty", 1) or 1)
 
     def colour_of(self, n: str) -> str:
         """The usual name colour of an item (mutated copies whose prefix the
         reader lost show another colour)."""
-        c = self.colours.get(n)
+        c = dict(self.colours.get(n) or {})
+        now = time.time()
+        for o in self.obs.values():               # listings up now count once per copy
+            if o["item"] == n and o.get("colour") and now - o["last"] < 2 * H:
+                c[o["colour"]] = c.get(o["colour"], 0) + max(1, o.get("copies", 1)) - 1
         if not c:
             return ""
-        best = max(c.items(), key=lambda kv: kv[1])
+        ranked = sorted(c.items(), key=lambda kv: -kv[1])
+        best = ranked[0]
+        if len(ranked) > 1 and ranked[1][1] == best[1]:
+            return ""                             # a tie: don't guess
         return best[0] if best[1] >= 2 or len(c) == 1 else ""
 
     def variant_ok(self, n: str, colour: str) -> bool:
@@ -272,11 +284,12 @@ class Market:
     def see(self, rows: List[dict], now: float, mine: set, my_name: str = "", scan_id: int = 0) -> None:
         for r in rows:
             n = norm(r["item"])
-            if not n:
-                continue
+            if not n or not r.get("qty_ok", True) or int(r["price"]) <= 0:
+                continue                      # a stack whose size couldn't be read: unit price unknown
             colour = r.get("colour", "") if r.get("colour") not in (None, "?") else ""
             extra = norm(r.get("extra", ""))
-            k = self.key(r["item"], r["seller"], r["price"], colour, extra)
+            qty = max(1, int(r.get("qty", 1) or 1))
+            k = self.key(r["item"], r["seller"], r["price"], colour, extra, qty)
             own = (n, int(r["price"])) in mine or (my_name and seller_is(r["seller"], my_name))
             self.names.setdefault(n, r["item"])
             if r.get("rarity"):
@@ -289,7 +302,7 @@ class Market:
             pos = r.get("pos")
             if o is None:
                 listed = now - (24.0 - hl) * H if hl is not None and hl <= 24 else now
-                o = self.obs[k] = {"item": n, "seller": norm(r["seller"]), "price": int(r["price"]),
+                o = self.obs[k] = {"item": n, "seller": norm(r["seller"]), "price": int(r["price"]), "qty": qty,
                                    "colour": colour, "extra": extra, "first": now, "last": now, "hl": hl, "listed": listed,
                                    "mine": bool(own), "scans": 0, "scan": -1, "pos": [], "copies": 1,
                                    "prev_copies": 1}
@@ -339,7 +352,8 @@ class Market:
                 if per_item.get(o["item"], 0) >= 3:
                     break
                 per_item[o["item"]] = per_item.get(o["item"], 0) + 1
-                self.sales.append({"item": o["item"], "price": o["price"], "seller": o["seller"],
+                self.sales.append({"item": o["item"], "price": o["price"], "qty": o.get("qty", 1),
+                                   "unit": o["price"] / max(1, o.get("qty", 1)), "seller": o["seller"],
                                    "colour": o.get("colour", ""), "listed": o["listed"], "gone_at": now,
                                    "hours": round((now - o["listed"]) / H, 2)})
                 gone += 1
@@ -350,9 +364,9 @@ class Market:
         return gone
 
     def current(self, n: str, now: float, exclude_mine: bool = True, max_age_h: float = 2.0,
-                extra: str = "") -> List[int]:
-        """Prices listed now (one entry per copy), usual colour and the same
-        enchant (none by default) only, cheapest first."""
+                extra: str = "") -> List[float]:
+        """UNIT prices listed now (price / stack size; one entry per listing),
+        usual colour and the same enchant (none by default) only, cheapest first."""
         out = []
         for o in self.obs.values():
             if o["item"] != n or now - o["last"] > max_age_h * H or (exclude_mine and o["mine"]):
@@ -361,22 +375,30 @@ class Market:
                 continue
             if not self.variant_ok(n, o.get("colour", "")):
                 continue
-            out += [o["price"]] * max(1, o.get("copies", 1))
+            out += [o["price"] / max(1, o.get("qty", 1))] * max(1, o.get("copies", 1))
         return sorted(out)
 
     def recent_sales(self, n: str, now: float, days: float = 3.0) -> List[dict]:
         return [s for s in self.sales if s["item"] == n and now - s["gone_at"] < days * DAY
                 and self.variant_ok(n, s.get("colour", ""))]
 
-    def value(self, n: str, now: float, undercut: float = 0.01, exclude_price: Optional[int] = None,
+    @staticmethod
+    def unit_of(sale: dict) -> float:
+        return sale.get("unit", sale["price"] / max(1, sale.get("qty", 1)))
+
+    def value(self, n: str, now: float, undercut: float = 0.01, exclude_price: Optional[float] = None,
               known: Optional[float] = None, extra: str = "") -> Tuple[Optional[float], int, str]:
+        """Per UNIT.  exclude_price: the unit price of the listing being judged."""
         """(what it can be resold for, how many price points back that up, basis).
         Resale = just under TODAY's floor (the cheapest other listing): that is
         the price it has to beat.  Sold prices can only lower it."""
         live = self.current(n, now, extra=extra)
-        if exclude_price is not None and exclude_price in live:
-            live.remove(exclude_price)
-        sold = sorted(s["price"] for s in self.recent_sales(n, now)) if not extra else []
+        if exclude_price is not None:
+            for i, u in enumerate(live):
+                if abs(u - exclude_price) <= 0.5:
+                    del live[i]
+                    break
+        sold = sorted(self.unit_of(s) for s in self.recent_sales(n, now)) if not extra else []
         v, pts, basis = None, 0, ""
         if live:
             v, pts, basis = live[0] * (1 - undercut), len(live), "floor"
@@ -394,9 +416,10 @@ class Market:
             v = min(v, float(known))
         return (float(v) if v is not None else None), pts, basis
 
-    def floor_now(self, n: str, now: float) -> Tuple[Optional[int], int]:
+    def floor_now(self, n: str, now: float) -> Tuple[Optional[float], int]:
+        """Cheapest UNIT price listed now, and how many listings."""
         live = self.current(n, now, exclude_mine=False)
-        return (live[0] if live else None), len(live)
+        return (round(live[0], 1) if live else None), len(live)
 
     def record_floors(self, items: List[str], now: float) -> List[str]:
         """Remember each item's floor; returns notes about floors that moved."""
@@ -479,6 +502,10 @@ class AuctionBot(ar.AuctionReader):
         except Exception:
             pass
         self.market = Market(st.get("market"))
+        if st and st.get("version") != VERSION:
+            # older versions read stacks ("x42") as single items: their prices can't be trusted
+            self.market.obs, self.market.floors = {}, {}
+            self.market.sales = [x for x in self.market.sales if "unit" in x]
         self.trades: List[dict] = st.get("trades", [])
         self.holdings: Dict[str, List[dict]] = st.get("holdings", {})   # bought, in the bag
         self.listings: List[dict] = st.get("listings", [])              # our active listings
@@ -518,7 +545,8 @@ class AuctionBot(ar.AuctionReader):
 
     def save_state(self) -> None:
         cutoff = time.time() - 3 * DAY
-        data = {"market": self.market.to_json(), "trades": self.trades[-5000:], "holdings": self.holdings,
+        data = {"version": VERSION, "market": self.market.to_json(), "trades": self.trades[-5000:],
+                "holdings": self.holdings,
                 "listings": self.listings, "spends": [x for x in self.spends if x[0] > cutoff],
                 "balance": self.balance[-20000:], "my_name": self.my_name, "day_start": self.day_start,
                 "pause_reason": self.pause_reason, "blocked_items": self.blocked_items}
@@ -615,6 +643,10 @@ class AuctionBot(ar.AuctionReader):
     def mine_keys(self) -> set:
         return {(norm(l["item"]), int(l["price"])) for l in self.listings}
 
+    @staticmethod
+    def qty_of(x: dict) -> int:
+        return max(1, int(x.get("qty", 1) or 1))
+
     def spent_24h(self, now: Optional[float] = None) -> int:
         now = now or time.time()
         return int(sum(c for t, c in self.spends if now - t < DAY))
@@ -622,11 +654,11 @@ class AuctionBot(ar.AuctionReader):
     def spent_today(self) -> int:
         return self.spent_24h()
 
-    def item_worth(self, n: str, cost: Optional[float], now: float) -> float:
-        """What a held item would bring in after the fee at today's floor."""
+    def item_worth(self, n: str, cost: Optional[float], now: float, qty: int = 1) -> float:
+        """What a held lot (qty units) would bring in after the fee at today's floor."""
         v, _, _ = self.value(n, now)
         if v:
-            return FEE_KEEP * v
+            return FEE_KEEP * v * qty
         return float(cost or 0)
 
     def stock(self, now: float) -> Tuple[float, float]:
@@ -637,13 +669,14 @@ class AuctionBot(ar.AuctionReader):
                 if h.get("paper") and not self.s.paper_trading:
                     continue
                 cost += h.get("cost") or 0
-                worth += self.item_worth(n, h.get("cost"), now)
+                worth += self.item_worth(n, h.get("cost"), now, self.qty_of(h))
         for l in self.listings:
             if l.get("paper") and not self.s.paper_trading:
                 continue
             n = norm(l["item"])
             cost += l.get("cost") or 0
-            worth += min(FEE_KEEP * l["price"], self.item_worth(n, l.get("cost"), now) or FEE_KEEP * l["price"])
+            worth += min(FEE_KEEP * l["price"],
+                         self.item_worth(n, l.get("cost"), now, self.qty_of(l)) or FEE_KEEP * l["price"])
         return cost, worth
 
     def net_worth(self, now: float) -> Optional[float]:
@@ -799,12 +832,23 @@ class AuctionBot(ar.AuctionReader):
         lines = self._ocr_read(ar.prep_for_ocr(strip, 4))
         return ar.parse_price(" ".join(l["text"] for l in sorted(lines, key=lambda l: l["x"])))
 
+    def reread_qty(self, img: np.ndarray, row: dict) -> Optional[int]:
+        """Read a row's stack badge again on its own (1 = no badge)."""
+        y, h = int(row["y"]), int(row.get("h", 20))
+        box = ar.find_badge(img, y, y + h - 1)
+        if box is None:
+            return 1
+        lines = self._ocr_read(ar.badge_image(img, box, 3))
+        return ar.parse_qty(" ".join(l["text"] for l in sorted(lines, key=lambda l: l["x"])))
+
     # ---- decisions -------------------------------------------------------------------------
     def buy_decision(self, row: dict, now: float) -> Optional[str]:
         n = norm(row["item"])
         price = int(row["price"])
-        if self.pause_reason or price <= 0 or not row.get("price_ok", True):
+        if self.pause_reason or price <= 0 or not row.get("price_ok", True) or not row.get("qty_ok", True):
             return None
+        qty = max(1, int(row.get("qty", 1) or 1))
+        unit = price / qty
         if self.buys_this_cycle >= self.s.max_buys_per_cycle:
             return None
         if (n, price) in self.mine_keys() or (self.my_name and seller_is(row["seller"], self.my_name)):
@@ -830,26 +874,26 @@ class AuctionBot(ar.AuctionReader):
         if self.held_count(n) >= cap:
             return None
         ench = norm(row.get("extra", ""))
-        value, pts, basis = self.value(n, now, exclude_price=price, extra=ench)
+        value, pts, basis = self.value(n, now, exclude_price=unit, extra=ench)
         if value is None:
             return None
-        profit = FEE_KEEP * value - price
+        profit = FEE_KEEP * value * qty - price
         _, extra = self.outcome(n, now)
         drop = self.market.falling(n, now, self.s.falling_floor_pct)
         listed_ours = any(norm(l["item"]) == n for l in self.listings
                           if not l.get("paper") or self.s.paper_trading)
         if long_term:
             usual = self.market.usual_floor(n, now) or value
-            if price > self.s.long_term_buy_ratio * usual or pts < 1 or basis == "old scan" or drop:
+            if unit > self.s.long_term_buy_ratio * usual or pts < 1 or basis == "old scan" or drop:
                 return None
             kind = f"LONG-TERM (usual floor ~{fmt(usual)})"
         else:
             trusted = basis in ("floor", "floor+sales", "sales") and pts >= self.s.min_value_points
-            steal = (price <= self.s.steal_ratio * value and profit >= self.s.min_profit_coins
+            steal = (unit <= self.s.steal_ratio * value and profit >= self.s.min_profit_coins
                      and (trusted or (known and basis in ("your value", "floor"))))
             pct = (self.s.min_profit_pct if (fast or self.market.sales_per_day(n, now) >= 1.0)
                    else self.s.slow_profit_pct) + extra
-            good = (trusted and value >= self.s.min_item_value
+            good = (trusted and value * qty >= self.s.min_item_value
                     and profit >= max(self.s.min_profit_coins, pct / 100.0 * price))
             if (drop or listed_ours) and not steal:
                 return None                 # floor sliding / our own copy still unsold: steals only
@@ -868,11 +912,14 @@ class AuctionBot(ar.AuctionReader):
                 return None
         if self.spent_24h(now) + price > self.s.daily_spend_cap:
             return None
-        return (f"{kind}: resale ~{fmt(value)} ({basis}, {pts} pts), profit after fee ~{fmt(profit)}"
+        each = f" x{qty} at {fmt(unit)} each," if qty > 1 else ""
+        return (f"{kind}:{each} resale ~{fmt(value)}/unit ({basis}, {pts} pts), profit after fee ~{fmt(profit)}"
                 + (f", +{extra:.0f}% margin (learned)" if extra else ""))
 
-    def sell_price(self, n: str, cost: Optional[float], now: float) -> Optional[int]:
+    def sell_price(self, n: str, cost: Optional[float], now: float, qty: int = 1) -> Optional[int]:
+        """Total asking price for a lot of `qty` units (cost = what the lot cost)."""
         others = self.market.current(n, now)
+        cost = (cost / qty) if cost else cost
         value, _, _ = self.value(n, now)
         exp, _ = self.outcome(n, now)
         margin = self.s.long_term_margin_pct if self.in_list(n, "long_term_items") else self.s.min_list_margin_pct
@@ -884,12 +931,12 @@ class AuctionBot(ar.AuctionReader):
         else:
             floor = 0
         if others:
-            target = int(others[0] * (1 - self.s.undercut_pct / 100.0))
+            target = others[0] * (1 - self.s.undercut_pct / 100.0)
         elif value:
-            target = int(value * 1.05)
+            target = value * 1.05
         else:
             return None
-        return max(target, floor)
+        return int(math.ceil(max(target, floor) * qty))
 
     # ---- watching + buying -----------------------------------------------------------------
     def watchlist(self, now: float) -> List[str]:
@@ -965,10 +1012,10 @@ class AuctionBot(ar.AuctionReader):
         if self.s.paper_trading:
             self.buys_this_cycle += 1
             self.trade(type="buy", item=item, price=price, seller=row["seller"], note=row["why"])
-            self.holdings.setdefault(n, []).append({"cost": price, "at": time.time(), "paper": True})
+            self.holdings.setdefault(n, []).append({"cost": price, "at": time.time(), "paper": True,
+                                                    "qty": self.qty_of(row)})
             self.spends.append([time.time(), price])
-            self.market.obs.pop(self.market.key(item, row["seller"], price, row.get("colour", ""),
-                                                row.get("extra", "")), None)
+            self.market.obs.pop(self.market.row_key(row), None)
             return "skipped"
         img = self.grab(board.list_region())
         now_strip = self.row_strip(img, row)
@@ -978,6 +1025,10 @@ class AuctionBot(ar.AuctionReader):
         p2, ok2 = self.reread_price(img, row)
         if not ok2 or p2 != price:
             self.log(f"  ...second read of the price says '{p2:,}' - not sure of the price, skipped.")
+            return "skipped"
+        q2 = self.reread_qty(img, row)
+        if q2 != self.qty_of(row):
+            self.log(f"  ...second read of the stack size says {q2}, first said {self.qty_of(row)} - skipped.")
             return "skipped"
         y = int(row["screen_y"])
         if not self.button_is(board, y, "buy"):
@@ -1024,10 +1075,10 @@ class AuctionBot(ar.AuctionReader):
         now = time.time()
         self.buys_this_cycle += 1
         self.spends.append([now, paid])
-        self.holdings.setdefault(n, []).append({"cost": paid, "at": now, "flag": flag})
-        self.market.obs.pop(self.market.key(item, row["seller"], int(row["price"]), row.get("colour", ""),
-                                            row.get("extra", "")), None)
-        self.trade(type="buy", item=item, price=paid, seller=row["seller"],
+        q = self.qty_of(row)
+        self.holdings.setdefault(n, []).append({"cost": paid, "at": now, "flag": flag, "qty": q})
+        self.market.obs.pop(self.market.row_key(row), None)
+        self.trade(type="buy", item=item, price=paid, qty=q, seller=row["seller"],
                    note=row["why"] + (f" [{flag}]" if flag else ""))
         if flag:
             self.log(f"  recorded {item} at {paid:,} [{flag}]")
@@ -1051,7 +1102,8 @@ class AuctionBot(ar.AuctionReader):
         matched, plan = 0, []
         for l in real:
             match = next((r for r in shown if norm(r["item"]) == norm(l["item"])
-                          and abs(int(r["price"]) - l["price"]) <= max(1, l["price"] // 200)), None)
+                          and abs(int(r["price"]) - l["price"]) <= max(1, l["price"] // 200)
+                          and (not r.get("qty_ok", True) or self.qty_of(r) == self.qty_of(l))), None)
             if match is not None:
                 shown.remove(match)
                 matched += 1
@@ -1068,7 +1120,8 @@ class AuctionBot(ar.AuctionReader):
             if l.get("unconfirmed"):
                 # the listing never showed up: the item is still in the bag
                 self.listings.remove(l)
-                self.holdings.setdefault(norm(l["item"]), []).append({"cost": l.get("cost"), "at": now})
+                self.holdings.setdefault(norm(l["item"]), []).append({"cost": l.get("cost"), "at": now,
+                                                                      "qty": self.qty_of(l)})
                 self.log(f"{l['item']} at {l['price']:,} never appeared in My Listings - back to the bag.")
                 continue
             l["missing"] = l.get("missing", 0) + 1
@@ -1077,12 +1130,13 @@ class AuctionBot(ar.AuctionReader):
             hours = (now - l["listed_at"]) / H
             self.listings.remove(l)
             if hours >= 23.9:
-                self.holdings.setdefault(norm(l["item"]), []).append({"cost": l.get("cost"), "at": now})
+                self.holdings.setdefault(norm(l["item"]), []).append({"cost": l.get("cost"), "at": now,
+                                                                      "qty": self.qty_of(l)})
                 self.trade(type="expired", item=l["item"], price=l["price"], hours=round(hours, 2))
                 self.log(f"{l['item']} at {l['price']:,} expired after {hours:.0f}h - back to the bag.")
                 continue
             profit = int(FEE_KEEP * l["price"] - (l.get("cost") or 0)) if l.get("cost") else None
-            self.trade(type="sold", item=l["item"], price=l["price"], cost=l.get("cost"),
+            self.trade(type="sold", item=l["item"], price=l["price"], qty=self.qty_of(l), cost=l.get("cost"),
                        profit=profit, hours=round(hours, 2),
                        listed=time.strftime("%Y-%m-%d %H:%M", time.localtime(l["listed_at"])))
             self.log(f"SOLD {l['item']} for {l['price']:,} after {hours:.1f}h"
@@ -1094,16 +1148,17 @@ class AuctionBot(ar.AuctionReader):
                 continue
             age_min = (now - l["listed_at"]) / 60.0
             others = self.market.current(norm(l["item"]), now)
-            if age_min < self.s.relist_after_min or not others or others[0] >= l["price"]:
+            mine_unit = l["price"] / self.qty_of(l)
+            if age_min < self.s.relist_after_min or not others or others[0] >= mine_unit:
                 continue
-            new = self.sell_price(norm(l["item"]), l.get("cost"), now)
+            new = self.sell_price(norm(l["item"]), l.get("cost"), now, self.qty_of(l))
             if new is not None and new < l["price"] * 0.995:
                 todo.append((l, others[0], new))
         for l, cheapest, new in todo[:3]:
             if not self.running:
                 break
             if self.cancel(board, l):
-                self.log(f"Undercut: {l['item']} at {l['price']:,} (cheapest now {cheapest:,}) - "
+                self.log(f"Undercut: {l['item']} at {l['price']:,} (cheapest now {fmt(cheapest)}/unit) - "
                          f"cancelled, relisting at {new:,}.")
         self.save_state()
 
@@ -1132,7 +1187,8 @@ class AuctionBot(ar.AuctionReader):
             self.log("  ...the listing is still there - cancel didn't work.")
             return False
         self.listings.remove(l)
-        self.holdings.setdefault(norm(l["item"]), []).append({"cost": l.get("cost"), "at": time.time()})
+        self.holdings.setdefault(norm(l["item"]), []).append({"cost": l.get("cost"), "at": time.time(),
+                                                              "qty": self.qty_of(l)})
         self.trade(type="cancel", item=l["item"], price=l["price"])
         return True
 
@@ -1148,12 +1204,12 @@ class AuctionBot(ar.AuctionReader):
                 for h in list(self.sellable(n)):
                     if sum(1 for l in self.listings if l.get("paper")) >= self.s.max_active_listings:
                         return
-                    price = self.sell_price(n, h.get("cost"), now)
+                    price = self.sell_price(n, h.get("cost"), now, self.qty_of(h))
                     if price is None:
                         continue
                     self.holdings[n].remove(h)
                     item = self.market.names.get(n, n)
-                    self.listings.append({"item": item, "price": price, "cost": h.get("cost"),
+                    self.listings.append({"item": item, "price": price, "cost": h.get("cost"), "qty": self.qty_of(h),
                                           "listed_at": now, "paper": True, "missing": 0})
                     self.trade(type="list", item=item, price=price, cost=h.get("cost"))
             return
@@ -1179,11 +1235,12 @@ class AuctionBot(ar.AuctionReader):
                     held = self.sellable(n)
                     if n in tried or (self.s.sell_only_bought and not held):
                         continue
-                    price = self.sell_price(n, held[0].get("cost") if held else None, time.time())
+                    lot = self.qty_of(held[0]) if held else 1
+                    price = self.sell_price(n, held[0].get("cost") if held else None, time.time(), lot)
                     if price is None:
                         tried.add(n)
                         continue
-                    pick.update(r, n=n, price=price, cost=held[0].get("cost") if held else None)
+                    pick.update(r, n=n, price=price, cost=held[0].get("cost") if held else None, lot=lot)
                     return True
                 return False
 
@@ -1194,22 +1251,23 @@ class AuctionBot(ar.AuctionReader):
                 break
             n, price, cost = pick["n"], pick["price"], pick["cost"]
             tried.add(n)
-            res = self.list_one(board, pick, price, n)
+            res = self.list_one(board, pick, price, n, pick.get("lot", 1))
             if res in ("listed", "unsure"):
                 held = self.sellable(n)
                 if held:
                     held_item = held[0]
                     self.holdings[n].remove(held_item)
-                self.listings.append({"item": pick["item"], "price": price, "cost": cost,
+                self.listings.append({"item": pick["item"], "price": price, "cost": cost, "qty": pick.get("lot", 1),
                                       "listed_at": time.time(), "missing": 0, "unconfirmed": res == "unsure"})
                 self.trade(type="list", item=pick["item"], price=price, cost=cost)
-                self.log(f"LISTED {pick['item']} for {price:,}" + (f" (cost {cost:,})" if cost else "")
+                self.log(f"LISTED {pick['item']}" + (f" x{pick.get('lot', 1)}" if pick.get("lot", 1) > 1 else "")
+                         + f" for {price:,}" + (f" (cost {cost:,})" if cost else "")
                          + (" - will confirm in My Listings" if res == "unsure" else ""))
                 self.save_state()
                 time.sleep(0.5)
         self.save_state()
 
-    def list_one(self, board, r: dict, price: int, n: str) -> str:
+    def list_one(self, board, r: dict, price: int, n: str, qty: int = 1) -> str:
         """Sell... -> quantity 1 -> price -> both read back -> List item.
         Returns 'listed', 'unsure' or 'failed'."""
         y = int(r["screen_y"])
@@ -1229,11 +1287,11 @@ class AuctionBot(ar.AuctionReader):
                 time.sleep(0.8)
                 return "failed"
         for attempt in range(2):
-            self.type_into(qx, qy, "1")
+            self.type_into(qx, qy, str(int(qty)))
             self.type_into(px, py, str(int(price)))
             q_read = self.field_digits(board, qx, qy, 18)
             p_read = self.field_digits(board, px, py, 34)
-            if (not q_read or q_read == "1") and (not p_read or p_read == str(int(price))):
+            if (not q_read or q_read == str(int(qty))) and (not p_read or p_read == str(int(price))):
                 break
             self.log(f"  ...the boxes read quantity '{q_read}', price '{p_read}' - retyping.")
         else:
@@ -1393,7 +1451,7 @@ def write_excel(bot: AuctionBot) -> Optional[str]:
     wsb["E26"], wsb["F26"] = "Buying", ("PAUSED: " + bot.pause_reason) if bot.pause_reason else "on"
 
     # Watched items + floor history
-    wsw = sheet("Watched items", ["Item", "Rarity", "Floor now", "Listed now", "Floor 24h ago", "Change 24h %",
+    wsw = sheet("Watched items", ["Item", "Rarity", "Floor now (per unit)", "Listed now", "Floor 24h ago", "Change 24h %",
                                   "7-day low", "7-day high", "Resale value", "Basis", "Market sales/day",
                                   "Hours to sell", "Held/listed by bot", "Status"],
                 [32, 10, 12, 9, 12, 10, 12, 12, 12, 11, 10, 9, 9, 30])
@@ -1438,10 +1496,10 @@ def write_excel(bot: AuctionBot) -> Optional[str]:
         wsc.add_chart(sc, f"{get_column_letter(40 + (k % 2) * 9)}{2 + (k // 2) * 15}")
         col += 3
 
-    ws = sheet("Trades", ["Time", "Type", "Item", "Price", "Cost", "Profit", "Hours listed->sold",
-                          "Seller", "Why / notes", "Paper"], [19, 8, 32, 12, 12, 12, 12, 18, 70, 6])
+    ws = sheet("Trades", ["Time", "Type", "Item", "Qty", "Price", "Cost", "Profit", "Hours listed->sold",
+                          "Seller", "Why / notes", "Paper"], [19, 8, 32, 5, 12, 12, 12, 12, 18, 70, 6])
     for t in bot.trades:
-        ws.append([t.get("time"), t.get("type"), t.get("item"), t.get("price"), t.get("cost"),
+        ws.append([t.get("time"), t.get("type"), t.get("item"), t.get("qty", 1), t.get("price"), t.get("cost"),
                    t.get("profit"), t.get("hours"), t.get("seller"), t.get("note"), "yes" if t.get("paper") else ""])
     numfmt(ws)
     ws5 = sheet("Inventory", ["Item", "In bag (cost each)", "Listed at", "Worth now (after fee)", "Notes"],
@@ -1451,7 +1509,8 @@ def write_excel(bot: AuctionBot) -> Optional[str]:
         lst = [l for l in bot.listings if norm(l["item"]) == n and (not l.get("paper") or bot.s.paper_trading)]
         if not held and not lst:
             continue
-        ws5.append([M.names.get(n, n), ", ".join(fmt(h.get("cost")) for h in held),
+        ws5.append([M.names.get(n, n), ", ".join(fmt(h.get("cost")) + (f" (x{h['qty']})" if h.get("qty", 1) > 1 else "")
+                                                for h in held),
                     ", ".join(f"{l['price']:,}" for l in lst),
                     round(bot.item_worth(n, None, now)) or None,
                     "; ".join(h.get("flag", "") for h in held if h.get("flag"))])
@@ -1470,10 +1529,12 @@ def write_excel(bot: AuctionBot) -> Optional[str]:
     for r in sorted(rows, key=lambda r: -(r[2] or 0)):
         ws2.append(r)
     numfmt(ws2)
-    ws3 = sheet("Market sales", ["Seen gone", "Item", "Price", "Seller", "Hours on market"], [19, 32, 12, 18, 10])
+    ws3 = sheet("Market sales", ["Seen gone", "Item", "Qty", "Price", "Per unit", "Seller", "Hours on market"],
+                [19, 32, 5, 12, 12, 18, 10])
     for s in sorted(M.sales, key=lambda s: -s["gone_at"]):
         ws3.append([time.strftime("%Y-%m-%d %H:%M", time.localtime(s["gone_at"])),
-                    M.names.get(s["item"], s["item"]), s["price"], s["seller"], s["hours"]])
+                    M.names.get(s["item"], s["item"]), s.get("qty", 1), s["price"], round(M.unit_of(s)),
+                    s["seller"], s["hours"]])
     numfmt(ws3)
     path = bot.s.excel_out if os.path.isabs(bot.s.excel_out) else os.path.join(HERE, bot.s.excel_out)
     for target in (path, path.replace(".xlsx", f"_{time.strftime('%H%M%S')}.xlsx")):
@@ -1538,7 +1599,8 @@ def run_gui() -> None:
 
     def field(r, c, label, attr, w=10):
         tk.Label(root, text=label, bg=BG, fg=FG).grid(row=r, column=c, sticky="w", padx=(10, 2))
-        v = tk.StringVar(value=f"{getattr(s, attr):g}" if isinstance(getattr(s, attr), (int, float)) else getattr(s, attr))
+        cur = getattr(s, attr)
+        v = tk.StringVar(value=str(cur) if isinstance(cur, int) else (f"{cur:g}" if isinstance(cur, float) else cur))
         tk.Entry(root, textvariable=v, width=w, bg="#0d1117", fg=FG, insertbackground=FG, relief="flat").grid(
             row=r, column=c + 1, sticky="w", padx=(0, 10), pady=2)
         vars_[attr] = v
@@ -1620,7 +1682,7 @@ def run_gui() -> None:
     style.configure("Floor.Treeview.Heading", background="#30363d", foreground=FG, font=("Segoe UI", 9, "bold"))
     cols = ("item", "floor", "chg", "listed", "value", "held")
     tree = ttk.Treeview(root, columns=cols, show="headings", height=8, style="Floor.Treeview")
-    for c_, t_, w_ in zip(cols, ("Watched item", "Floor now", "24h", "Listed", "Resale", "Bot has"),
+    for c_, t_, w_ in zip(cols, ("Watched item", "Floor/unit", "24h", "Listed", "Resale/unit", "Bot has"),
                           (230, 95, 60, 55, 95, 60)):
         tree.heading(c_, text=t_)
         tree.column(c_, width=w_, anchor="w" if c_ == "item" else "e")

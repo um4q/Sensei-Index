@@ -526,6 +526,48 @@ def parse_price(text: str) -> Tuple[int, bool]:
     return int(digits), ok and int(digits) > 0
 
 
+def find_badge(crop: np.ndarray, ya: int, yb: int) -> Optional[Tuple[int, int, int, int]]:
+    """The white "x42" pill on a STACK's icon (top right of the icon): the box
+    (y0, y1, x0, x1) of its dark text, or None for a single item."""
+    hr = yb - ya + 1
+    W = crop.shape[1]
+    reg = crop[ya:ya + int(0.45 * hr), 0:int(0.09 * W)].astype(np.int16)
+    if reg.size == 0:
+        return None
+    white = reg.min(axis=2) >= 200
+    dark = reg.max(axis=2) <= 90
+    k = max(3, int(0.12 * hr))
+    ys, xs = np.nonzero(dark)
+    pts = [(y, x) for y, x in zip(ys, xs)
+           if white[y, max(0, x - k):x].any() and white[y, x + 1:x + 1 + k].any()
+           and white[max(0, y - k):y, x].any() and white[y + 1:y + 1 + k, x].any()]
+    if len(pts) < max(6, 0.003 * hr * hr):
+        return None
+    py = [p[0] for p in pts]
+    px = [p[1] for p in pts]
+    return ya + min(py), ya + max(py), min(px), max(px)
+
+
+def badge_image(crop: np.ndarray, box, up: int) -> np.ndarray:
+    """Badge text as clean black-on-white, enlarged, for the text reader."""
+    y0, y1, x0, x1 = box
+    m = 3
+    g = crop[max(0, y0 - m):y1 + 1 + m, max(0, x0 - m):x1 + 1 + m].max(axis=2)
+    light = np.where(g <= 110, 255, 0).astype(np.uint8)          # text light on dark, like the rest
+    pad = np.zeros((light.shape[0] + 8, light.shape[1] + 8), np.uint8)
+    pad[4:4 + light.shape[0], 4:4 + light.shape[1]] = light
+    big = prep_for_ocr(np.stack([pad, pad, pad], axis=2), up + 1)   # smooth enlarge -> dark on white
+    return big
+
+
+def parse_qty(text: str) -> Optional[int]:
+    t = re.sub(r"^[^0-9xX\u00d7*]+|[^0-9]+$", "", (text or "").strip().replace(" ", ""))
+    m = re.fullmatch(r"[xX×*]?(\d{1,4})[,.]?", t.replace("O", "0").replace("o", "0"))
+    if m and int(m.group(1)) >= 2:
+        return int(m.group(1))
+    return None
+
+
 def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> List[dict]:
     """Cut every whole row into a name, a seller and a price strip, stack all
     strips into one picture, read it with one OCR call, and put it together."""
@@ -534,6 +576,7 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> Li
         return []
     W = crop.shape[1]
     strips, meta = [], []
+    badges: Dict[int, Optional[tuple]] = {}
     for i, (ya, yb) in enumerate(rows):
         hr = yb - ya + 1
         tx = int(0.085 * W)                       # text starts right of the item icon
@@ -543,6 +586,11 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> Li
         for kind, img in (("name", name), ("sub", sub), ("price", price)):
             strips.append(prep_for_ocr(img, up))
             meta.append((i, kind))
+        box = find_badge(crop, ya, yb)
+        if box is not None:
+            strips.append(badge_image(crop, box, up))
+            meta.append((i, "qty"))
+        badges[i] = box
     gap = 10 * up
     width = max(st.shape[1] for st in strips) + 2 * gap
     sheet, spans, y = [], [], gap
@@ -572,6 +620,11 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> Li
         if not nm or (need_price and (not digits or int(digits) <= 0)):
             continue
         p_strict, p_ok = parse_price(pr)
+        if badges.get(i) is None:
+            qty, qty_ok = 1, True
+        else:
+            q = parse_qty(get("qty"))
+            qty, qty_ok = (q, True) if q else (0, False)
         st = st.replace("|", " ").strip()
         m = SELLER_RE.search(st)
         seller, left, extra = "", "", ""
@@ -589,7 +642,8 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> Li
         out.append({"item": re.sub(r"\s+", " ", nm.replace("|", " ")).strip(" _-~*+'.,;:"), "seller": seller, "time_left": left,
                     "extra": extra, "price": int(digits) if digits else 0, "colour": colour, "sub": st,
                     "rarity": RARITY_BY_COLOUR.get(colour, colour), "y": ya, "h": yb - ya + 1,
-                    "price_text": pr, "price_ok": bool(p_ok and p_strict == (int(digits) if digits else 0))})
+                    "price_text": pr, "price_ok": bool(p_ok and p_strict == (int(digits) if digits else 0)),
+                    "qty": qty, "qty_ok": qty_ok})
     return out
 
 
@@ -765,9 +819,13 @@ class AuctionReader:
 
     def key(self, name: str) -> None:
         special = {"BACKSPACE": (0x08, False), "ENTER": (0x0D, False), "END": (0x23, True),
-                   "HOME": (0x24, True), "DELETE": (0x2E, True)}
+                   "HOME": (0x24, True), "DELETE": (0x2E, True), "SPACE": (0x20, False)}
+        if name == " ":
+            name = "SPACE"
         vk, ext = special.get(name.upper(), (None, False))
         vk = vk or af.vk_from_name(name)
+        if not vk:
+            return            # a character this keyboard can't type - skip it
         scan = af._user32.MapVirtualKeyW(vk, 0)
         e = 0x0001 if ext else 0   # KEYEVENTF_EXTENDEDKEY: the real End/Home/Delete, not the numpad ones
         for flags in (af.KEYEVENTF_SCANCODE | e, af.KEYEVENTF_SCANCODE | af.KEYEVENTF_KEYUP | e):

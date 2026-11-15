@@ -155,7 +155,7 @@ If a name/price is read wrong, set "save_debug_images": true in
 auction_settings.json, run a scan and send me the auction_debug folder.
 
 
-AUCTION BOT (auction_bot.py) - trades by itself (version 2.0)
+AUCTION BOT (auction_bot.py) - trades by itself (version 2.1)
 =============================================================
 1. Open the auction board (Browse tab), double-click START_AUCTION_BOT.bat,
    press START or F8. Hands off the mouse while it runs.
@@ -181,6 +181,12 @@ Rarity: nothing below Legendary is bought. Name colours: green Uncommon,
 blue Rare, purple Epic, orange Legendary, red Mythic, gold Divine, white
 Limited (always OK). Mutations (Crystal, Celestial, Frostbitten...) recolour
 the name, so a mutated item counts at its base item's rarity.
+
+STACKS: a listing with an "x42" badge on its icon is a stack of 42 - its
+price is for all 42. The bot reads the badge and works in price PER UNIT
+(floors, values, the Floor/unit column). A stack is bought only if the badge
+reads the same twice; one it can't read is ignored. Bought stacks are
+relisted as the same stack.
 
 PRICES = TODAY'S FLOOR
 Every search records each item's floor (cheapest listing), how many are
