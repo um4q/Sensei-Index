@@ -163,10 +163,18 @@ AUCTION BOT (auction_bot.py) - trades by itself
    press START or F8. Hands off the mouse while it runs.
 
 Every cycle (a few minutes) it:
- - searches the items worth trading (high demand + good margin, learned
-   from what it sees) and rare-sweep words (Darkness, Divine, Celestial,
-   Crystal, Abyssal...),
- - BUYS any listing it can resell at a profit after the 5% fee; a STEAL
+ - searches your WATCH LIST (editable in the window, ";" between items):
+     White Dragon Scale; Whitescale; White Death; Whitedeath;
+     Divine Darkness; Darkness Within; Abyssal Devastator; Gem
+   A term matches every item whose name contains it, so "White Death" also
+   covers Crystal/Frostbitten White Death, Heart of the White Death and
+   White Death armour; "Whitescale" is the Whitescale Helm/Plate/Greaves/
+   Sabatons set; "Gem" is every Gem of ... and the Mythic Gemstone.
+ - only buys items on the watch list, and NEVER buys anything on the
+   "Never buy" list (Celestial Scepter, including Blazing/Charged/... ones),
+ - BUYS any listing it can resell at a profit after the 5% fee (items it
+   hasn't seen sell at least once a day need 30% profit, the rest 15%,
+   max 2 held of one item); a STEAL
    (price <= 40% of the item's value, e.g. a Divine Darkness for 100k) is
    bought immediately,
  - reads My Listings: anything gone has SOLD - price, profit and the time
@@ -177,10 +185,13 @@ Every cycle (a few minutes) it:
    ONE of each always stays in your bag,
  - tracks every listing it ever saw; listings that vanish early count as
    market sales -> sales/day, sale price and hours-to-sale per item, which
-   drive the watchlist, values and prices.
+   drive values and prices. "Also search trending items" (off by default)
+   adds the busiest items it has learned to the searches (untick "Only buy
+   items on the watch list" too if you want it to buy those).
 
-Money rules (editable in the window): min profit %, steal ratio, max share
-of your coins per buy, daily spend cap, coin reserve, max listings.
+Money rules (editable in the window): min profit %, slow-seller profit %,
+steal ratio, max share of your coins per buy, daily spend cap, coin
+reserve, max listings.
 "Paper trading" makes all decisions and records them without clicking.
 "known_values" in auction_bot_settings.json lets you tell it what rare
 items are worth (item=value; ...).

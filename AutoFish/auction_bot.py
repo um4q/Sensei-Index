@@ -6,9 +6,10 @@ AuctionBot - trades on the Roblox auction board by itself.
 
 Open the auction board (Browse tab) and press START / F8.  Every cycle it:
 
-  1. WATCH  - searches the items worth trading (high demand, good margin,
-     learned from what it sees) plus "rare sweep" words (Darkness, Celestial,
-     Crystal...), reading every listing.
+  1. WATCH  - searches YOUR watch list (White Dragon Scale, Whitescale, White
+     Death, Divine Darkness, Darkness Within, Abyssal Devastator, Gem...),
+     reading every listing.  Only those items are bought; "never buy" items
+     (Celestial Scepter) are skipped.  Optional: also trending items.
   2. BUY    - any listing it can resell at a profit after the 5% fee is bought
      on the spot; a "steal" (e.g. a 9,500,000 item listed for 100,000) is
      bought immediately.  Spending is capped (per buy, per day, coin reserve).
@@ -47,7 +48,7 @@ import autofish as af            # noqa: E402
 import auction_reader as ar      # noqa: E402
 
 APP = "AuctionBot"
-VERSION = "1.0"
+VERSION = "1.1"
 STATE_PATH = os.path.join(HERE, "auction_bot_state.json")
 SETTINGS_PATH = os.path.join(HERE, "auction_bot_settings.json")
 FEE_KEEP = 0.95                  # the auction house keeps 5%
@@ -57,21 +58,29 @@ H = 3600.0
 @dataclass
 class BotSettings(ar.ARSettings):
     # what to watch
-    watch_size: int = 14                    # how many best items to search each cycle
-    sweep_terms: str = "Darkness Divine Celestial Crystal Abyssal Ancient Blazing Charged Golden Skeletal Phantom Huge"
-    extra_terms: str = ""                   # your own always-searched words
+    # YOUR watch list: searched every cycle, and (buy_only_watched) the only
+    # things it buys. Separate with ";" - a term matches any item whose name
+    # contains it (spaces ignored), so "White Death" also covers
+    # "Crystal White Death", "Heart of the White Death", White Death armour...
+    watch_items: str = ("White Dragon Scale; Whitescale; White Death; Whitedeath; Divine Darkness; "
+                        "Darkness Within; Abyssal Devastator; Gem")
+    never_buy: str = "Celestial Scepter"    # never bought, whatever the price
+    buy_only_watched: bool = True           # only buy items matching the watch list
+    auto_watch: bool = False                # also search the "trending" items it learns
+    watch_size: int = 14                    # how many trending items (auto_watch only)
     known_values: str = "The Divine Darkness=9500000; The Darkness Within=5100000"   # item=value; ...
     min_item_value: int = 20000             # ignore items worth less than this
     cycle_pause_s: float = 20.0             # rest between cycles
     # buying
-    min_profit_pct: float = 15.0            # profit after fee, % of the buy price
+    min_profit_pct: float = 15.0            # profit after fee, % of the buy price (items that sell often)
+    slow_profit_pct: float = 30.0           # ... for items it hasn't seen sell >= 1/day (slow sellers)
     min_profit_coins: int = 10000
     steal_ratio: float = 0.40               # price <= 40% of value -> buy at once
     max_buy_frac: float = 0.50              # never spend more than this share of your coins on one item
     coin_reserve: int = 50000               # always keep this many coins
     daily_spend_cap: int = 3000000
     min_value_points: int = 2               # price points needed before trusting a value
-    max_hold_per_item: int = 3              # don't stack up more than this of one item
+    max_hold_per_item: int = 2              # don't stack up more than this of one item
     # selling
     undercut_pct: float = 1.0               # list this % under the cheapest competitor
     min_list_margin_pct: float = 5.0        # never list below cost/0.95 * (1 + this)
@@ -111,6 +120,19 @@ class BotSettings(ar.ARSettings):
 
 def norm(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
+
+
+def compact(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def split_terms(text: str) -> List[str]:
+    return [t.strip() for t in re.split(r"[;,\n]+", text or "") if t.strip()]
+
+
+def matches_any(item: str, terms: List[str]) -> bool:
+    c = compact(item)
+    return any(compact(t) and compact(t) in c for t in terms)
 
 
 def hours_left(text: str) -> Optional[float]:
@@ -212,7 +234,7 @@ class Market:
         pts = list(cur)
         sd = self.seed.get(item_n)
         if len(pts) < 2 and sd:
-            pts += [sd["cheapest"], sd["median"]]
+            pts += [sd["cheapest"], sd["median"]] if sd.get("listings", 1) >= 2 else [sd["cheapest"]]
         if not pts:
             return None, 0
         pts.sort()
@@ -381,6 +403,10 @@ class AuctionBot(ar.AuctionReader):
         price = int(row["price"])
         if price <= 0 or (n, price) in self.mine_keys() or (self.my_name and norm(row["seller"]) == self.my_name):
             return None
+        if matches_any(row["item"], split_terms(self.s.never_buy)):
+            return None
+        if self.s.buy_only_watched and not matches_any(row["item"], split_terms(self.s.watch_items)):
+            return None
         value, pts = self.market.value(n, now, exclude_price=price)
         if value is None:
             return None
@@ -388,8 +414,9 @@ class AuctionBot(ar.AuctionReader):
             return None
         profit = FEE_KEEP * value - price
         steal = price <= self.s.steal_ratio * value and pts >= 1 and profit >= self.s.min_profit_coins
+        pct = self.s.min_profit_pct if self.market.sales_per_day(n, now) >= 1.0 else self.s.slow_profit_pct
         good = (pts >= self.s.min_value_points and value >= self.s.min_item_value
-                and profit >= max(self.s.min_profit_coins, self.s.min_profit_pct / 100.0 * price))
+                and profit >= max(self.s.min_profit_coins, pct / 100.0 * price))
         if not (steal or good):
             return None
         # money rules
@@ -420,6 +447,16 @@ class AuctionBot(ar.AuctionReader):
 
     # ---- watching + buying ---------------------------------------------------------
     def watchlist(self, now: float) -> List[str]:
+        out, seen = [], set()
+        never = split_terms(self.s.never_buy)
+        for t in split_terms(self.s.watch_items) + (self.trending(now) if self.s.auto_watch else []):
+            if compact(t) not in seen and not matches_any(t, never):
+                seen.add(compact(t))
+                out.append(t)
+        return out
+
+    def trending(self, now: float) -> List[str]:
+        """High-demand items with a good spread (only used with auto_watch)."""
         scores = []
         names = set(self.market.seed) | {o["item"] for o in self.market.obs.values()} | \
             {s["item"] for s in self.market.sales}
@@ -437,14 +474,7 @@ class AuctionBot(ar.AuctionReader):
             score = demand * (0.15 + spread) * math.log10(max(10.0, value))
             scores.append((score, n))
         scores.sort(reverse=True)
-        terms = [self.market.names.get(n, n) for _, n in scores[: self.s.watch_size]]
-        extra = [t for t in re.split(r"[\s,;]+", self.s.sweep_terms + " " + self.s.extra_terms) if t]
-        seen, out = set(), []
-        for t in extra + terms:
-            if norm(t) not in seen:
-                seen.add(norm(t))
-                out.append(t)
-        return out
+        return [self.market.names.get(n, n) for _, n in scores[: self.s.watch_size]]
 
     def watch_term(self, board, term: str) -> None:
         for attempt in range(4):              # repeat after each purchase (the list changed)
@@ -854,15 +884,28 @@ def run_gui() -> None:
     field(6, 0, "Coin reserve", "coin_reserve", 12)
     field(6, 2, "Max listings", "max_active_listings")
     field(7, 0, "Rare if worth >=", "rare_value", 12)
-    field(7, 2, "Watch size", "watch_size")
+    field(7, 2, "Slow-seller profit %", "slow_profit_pct")
+
+    def wide(r, label, attr):
+        tk.Label(root, text=label, bg=BG, fg=FG).grid(row=r, column=0, sticky="w", padx=(10, 2))
+        v = tk.StringVar(value=getattr(s, attr))
+        tk.Entry(root, textvariable=v, width=64, bg="#0d1117", fg=FG, insertbackground=FG, relief="flat").grid(
+            row=r, column=1, columnspan=3, sticky="ew", padx=(0, 10), pady=2)
+        vars_[attr] = v
+    wide(8, "Watch list ( ; between)", "watch_items")
+    wide(9, "Never buy", "never_buy")
     paper = tk.BooleanVar(value=s.paper_trading)
     keep = tk.BooleanVar(value=s.keep_one_rare)
     only = tk.BooleanVar(value=s.sell_only_bought)
+    onlyw = tk.BooleanVar(value=s.buy_only_watched)
+    auto = tk.BooleanVar(value=s.auto_watch)
     for i, (txt, var) in enumerate([("Paper trading (decide + record, never click Buy/List)", paper),
+                                    ("Only buy items on the watch list", onlyw),
+                                    ("Also search trending items it learns (auto watch)", auto),
                                     ("Keep ONE of each rare item", keep),
                                     ("Only sell what the bot bought", only)]):
         tk.Checkbutton(root, text=txt, variable=var, bg=BG, fg=FG, selectcolor="#0d1117",
-                       activebackground=BG, activeforeground=FG).grid(row=8 + i, column=0, columnspan=4, sticky="w", padx=10)
+                       activebackground=BG, activeforeground=FG).grid(row=10 + i, column=0, columnspan=4, sticky="w", padx=10)
 
     def apply():
         for attr, v in vars_.items():
@@ -872,6 +915,7 @@ def run_gui() -> None:
             except ValueError:
                 pass
         s.paper_trading, s.keep_one_rare, s.sell_only_bought = paper.get(), keep.get(), only.get()
+        s.buy_only_watched, s.auto_watch = onlyw.get(), auto.get()
 
     def toggle():
         apply()
@@ -892,11 +936,11 @@ def run_gui() -> None:
 
     btn.configure(command=toggle)
     tk.Button(root, text="Open report (Excel)", command=open_excel, bg="#30363d", fg=FG, relief="flat").grid(
-        row=11, column=0, columnspan=4, sticky="ew", padx=10, pady=4)
+        row=15, column=0, columnspan=4, sticky="ew", padx=10, pady=4)
     graph = tk.Canvas(root, width=620, height=150, bg="#0d1117", highlightthickness=0)
-    graph.grid(row=12, column=0, columnspan=4, padx=10, pady=(4, 2))
+    graph.grid(row=16, column=0, columnspan=4, padx=10, pady=(4, 2))
     box = scrolledtext.ScrolledText(root, width=86, height=12, bg="#0d1117", fg="#c9d1d9", font=("Consolas", 9), relief="flat")
-    box.grid(row=13, column=0, columnspan=4, padx=10, pady=(4, 10))
+    box.grid(row=17, column=0, columnspan=4, padx=10, pady=(4, 10))
     gstate = {"n": -1}
 
     def draw_graph():
