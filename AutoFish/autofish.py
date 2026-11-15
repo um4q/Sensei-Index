@@ -35,7 +35,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.5"
+APP_VERSION = "1.6"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -51,7 +51,7 @@ class Settings:
     # --- reel timing -------------------------------------------------------
     lead_ms: float = 30.0          # input lag to plan for until it has been measured
     auto_lead: bool = True         # measure the real press -> game delay and use that
-    measured_lead_ms: float = 0.0  # last measured delay (saved; start value next time, 0 = none)
+    measured_lead2_ms: float = 0.0  # last measured delay (saved; start value next time, 0 = none)
     zone_margin_pct: float = 18.0  # ignore this % of the gold zone on each side
     min_press_gap_s: float = 0.10 # minimum time between two reel presses
     # --- casting -----------------------------------------------------------
@@ -755,6 +755,35 @@ def miss_verdict(info: dict, rd: "MinigameReading", pics, shown_after: Optional[
             f"centre when judged ({where}).{tail}")
 
 
+def miss_timing_error(info: dict, rd: "MinigameReading", pics) -> Optional[float]:
+    """Signed timing error of a missed press in seconds: negative = the game
+    judged it too EARLY (fish short of the gold), positive = too LATE."""
+    if rd is None or rd.pointer is None or rd.zone is None or not info:
+        return None
+    zl, zr = rd.zone
+    c, pm = (zl + zr) / 2.0, rd.pointer
+    if zl <= pm <= zr:
+        return None
+    fr = [(pc[0], pc[2], (pc[3][0] + pc[3][1]) / 2.0) for pc in pics if pc[2] is not None and pc[3] is not None]
+    t_press = info.get("t")
+    if t_press is not None and fr:
+        i0 = max((i for i, f in enumerate(fr) if f[0] <= t_press), default=0)
+        fr = fr[i0:]
+    if len(fr) < 2:
+        return None
+    for a, b in zip(fr, fr[1:]):
+        ea, eb = a[1] - a[2], b[1] - b[2]
+        if ea == 0 or (ea > 0) != (eb > 0):
+            return max(0.0, fr[-1][0] - (a[0] + (b[0] - a[0]) * (ea / (ea - eb) if ea != eb else 0.0)))
+    e0, e1 = fr[0][1] - fr[0][2], fr[-1][1] - fr[-1][2]
+    if abs(e1) > abs(e0):
+        return None  # already past and moving away: can't size it
+    spd = abs(info.get("v") or 0.0)
+    if spd < 1:
+        return None
+    return -abs(pm - c) / spd
+
+
 def plan_press(p: float, v: float, c0: float, hw: float, vz: float, width: int,
                lead: float, margin_frac: float, tau_now: float, dz: float = 0.0,
                horizon: float = 0.30, step: float = 0.0005,
@@ -810,6 +839,7 @@ class GameEnv:
     def sleep(self, s: float) -> None: time.sleep(max(0.0, s))
     def sleep_precise(self, s: float) -> None: self.sleep(s)
     def ensure_focus(self) -> None: pass
+    def focus_age(self) -> float: return 1e9
     def game_region(self) -> Optional[Tuple[int, int, int, int]]: raise NotImplementedError
     def is_game_focused(self) -> bool: raise NotImplementedError
     def focus_game(self) -> bool: return False
@@ -1057,7 +1087,23 @@ if IS_WINDOWS:
             if self._fixed is None or _user32.GetForegroundWindow() == self._fixed:
                 return
             force_foreground(self._fixed)
+            self._focus_since = time.perf_counter()
+            self._had_focus = True
             time.sleep(max(0.0, self.settings.focus_settle_ms / 1000.0))
+
+        def focus_age(self) -> float:
+            """Seconds since this window became the active one (0 = not active).
+            Right after a switch Roblox can handle a key press later than usual."""
+            if self._fixed is None:
+                return 1e9
+            now = time.perf_counter()
+            if _user32.GetForegroundWindow() != self._fixed:
+                self._had_focus = False
+                return 0.0
+            if not getattr(self, "_had_focus", False):
+                self._had_focus = True
+                self._focus_since = now
+            return now - getattr(self, "_focus_since", now - 1e9)
 
         def focus_game(self) -> bool:
             hwnd = self._game_hwnd()
@@ -1205,6 +1251,9 @@ class FishingBot:
         self._release_at = 0.0
         self._fb_t: Optional[float] = None    # press waiting for its hit/miss to show
         self._fb_hist: deque = deque(maxlen=15)  # measured press -> result delays (s)
+        self._fb_hist_fresh: deque = deque(maxlen=15)  # ... for presses right after a window switch
+        self._fb_fresh = False
+        self._lead_adj = 0.0                     # correction learned from early/late misses
         self._armed = True
         self._outcome_seen = True
         self._strip = None                    # (time, image, origin) of the last strip grab
@@ -1315,16 +1364,22 @@ class FishingBot:
             return 0.0, w1
         return lo, hi
 
-    def current_lead(self) -> float:
-        """Seconds between our key-down and the game checking the fish."""
+    FRESH_FOCUS_S = 0.35
+
+    def current_lead(self, fresh: bool = False) -> float:
+        """Seconds between our key-down and the game checking the fish.
+        `fresh`: the window only just became active (Roblox may react later)."""
+        if fresh and self.s.auto_lead and self._fb_hist_fresh:
+            d = sorted(self._fb_hist_fresh)
+            return min(0.3, max(0.0, d[len(d) // 2] + self._lead_adj))
         if self.lead_is_measured():
             d = sorted(self._fb_hist)
             n = len(d)
             med = d[n // 2] if n % 2 else 0.5 * (d[n // 2 - 1] + d[n // 2])
-            return min(0.25, max(0.0, med))
-        if self.s.auto_lead and self.s.measured_lead_ms > 0:
-            return min(0.25, self.s.measured_lead_ms / 1000.0)  # measured in an earlier session
-        return max(0.0, self.s.lead_ms / 1000.0)
+            return min(0.25, max(0.0, med + self._lead_adj))
+        if self.s.auto_lead and self.s.measured_lead2_ms > 0:
+            return min(0.25, max(0.0, self.s.measured_lead2_ms / 1000.0 + self._lead_adj))
+        return max(0.0, self.s.lead_ms / 1000.0 + self._lead_adj)
 
     def _press(self, why: str, reel: bool = False) -> None:
         """Key down now; the key is released by a later tick (never blocks)."""
@@ -1505,8 +1560,13 @@ class FishingBot:
                 d = now - self._fb_t
                 shown_after = d
                 if 0.0 < d < 0.4:
-                    self._fb_hist.append(d)
-                    self.s.measured_lead_ms = round(self.current_lead() * 1000.0, 1)
+                    if self._fb_fresh:
+                        self._fb_hist_fresh.append(d)   # don't let a slow first press skew the rest
+                    else:
+                        self._fb_hist.append(d)
+                        if self.lead_is_measured():
+                            med = sorted(self._fb_hist)[len(self._fb_hist) // 2]
+                            self.s.measured_lead2_ms = round(med * 1000.0, 1)
                 self._fb_t = None
         elif self._fb_t is not None and now - self._fb_t > 0.5:
             self._fb_t = None
@@ -1539,6 +1599,12 @@ class FishingBot:
                 verdict = miss_verdict(info, rd, list(self._rec_imgs), shown_after)
                 if verdict:
                     self.log("  " + verdict)
+                err = miss_timing_error(info, rd, list(self._rec_imgs))
+                if err is not None and s.auto_lead:
+                    step = max(-0.06, min(0.06, err)) * 0.8
+                    self._lead_adj = max(-0.15, min(0.15, self._lead_adj + step))
+                    self.log(f"  Timing corrected by {step * 1000:+.0f}ms "
+                             f"(now {self.current_lead() * 1000:.0f}ms).")
             elif ours:
                 self.log(f"MISS right after a cast / recovery key press (no reel press this round; {where}).")
             else:
@@ -1626,7 +1692,8 @@ class FishingBot:
         dz = (zone_t[0] - t_fish) if zone_t is not None else 0.0
         if zone_t is not None:
             c0 = zone_t[1]
-        wait = plan_press(p, v, c0, (zr - zl) / 2.0, vz, rd.width, self.current_lead(),
+        fresh = self.env.focus_age() < self.FRESH_FOCUS_S
+        wait = plan_press(p, v, c0, (zr - zl) / 2.0, vz, rd.width, self.current_lead(fresh),
                           s.zone_margin_pct / 100.0, self.env.now() - t_fish, dz, walls=walls)
         if wait is not None:
             self.plan_at = self.env.now() + wait
@@ -1640,7 +1707,8 @@ class FishingBot:
         self._armed = False
         self._outcome_seen = False
         self.round_presses += 1
-        lead = self.current_lead()
+        lead = self.current_lead(fresh)
+        self._fb_fresh = fresh
         self._press(f"fish at {p:.0f} ({v:+.0f}px/s), gold {zl:.0f}-{zr:.0f}", reel=True)
         self.last_press_t = self._last_key_t
         # (a dry run presses nothing: a result showing now was someone else's press)
@@ -2004,6 +2072,7 @@ class MultiBot:
         self._scan_t = -1e9
         self._paused_since: Optional[float] = None
         self._next_num = 1
+        self.own_foreground: Callable[[], bool] = lambda: False  # is the AutoFish window active?
 
     def log(self, msg: str) -> None:
         self._log_cb(f"[{time.strftime('%H:%M:%S')}] {msg}")
@@ -2097,7 +2166,8 @@ class MultiBot:
         if not bots:
             return 0.5
         # safety: only act while one of the Roblox windows is the active window
-        if self.s.require_focus and self.foreground() not in [h for h, _ in self.lanes]:
+        if (self.s.require_focus and self.foreground() not in [h for h, _ in self.lanes]
+                and not self.own_foreground()):
             if self._paused_since is None:
                 self._paused_since = now
                 for b in bots:
@@ -2235,6 +2305,14 @@ def run_gui() -> None:
     bot = MultiBot(settings, lambda h: WindowsEnv(settings, h),
                    lambda: list_game_windows(settings.window_title or "Roblox"),
                    lambda: _user32.GetForegroundWindow(), log)
+    def own_fg() -> bool:
+        pid = wintypes.DWORD(0)
+        fgw = _user32.GetForegroundWindow()
+        if not fgw:
+            return False
+        _user32.GetWindowThreadProcessId(fgw, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    bot.own_foreground = own_fg
     worker = threading.Thread(target=bot.run_forever, name="autofish-bot", daemon=True)
     worker.start()
 
