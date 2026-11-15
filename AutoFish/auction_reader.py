@@ -44,7 +44,7 @@ sys.path.insert(0, HERE)
 import autofish as af  # noqa: E402  (screen capture, keys, PNG writer)
 
 APP = "AuctionReader"
-VERSION = "1.2"
+VERSION = "1.3"
 SETTINGS_PATH = os.path.join(HERE, "auction_settings.json")
 
 
@@ -617,9 +617,13 @@ class AuctionReader:
             time.sleep(0.03)
 
     def key(self, name: str) -> None:
-        vk = {"BACKSPACE": 0x08, "ENTER": 0x0D}.get(name.upper()) or af.vk_from_name(name)
+        special = {"BACKSPACE": (0x08, False), "ENTER": (0x0D, False), "END": (0x23, True),
+                   "HOME": (0x24, True), "DELETE": (0x2E, True)}
+        vk, ext = special.get(name.upper(), (None, False))
+        vk = vk or af.vk_from_name(name)
         scan = af._user32.MapVirtualKeyW(vk, 0)
-        for flags in (af.KEYEVENTF_SCANCODE, af.KEYEVENTF_SCANCODE | af.KEYEVENTF_KEYUP):
+        e = 0x0001 if ext else 0   # KEYEVENTF_EXTENDEDKEY: the real End/Home/Delete, not the numpad ones
+        for flags in (af.KEYEVENTF_SCANCODE | e, af.KEYEVENTF_SCANCODE | af.KEYEVENTF_KEYUP | e):
             inp = af.INPUT(type=af.INPUT_KEYBOARD)
             inp.ki = af.KEYBDINPUT(0, scan, flags, 0, 0)
             arr = (af.INPUT * 1)(inp)
@@ -693,21 +697,31 @@ class AuctionReader:
         for attempt in range(4):
             self.click(sx, sy)
             time.sleep(0.25 + 0.2 * attempt)
-            for _ in range(30):
-                self.key("BACKSPACE")
-            time.sleep(0.15)
+            self.clear_search()
+            time.sleep(0.2)
             empty = self._search_box_img(board)
             if not term:
                 return True
             for ch in term:
                 self.key(ch)
                 time.sleep(0.03)
-            time.sleep(0.25)
+            time.sleep(0.3)
             typed = self._search_box_img(board)
-            if float(np.abs(typed - empty).mean()) > 2.0:
+            changed = int((np.abs(typed - empty).max(axis=2) > 60).sum())
+            if changed >= max(6, int(8 * board.s * board.s)):
                 return True
             self.log(f"The search bar didn't take the text (try {attempt + 1}) - clicking it again.")
         return False
+
+    def clear_search(self) -> None:
+        """Empty the search bar wherever the text cursor is: End + Backspaces,
+        then Home + Deletes."""
+        self.key("END")
+        for _ in range(25):
+            self.key("BACKSPACE")
+        self.key("HOME")
+        for _ in range(25):
+            self.key("DELETE")
 
     def _wait_results(self, board: Board, before: Optional[np.ndarray], timeout: float = 8.0) -> np.ndarray:
         """The auction house takes a moment to answer a search: wait until the
