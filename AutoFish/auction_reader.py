@@ -44,7 +44,7 @@ sys.path.insert(0, HERE)
 import autofish as af  # noqa: E402  (screen capture, keys, PNG writer)
 
 APP = "AuctionReader"
-VERSION = "1.1"
+VERSION = "1.2"
 SETTINGS_PATH = os.path.join(HERE, "auction_settings.json")
 
 
@@ -572,6 +572,28 @@ class AuctionReader:
         u.SetCursorPos(int(x), int(y))
         time.sleep(0.04)
 
+    def move_raw(self, x: int, y: int) -> None:
+        u = af._user32
+        vx, vy = u.GetSystemMetrics(76), u.GetSystemMetrics(77)
+        vw, vh = max(1, u.GetSystemMetrics(78)), max(1, u.GetSystemMetrics(79))
+        inp = af.INPUT(type=af.INPUT_MOUSE)
+        inp.mi = af.MOUSEINPUT(int(round((x - vx) * 65535 / max(1, vw - 1))),
+                               int(round((y - vy) * 65535 / max(1, vh - 1))), 0, 0x0001 | 0x8000 | 0x4000, 0, 0)
+        u.SendInput(1, (af.INPUT * 1)(inp), af.ctypes.sizeof(af.INPUT))
+
+    def drag_to(self, x0: int, y0: int, x1: int, y1: int, hold: bool = False) -> None:
+        """Press at (x0, y0), slide to (x1, y1) in small steps; release unless hold."""
+        self.move(x0, y0)
+        self._mouse(af.MOUSEEVENTF_LEFTDOWN, 0)
+        time.sleep(0.08)
+        n = max(2, int(abs(y1 - y0) / 6))
+        for i in range(1, n + 1):
+            self.move_raw(int(x0 + (x1 - x0) * i / n), int(y0 + (y1 - y0) * i / n))
+            time.sleep(0.01)
+        time.sleep(0.05)
+        if not hold:
+            self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
+
     def click(self, x: int, y: int) -> None:
         self.move(x, y)
         self._mouse(af.MOUSEEVENTF_LEFTDOWN, 0)
@@ -644,6 +666,21 @@ class AuctionReader:
             return self.ocr.read(img)
 
     # ---- one full scan -----------------------------------------------------
+    def find_thumb(self, board: Board) -> Optional[Tuple[int, int, int, int, int]]:
+        """The scroll bar handle right of the Buy buttons: (x, y_mid, height,
+        track_top, track_bottom) in screen px, or None (no scroll bar)."""
+        x0, y0 = board.pt(176.5, 49)
+        x1, y1 = board.pt(179.5, 249)
+        img = self.grab((x0, y0, max(2, x1 - x0), y1 - y0)).astype(np.int16)
+        bright = (img.max(axis=2) > 85).mean(axis=1) >= 0.5
+        rs = [(a, b) for a, b in af.runs(bright, gap=1) if b - a + 1 >= max(2, int(2 * board.s))]
+        if not rs:
+            return None
+        a, b = max(rs, key=lambda t: t[1] - t[0])
+        if b - a + 1 > 0.9 * (y1 - y0):
+            return None  # the whole column is bright: that's not a handle
+        return (x0 + (x1 - x0) // 2, y0 + (a + b) // 2, b - a + 1, y0, y1)
+
     def _search_box_img(self, board: Board) -> np.ndarray:
         x0, y0 = board.pt(50, 29)
         x1, y1 = board.pt(152, 43)
@@ -725,44 +762,91 @@ class AuctionReader:
                 continue
             time.sleep(self.s.wait_after_typing_s)
             self._wait_results(board, before)
-            self.wheel(px, py, -60)          # back to the top
-            time.sleep(self.s.wait_after_scroll_s)
             by_pos: Dict[int, dict] = {}     # position in the list -> row (keeps true duplicates)
+            pitch = max(8.0, 32.0 * board.s)
             offset = 0.0                     # how far we have scrolled (list pixels)
-            prev = None
-            for page in range(self.s.max_pages_per_term):
-                if not self.running:
-                    return None
-                img = self.grab(board.list_region())
-                if prev is not None:
-                    shift = scroll_shift(prev, img)
-                    if shift is None:
-                        # scrolled further than one screen: step back and take smaller steps
-                        self.wheel(px, py, -notches)
-                        time.sleep(self.s.wait_after_scroll_s)
-                        notches = max(1, notches // 2)
-                        img = self.grab(board.list_region())
-                        shift = scroll_shift(prev, img)
-                        if shift is None:
-                            self.log("Lost track of the scroll position - some rows may be missing.")
-                            shift = int(0.5 * img.shape[0])
-                    if shift == 0:
-                        break                # nothing moved: bottom of the list
-                    offset += shift
-                    # aim for ~60% of a screen per step
-                    per = shift / max(1, notches)
-                    notches = int(max(1, min(20, round(0.6 * img.shape[0] / max(1.0, per)))))
-                rows = self.read_screen_img(img, board)
-                pitch = max(8.0, 32.0 * board.s)
-                for row in rows:
+
+            def take(img):
+                for row in self.read_screen_img(img, board):
                     row["item"] = self.canonical(row["item"])
                     pos = int(round((offset + row["y"]) / pitch))
                     if pos not in by_pos:
                         by_pos[pos] = row
                 self.found = sum(n for n, _ in overall.values()) + len(by_pos)
-                prev = img
-                self.wheel(px, py, notches)
+
+            thumb = self.find_thumb(board)
+            if thumb is not None:
+                # drag the scroll bar handle: much faster than the mouse wheel
+                tx, ty, th, top, bottom = thumb
+                self.drag_to(tx, ty, tx, top - 5)          # handle to the very top
                 time.sleep(self.s.wait_after_scroll_s)
+                thumb = self.find_thumb(board)
+            if thumb is None:
+                self.wheel(px, py, -60)                     # short list / no handle: wheel
+                time.sleep(self.s.wait_after_scroll_s)
+            prev = self.grab(board.list_region())
+            take(prev)
+            if thumb is not None:
+                tx, ty, th, top, bottom = thumb
+                H = prev.shape[0]
+                step = max(1.0, 0.7 * th)                   # handle px per ~0.7 screen (first guess)
+                y = float(ty)
+                self.move(tx, ty)
+                self._mouse(af.MOUSEEVENTF_LEFTDOWN, 0)
+                time.sleep(0.08)
+                still = 0
+                try:
+                    for page in range(self.s.max_pages_per_term):
+                        if not self.running:
+                            return None
+                        y_try = min(float(bottom + 5), y + step)
+                        self.move_raw(tx, int(round(y_try)))
+                        time.sleep(self.s.wait_after_scroll_s)
+                        img = self.grab(board.list_region())
+                        shift = scroll_shift(prev, img)
+                        if shift is None:                   # jumped more than a screen: go back halfway
+                            step = max(1.0, step * 0.5)
+                            self.move_raw(tx, int(round(y + step)))
+                            time.sleep(self.s.wait_after_scroll_s)
+                            img = self.grab(board.list_region())
+                            shift = scroll_shift(prev, img)
+                            y_try = y + step
+                            if shift is None:
+                                self.log("Lost track of the list position - some rows may be missing.")
+                                shift = int(0.6 * H)
+                        y = y_try
+                        if shift == 0:
+                            still += 1
+                            if still >= 2 or y >= bottom:
+                                break                       # bottom of the list
+                            step *= 2
+                            continue
+                        still = 0
+                        offset += shift
+                        take(img)
+                        prev = img
+                        step = max(1.0, min(4.0 * th + 4, step * (0.7 * H) / shift))
+                finally:
+                    self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
+            else:
+                for page in range(self.s.max_pages_per_term):
+                    if not self.running:
+                        return None
+                    self.wheel(px, py, notches)
+                    time.sleep(self.s.wait_after_scroll_s)
+                    img = self.grab(board.list_region())
+                    shift = scroll_shift(prev, img)
+                    if shift == 0:
+                        break
+                    if shift is None:
+                        self.wheel(px, py, -notches)
+                        time.sleep(self.s.wait_after_scroll_s)
+                        notches = max(1, notches // 2)
+                        continue
+                    offset += shift
+                    notches = int(max(1, min(20, round(0.6 * img.shape[0] / max(1.0, shift / notches)))))
+                    take(img)
+                    prev = img
             counts: Dict[tuple, int] = {}
             for row in by_pos.values():
                 k = (row["item"].lower(), row["seller"].lower(), row["price"])
