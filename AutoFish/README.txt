@@ -54,8 +54,8 @@ prompt shows (the Recast delay setting is skipped in this mode). The "Bites" cou
 shows how many bites were triggered.
 
 
-LEVIATHAN ALARM (1.7)
----------------------
+LEVIATHAN ALARM (1.7.1)
+-----------------------
 While AutoFish is running it watches every Roblox window for a leviathan
 pull and raises an alarm you can't miss: a loud siren (looping) plus a big
 flashing red/orange panel on top of the AutoFish window, and its taskbar
@@ -63,11 +63,12 @@ button flashes. It reacts to:
   1. the announcement "... was pulled into the deep by the Serpent of the
      ..." / "Something vast took the bait." (shown in the windows of the
      players nearby - about 2 s after the pull)
-  2. a window going black right after that announcement (you're being
-     pulled in) - fishing STOPS here, so nothing presses E in the arena
-  3. the boss health bar ("The Serpent of the Sea - Lv 250") - the
-     fallback when only the pulled player's window is open (its own window
-     shows a cut-scene, not the announcement), ~15 s after the pull
+  2. a window flooding teal (dragged under water) and then going black -
+     you're being pulled in. This also works for the pulled player's own
+     window, which never shows the announcement (~5 s after the pull).
+     Fishing STOPS here, so nothing presses E in the arena.
+  3. the boss health bar ("The Serpent of the Sea - Lv 250") - the last
+     fallback, ~15 s after the pull
 Press F6 (or "Silence alarm") to silence it; F6 again starts fishing once
 you're back at the water. One alarm per leviathan.
 * "Test alarm" plays it so you can set the volume.
@@ -77,7 +78,8 @@ you're back at the water. One alarm per leviathan.
   autofish_settings.json); the panel stays until you silence it.
 * Want a different sound? Replace leviathan_alarm.wav (made on first use,
   next to the script) with any .wav file of your own.
-* The alarm only watches while AutoFish is running (START / F6).
+* The alarm only watches while AutoFish is running (START / F6). If the
+  AutoFish window covers part of a Roblox window, that part is ignored.
 
 
 TIPS

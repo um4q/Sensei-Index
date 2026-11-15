@@ -35,7 +35,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.7"
+APP_VERSION = "1.7.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -698,7 +698,7 @@ def find_boss_bar(rgb: np.ndarray) -> Optional[dict]:
                                               # Roblox's network-stats bars)
         strip = reg[top:bot + 1, x0:x1].max(axis=2).mean(axis=1)
         third = max(1, len(strip) // 3)
-        if strip[:third].mean() - strip[-third:].mean() < 25:
+        if strip[:max(1, len(strip) // 2)].max() - strip[-third:].mean() < 25:   # top rows may be dimmed (stats overlay)
             continue                          # the bar shades from light blue (top) to deep blue
         reach = max(4, int(1.5 * hgt))
         above = blue[max(0, top - reach):max(0, top - 2), x0:x1]
@@ -712,12 +712,39 @@ def find_boss_bar(rgb: np.ndarray) -> Optional[dict]:
     return None
 
 
-def dark_fraction(rgb: np.ndarray) -> float:
-    """How much of the view (below Roblox's top bar) is black - pulled into the deep."""
-    a = rgb[::2, ::max(2, int(rgb.shape[1] // 320))]
+def _view(rgb: np.ndarray, ignore: Optional[Tuple[int, int, int, int]] = None):
+    """The view below Roblox's top bar (every 2nd row / k-th column) and which of its
+    pixels count: `ignore` = (x0, y0, x1, y1) in `rgb` pixels is covered by something
+    else (the AutoFish window).  (None, None) if too little of the view is visible."""
+    sx = max(2, int(rgb.shape[1] // 320))
+    a = rgb[::2, ::sx]
     H, W = a.shape[:2]
-    reg = a[int(0.12 * H):int(0.97 * H), int(0.03 * W):int(0.97 * W)]
-    return float((reg.max(axis=2) < 32).mean())
+    y0, x0 = int(0.12 * H), int(0.03 * W)
+    reg = a[y0:int(0.97 * H), x0:int(0.97 * W)]
+    keep = np.ones(reg.shape[:2], dtype=bool)
+    if ignore is not None:
+        keep[max(0, ignore[1] // 2 - y0):max(0, ignore[3] // 2 - y0 + 1),
+             max(0, ignore[0] // sx - x0):max(0, ignore[2] // sx - x0 + 1)] = False
+        if keep.mean() < 0.4:
+            return None, None
+    return reg, keep
+
+
+def dark_fraction(rgb: np.ndarray, ignore: Optional[Tuple[int, int, int, int]] = None) -> float:
+    """How much of the view (below Roblox's top bar) is black - pulled into the deep."""
+    reg, keep = _view(rgb, ignore)
+    return 0.0 if reg is None else float((reg.max(axis=2) < 32)[keep].mean())
+
+
+def flood_fraction(rgb: np.ndarray, ignore: Optional[Tuple[int, int, int, int]] = None) -> float:
+    """How much of the view is the bright teal of being dragged under water (every pulled
+    window shows it just before it goes black - also the hooked player's own window,
+    which never shows the announcement)."""
+    reg, keep = _view(rgb, ignore)
+    if reg is None:
+        return 0.0
+    r, g, b = (reg[..., i].astype(np.int16) for i in range(3))
+    return float(((g >= 70) & (b >= 70) & (g - r >= 40) & (b - r >= 40) & (np.abs(g - b) <= 30))[keep].mean())
 
 
 class LeviathanWatch:
@@ -732,6 +759,8 @@ class LeviathanWatch:
     CONFIRM_S = 45.0
     REARM_S = 90.0
     DARK = 0.90
+    FLOOD = 0.5        # pulled under: the view floods bright teal ...
+    FLOOD_S = 4.0      # ... and goes black within this long (night scenes are black too, but never teal)
 
     def __init__(self) -> None:
         self.hits: dict = {}
@@ -740,7 +769,8 @@ class LeviathanWatch:
         self.fired = False
         self.confirmed = False
 
-    def feed(self, name: str, rgb: np.ndarray, now: float) -> List[Tuple[str, str]]:
+    def feed(self, name: str, rgb: np.ndarray, now: float,
+             ignore: Optional[Tuple[int, int, int, int]] = None) -> List[Tuple[str, str]]:
         if now - self.last_seen > self.REARM_S:
             self.fired, self.confirmed, self.banner_t = False, False, None
         h = self.hits.setdefault(name, {"pull": 0, "boss": 0, "dark": 0})
@@ -759,10 +789,13 @@ class LeviathanWatch:
         if h["boss"] >= self.HITS and not self.confirmed:
             self.fired = self.confirmed = True
             events.append(("boss", name))
-        if self.banner_t is not None and now - self.banner_t <= self.CONFIRM_S and not self.confirmed:
-            h["dark"] = h["dark"] + 1 if dark_fraction(rgb) >= self.DARK else 0
+        if not self.confirmed and flood_fraction(rgb, ignore) >= self.FLOOD:
+            h["flood_t"] = now
+        if now - h.get("flood_t", -1e9) <= self.FLOOD_S and not self.confirmed:
+            h["dark"] = h["dark"] + 1 if dark_fraction(rgb, ignore) >= self.DARK else 0
             if h["dark"] >= self.HITS:
-                self.confirmed = True
+                self.fired = self.confirmed = True
+                self.last_seen = now          # (else the re-arm check would undo this on the next look)
                 events.append(("dark", name))
         else:
             h["dark"] = 0
@@ -2295,6 +2328,7 @@ class MultiBot:
         self.own_foreground: Callable[[], bool] = lambda: False  # is the AutoFish window active?
         self.lev = LeviathanWatch()
         self.alarm: Optional[dict] = None   # the latest leviathan alarm (the GUI shows it)
+        self.own_rect: Optional[Tuple[int, int, int, int]] = None  # the AutoFish window on screen (the GUI sets it)
         self._alarm_seq = 0
 
     def log(self, msg: str) -> None:
@@ -2345,6 +2379,7 @@ class MultiBot:
         with self.lock:
             if self.running:
                 return
+            self.lev = LeviathanWatch()   # a new run watches for a new leviathan (no 90 s blind spot after a restart)
             self.running = True
         self._rescan()
         if not self.lanes:
@@ -2370,6 +2405,9 @@ class MultiBot:
     def run_forever(self) -> None:
         while self.alive:
             if not self.running:
+                for _, b in list(self.lanes):
+                    if b._held is not None:
+                        b._release_key()   # a press that raced a stop() from another thread
                 time.sleep(0.05)
                 continue
             try:
@@ -2520,7 +2558,8 @@ class MultiBot:
             return False
         now = time.perf_counter()
         for _, b in list(self.lanes):
-            if b.running and b.state == ST_REEL and (b.plan_at is None or b.plan_at - now < 0.15):
+            p = b.plan_at   # None = no press planned right now (just pressed / still measuring)
+            if b.running and b.state == ST_REEL and p is not None and p - now < 0.15:
                 return True
         return False
 
@@ -2538,8 +2577,15 @@ class MultiBot:
                         time.sleep(0.05)
                     if not self.running:
                         break
-                    img = b.env.grab(b.env.game_region())
-                    for kind, name in self.lev.feed(b.name or "the Roblox window", img, time.perf_counter()):
+                    region = b.env.game_region()
+                    img = b.env.grab(region)
+                    ignore, r = None, self.own_rect     # don't count the AutoFish window as part of the game
+                    if r is not None:
+                        x0, y0 = max(r[0], region[0]) - region[0], max(r[1], region[1]) - region[1]
+                        x1, y1 = min(r[2], region[0] + region[2]) - region[0], min(r[3], region[1] + region[3]) - region[1]
+                        if x1 > x0 and y1 > y0:
+                            ignore = (x0, y0, x1, y1)
+                    for kind, name in self.lev.feed(b.name or "the Roblox window", img, time.perf_counter(), ignore):
                         self.raise_alarm(kind, name)
                 errors = 0
             except Exception as exc:
@@ -2605,6 +2651,7 @@ class AlarmSound:
     def start(self) -> None:
         self.stop()
         self.playing, self.since = True, time.time()
+        token = self._beep_token = object()   # a newer start() retires any older beeper thread
         if not IS_WINDOWS:
             return
         import winsound
@@ -2618,7 +2665,7 @@ class AlarmSound:
             pass
 
         def beep():
-            while self.playing:
+            while self.playing and self._beep_token is token:
                 try:
                     winsound.Beep(988, 250)
                     winsound.Beep(740, 250)
@@ -2918,6 +2965,12 @@ def run_gui() -> None:
             else:
                 on_toggle(False)
         hotkey_state["down"] = down
+        try:   # where the AutoFish window is (the leviathan watcher ignores that part of the screen)
+            x, y = root.winfo_rootx(), root.winfo_rooty()
+            bot.own_rect = None if root.state() == "iconic" else \
+                (x - 10, y - 40, x + root.winfo_width() + 10, y + root.winfo_height() + 10)  # + frame / title bar
+        except Exception:
+            bot.own_rect = None
         tick_alarm()
         # log lines
         lines = []
