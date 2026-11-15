@@ -44,7 +44,7 @@ sys.path.insert(0, HERE)
 import autofish as af  # noqa: E402  (screen capture, keys, PNG writer)
 
 APP = "AuctionReader"
-VERSION = "1.0"
+VERSION = "1.1"
 SETTINGS_PATH = os.path.join(HERE, "auction_settings.json")
 
 
@@ -132,7 +132,7 @@ while ($true) {
     $stream.Dispose()
     [Console]::Out.WriteLine((ConvertTo-Json -InputObject $lines -Depth 5 -Compress))
   } catch {
-    [Console]::Out.WriteLine("ERR " + $_.Exception.Message)
+    [Console]::Out.WriteLine("ERR " + ($_.Exception.Message -replace "[\r\n]+", " "))
   }
   [Console]::Out.Flush()
 }
@@ -161,6 +161,14 @@ class WindowsOCR:
 
     def read(self, rgb: np.ndarray) -> List[dict]:
         self.n += 1
+        if self.proc.poll() is not None:
+            raise RuntimeError("OCR process stopped: " + (self.proc.stderr.read() or "")[-300:])
+        h, w = rgb.shape[:2]
+        if max(h, w) > 9000:                  # Windows OCR's size limit is 10000 px
+            f = 9000.0 / max(h, w)
+            ys = (np.arange(int(h * f)) / f).astype(int)
+            xs = (np.arange(int(w * f)) / f).astype(int)
+            rgb = rgb[ys][:, xs]
         path = os.path.join(self.dir, f"img{self.n % 4}.png")
         af.write_png(path, rgb)
         self.proc.stdin.write(path + "\n")
@@ -544,13 +552,32 @@ class AuctionReader:
     def _env(self):
         return self.env
 
-    def click(self, x: int, y: int) -> None:
+    def move(self, x: int, y: int) -> None:
+        """Move the mouse like a real mouse does (Roblox ignores a cursor that
+        is just teleported): absolute SendInput move, then a 1px wiggle."""
         u = af._user32
+        vx, vy = u.GetSystemMetrics(76), u.GetSystemMetrics(77)      # virtual screen origin
+        vw, vh = max(1, u.GetSystemMetrics(78)), max(1, u.GetSystemMetrics(79))
+        nx = int(round((x - vx) * 65535 / max(1, vw - 1)))
+        ny = int(round((y - vy) * 65535 / max(1, vh - 1)))
+        inp = af.INPUT(type=af.INPUT_MOUSE)
+        inp.mi = af.MOUSEINPUT(nx, ny, 0, 0x0001 | 0x8000 | 0x4000, 0, 0)  # MOVE|ABSOLUTE|VIRTUALDESK
+        af._user32.SendInput(1, (af.INPUT * 1)(inp), af.ctypes.sizeof(af.INPUT))
+        time.sleep(0.04)
+        for d in (1, -1):
+            inp = af.INPUT(type=af.INPUT_MOUSE)
+            inp.mi = af.MOUSEINPUT(d, 0, 0, 0x0001, 0, 0)
+            af._user32.SendInput(1, (af.INPUT * 1)(inp), af.ctypes.sizeof(af.INPUT))
+            time.sleep(0.02)
         u.SetCursorPos(int(x), int(y))
-        time.sleep(0.05)
+        time.sleep(0.04)
+
+    def click(self, x: int, y: int) -> None:
+        self.move(x, y)
         self._mouse(af.MOUSEEVENTF_LEFTDOWN, 0)
-        time.sleep(0.05)
+        time.sleep(0.07)
         self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
+        time.sleep(0.05)
 
     def _mouse(self, flags: int, data: int) -> None:
         inp = af.INPUT(type=af.INPUT_MOUSE)
@@ -559,8 +586,10 @@ class AuctionReader:
         af._user32.SendInput(1, arr, af.ctypes.sizeof(af.INPUT))
 
     def wheel(self, x: int, y: int, notches: int) -> None:
-        af._user32.SetCursorPos(int(x), int(y))
-        time.sleep(0.03)
+        cur = af.wintypes.POINT()
+        af._user32.GetCursorPos(af.ctypes.byref(cur))
+        if abs(cur.x - x) > 3 or abs(cur.y - y) > 3:
+            self.move(x, y)
         for _ in range(abs(notches)):
             self._mouse(0x0800, -120 if notches > 0 else 120)  # MOUSEEVENTF_WHEEL
             time.sleep(0.03)
@@ -596,23 +625,87 @@ class AuctionReader:
         if self.s.save_debug_images:
             os.makedirs(os.path.join(HERE, "auction_debug"), exist_ok=True)
             af.write_png(os.path.join(HERE, "auction_debug", f"list_{int(time.time() * 1000)}.png"), crop)
-        return read_rows(crop, self.ocr, up)
+        return read_rows(crop, self, up)
+
+    def read(self, img):
+        return self._ocr_read(img)
+
+    def _ocr_read(self, img):
+        """OCR with one automatic restart if the reader process died."""
+        try:
+            return self.ocr.read(img)
+        except Exception as exc:
+            self.log(f"Text reader problem ({exc!r}) - restarting it.")
+            try:
+                self.ocr.close()
+            except Exception:
+                pass
+            self.ocr = make_ocr(self.s.ocr_backend)
+            return self.ocr.read(img)
 
     # ---- one full scan -----------------------------------------------------
-    def _type_search(self, board: Board, term: str) -> None:
+    def _search_box_img(self, board: Board) -> np.ndarray:
+        x0, y0 = board.pt(50, 29)
+        x1, y1 = board.pt(152, 43)
+        return self.grab((x0, y0, x1 - x0, y1 - y0)).astype(np.int16)
+
+    def _type_search(self, board: Board, term: str) -> bool:
+        """Click the search bar, clear it, type `term`.  Checks that the text
+        really went into the box (if not, clicks again) - True when it did."""
         sx, sy = board.search_point()
-        self.click(sx, sy)
-        time.sleep(0.15)
-        for _ in range(30):
-            self.key("BACKSPACE")
-        for ch in term:
-            self.key(ch)
+        for attempt in range(4):
+            self.click(sx, sy)
+            time.sleep(0.25 + 0.2 * attempt)
+            for _ in range(30):
+                self.key("BACKSPACE")
+            time.sleep(0.15)
+            empty = self._search_box_img(board)
+            if not term:
+                return True
+            for ch in term:
+                self.key(ch)
+                time.sleep(0.03)
+            time.sleep(0.25)
+            typed = self._search_box_img(board)
+            if float(np.abs(typed - empty).mean()) > 2.0:
+                return True
+            self.log(f"The search bar didn't take the text (try {attempt + 1}) - clicking it again.")
+        return False
+
+    def _wait_results(self, board: Board, before: Optional[np.ndarray], timeout: float = 8.0) -> np.ndarray:
+        """The auction house takes a moment to answer a search: wait until the
+        list has changed (or a while has passed) and then stopped changing."""
+        t0 = time.time()
+        last = None
+        stable_since = None
+        while True:
+            img = self.grab(board.list_region()).astype(np.int16)
+            now = time.time()
+            if last is not None and float(np.abs(img - last).mean()) < 1.0:
+                stable_since = stable_since or now
+            else:
+                stable_since = None
+            changed = before is None or float(np.abs(img - before).mean()) > 2.0
+            if stable_since and now - stable_since >= 0.4 and (changed or now - t0 > 2.5) and now - t0 > 0.6:
+                return img
+            if now - t0 > timeout:
+                return img
+            last = img
+            time.sleep(0.15)
 
     def scan(self) -> Optional[List[dict]]:
         board = self.locate()
         if board is None:
-            self.log("Can't see the auction board. Open it (Browse tab) and keep it visible.")
-            return None
+            self.log("Waiting for the auction board - open it (Browse tab) and keep it visible.")
+            t_end = time.time() + 120
+            while board is None and self.running and time.time() < t_end:
+                self.progress = "waiting for the auction board"
+                time.sleep(1.0)
+                board = self.locate()
+            if board is None:
+                self.log("No auction board found.")
+                return None
+            time.sleep(1.5)  # it has just opened: let the first page load
         if self.hwnd:
             af.force_foreground(self.hwnd)
             time.sleep(0.2)
@@ -626,8 +719,12 @@ class AuctionReader:
             if not self.running:
                 return None
             self.progress = f"search '{term}' ({ti + 1}/{len(terms)})"
-            self._type_search(board, term)
+            before = self.grab(board.list_region()).astype(np.int16)
+            if not self._type_search(board, term):
+                self.log(f"Could not type '{term}' into the search bar - skipping it.")
+                continue
             time.sleep(self.s.wait_after_typing_s)
+            self._wait_results(board, before)
             self.wheel(px, py, -60)          # back to the top
             time.sleep(self.s.wait_after_scroll_s)
             by_pos: Dict[int, dict] = {}     # position in the list -> row (keeps true duplicates)
@@ -689,7 +786,7 @@ class AuctionReader:
         if self.s.save_debug_images:
             os.makedirs(os.path.join(HERE, "auction_debug"), exist_ok=True)
             af.write_png(os.path.join(HERE, "auction_debug", f"list_{int(time.time() * 1000)}.png"), crop)
-        return read_rows(crop, self.ocr, up)
+        return read_rows(crop, self, up)
 
     # ---- loop --------------------------------------------------------------
     def run_forever(self) -> None:
