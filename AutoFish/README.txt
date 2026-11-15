@@ -183,7 +183,7 @@ If a name/price is read wrong, set "save_debug_images": true in
 auction_settings.json, run a scan and send me the auction_debug folder.
 
 
-AUCTION BOT (auction_bot.py) - trades by itself (version 2.2)
+AUCTION BOT (auction_bot.py) - trades by itself (version 2.3)
 =============================================================
 1. Open the auction board (Browse tab), double-click START_AUCTION_BOT.bat,
    press START or F8. Hands off the mouse while it runs.
@@ -252,6 +252,31 @@ limit...), the log says so and that read is NOT used for floors, market
 sales or "sold" - only a complete read counts. A cycle skips its remaining
 searches after 20 minutes ("max_cycle_min"). Your floor history and settings
 from 2.1 are kept.
+
+2.3 - SAFER BOOKKEEPING (from a full code review):
+ - before the FIRST 2.3 run: open auction_bot.xlsx (Inventory sheet) and check
+   that every item listed there really is in your bag; delete any that aren't
+   from auction_bot_state.json's "holdings" (older versions could book a
+   listing that sold while the bot was off as "back in the bag").
+ - My Listings: a listing is only counted missing on a complete, trusted read,
+   so the last listing is no longer stuck forever after an empty read.
+ - copies coming back to the bag (expired, never went up) are only sold again
+   once the Sell tab shows they are really there - never your own copy. On the
+   first run the bot first reads the Sell tab to learn how many of each item
+   are YOURS.
+ - no buying an item until its whole list was read in the last hour (a cheaper
+   copy may be further down); prices that weren't read cleanly are never used
+   as floors (and pause buying that item while they are up, with a log line).
+ - floors: a one-scan spike or sweep no longer counts as a resale price; Gold
+   Ore/Opal need 6h+ of floor history before a long-term buy.
+ - coin balance: read twice the same before it is trusted; a misread "after"
+   balance pauses buying instead of recording a wrong price.
+ - an old "Bought ..." / "Listed ..." message still on screen no longer counts
+   as a new buy or listing; "maximum items listed" counts as failed.
+ - paper trading never touches the real 24h spend cap or the drawdown baseline.
+ - a seller's name containing "limited" no longer makes an item "Limited".
+ - enchanted listings are never bought (the Sell tab can't tell them apart).
+ - the window can no longer freeze (which also stopped F8).
 
 GRAPH: blue = coins, green = net worth (coins + bought items at today's
 floor after the fee). Buying turns coins into items, so coins dip while net
