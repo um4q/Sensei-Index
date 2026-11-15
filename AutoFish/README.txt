@@ -28,8 +28,15 @@ watches all of them at once and switches to whichever window needs a key
 press (a cast, or the reel minigame). The log names them Window 1, 2, ...
 * Tile the windows so NONE of them overlap each other (and keep the
   AutoFish window off them) - it reads each window from the screen.
-* Only one minigame can be played at a time; if two bite together the
+* By default one minigame is played at a time; if two bite together the
   second waits its turn.
+* Tick "Play all windows' minigames at the same time" to play them in
+  parallel instead: AutoFish watches every reel bar at once, works out
+  when each window next needs a press, and switches to that window just
+  before its press (Windows only sends keys to the window in front, so
+  the windows take turns only at the moment of each press). If presses
+  seem to go to the wrong window, raise focus_settle_ms in
+  autofish_settings.json (60 -> 100).
 * Click into any Roblox window to start/resume; if you click into another
   program, everything pauses.
 
