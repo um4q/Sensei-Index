@@ -44,7 +44,7 @@ sys.path.insert(0, HERE)
 import autofish as af  # noqa: E402  (screen capture, keys, PNG writer)
 
 APP = "AuctionReader"
-VERSION = "1.5"
+VERSION = "1.6"
 SETTINGS_PATH = os.path.join(HERE, "auction_settings.json")
 
 
@@ -57,6 +57,7 @@ class ARSettings:
     scroll_notches: int = 2         # mouse-wheel notches per step
     wait_after_scroll_s: float = 0.35
     max_pages_per_term: int = 400
+    max_scan_s: float = 240.0       # one search never takes longer than this
     ocr_backend: str = "auto"       # auto | windows | tesseract
     toggle_hotkey: str = "F7"
     window_title: str = "Roblox"
@@ -647,12 +648,16 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> Li
     return out
 
 
-def find_thumb_in(grab, board: "Board") -> Optional[Tuple[int, int, int, int, int]]:
-    x0, y0 = board.pt(175.5, 49)       # right of the row borders (a hovered row has a bright one)
+def find_thumb_in(grab, board) -> Optional[Tuple[int, int, int, int, int]]:
+    """The scroll bar handle right of the Buy buttons: (x, y_mid, height,
+    region_top, region_bottom) in screen px, or None (no scroll bar).
+    Fixed: only FULL-height columns are the track's border (a short list has
+    a tall handle - 60-95 % of the track - and was thrown away before)."""
+    x0, y0 = board.pt(175.5, 49)
     x1, y1 = board.pt(181.5, 249)
     img = grab((x0, y0, max(3, x1 - x0), y1 - y0)).astype(np.int16)
     bright = img.max(axis=2) > 85
-    cols = bright.mean(axis=0) < 0.6          # drop full-height lines (the track's border)
+    cols = bright.mean(axis=0) < 0.97         # the border line runs the full height
     if not cols.any():
         return None
     sub = bright[:, cols]
@@ -662,7 +667,7 @@ def find_thumb_in(grab, board: "Board") -> Optional[Tuple[int, int, int, int, in
     if not rs:
         return None
     a, b = max(rs, key=lambda t: t[1] - t[0])
-    if b - a + 1 > 0.9 * (y1 - y0):
+    if b - a + 1 > 0.97 * (y1 - y0):
         return None
     col_idx = np.flatnonzero(cols)
     hits = bright[a:b + 1][:, cols].sum(axis=0)
@@ -672,23 +677,96 @@ def find_thumb_in(grab, board: "Board") -> Optional[Tuple[int, int, int, int, in
     return (int(round(x0 + cx)), y0 + (a + b) // 2, b - a + 1, y0, y1)
 
 
-def scroll_shift(prev: np.ndarray, cur: np.ndarray) -> Optional[int]:
-    """How many pixels the list moved up between two pictures of it (0 = it
-    did not move).  None = no overlap found (scrolled more than a screen)."""
-    a = prev.max(axis=2)[:, ::3].astype(np.float32)
-    b = cur.max(axis=2)[:, ::3].astype(np.float32)
-    H = a.shape[0]
-    if float(np.abs(a - b).mean()) < 1.0:
-        return 0
-    best, best_d = None, None
-    for d in range(1, int(H * 0.85)):
-        diff = float(np.abs(a[d:] - b[:H - d]).mean())
-        if best is None or diff < best:
-            best, best_d = diff, d
-    base = float(np.abs(a - b).mean())
-    if best is None or best > 0.45 * base or best > 12.0:
+def _band(img: np.ndarray) -> np.ndarray:
+    """The part of a list picture that is compared: text + price columns only
+    (9 %..86 % of the width: no item icons - they animate - and no Buy/Cancel/
+    Sell buttons - they change colour when your coins change), without the
+    frame lines at the top and bottom (they don't scroll); every 2nd column."""
+    H, W = img.shape[:2]
+    m = max(2, int(round(0.012 * H)))
+    return img[m:H - m, int(0.09 * W):int(0.86 * W):2].max(axis=2).astype(np.float32)
+
+
+def _err_curve(a: np.ndarray, b: np.ndarray, maxd: int, rstep: int = 1) -> Dict[int, float]:
+    h = a.shape[0]
+    out = {}
+    for d in range(-maxd, maxd + 1):
+        if d >= 0:
+            x, y = a[d::rstep], b[:h - d:rstep]
+        else:
+            x, y = a[:h + d:rstep], b[-d::rstep]
+        n = min(len(x), len(y))
+        out[d] = float(np.abs(x[:n] - y[:n]).mean())
+    return out
+
+
+def list_shift(prev: np.ndarray, cur: np.ndarray, expect: Optional[float] = None,
+               max_frac: float = 0.8) -> Optional[int]:
+    """How many pixels the list content moved UP between two pictures of it
+    (negative = it moved down).  0 = it did not move - also when icons
+    animate, a row lights up or the Buy buttons change colour.  None = it
+    can't be told reliably: moved more than max_frac of a screen, the list
+    changed, or several row offsets match about equally (identical listings).
+    `expect` (pixels, e.g. from how far the scroll handle moved) picks between
+    equally good matches and rejects a match far from it."""
+    a, b = _band(prev), _band(cur)
+    h = a.shape[0]
+    maxd = max(4, int(max_frac * h))
+    coarse = {2 * d: e for d, e in _err_curve(a[::2], b[::2], maxd // 2).items()}   # every 2nd row/offset
+    typical = float(np.median(list(coarse.values())))       # what a wrong offset scores
+    picked: List[int] = []
+    for d in sorted(coarse, key=coarse.get):                 # refine the 4 best basins at full resolution
+        if all(abs(d - p) > 6 for p in picked):
+            picked.append(d)
+        if len(picked) == 4:
+            break
+    fine: Dict[int, float] = {0: _one(a, b, 0)}
+    for p in picked:
+        for d in range(p - 2, p + 3):
+            if -maxd <= d <= maxd and d not in fine:
+                fine[d] = _one(a, b, d)
+    err = dict(coarse)
+    err.update(fine)
+    best = min(fine, key=fine.get)
+    e_best = fine[best]
+
+    def runner_up(d: int) -> float:                          # best score clearly away from d
+        return min((e for k, e in err.items() if abs(k - d) > 6), default=1e9)
+
+    tol = None if expect is None else max(30.0, 0.2 * abs(expect))
+    if typical < 2.0:                                        # featureless (empty list): nothing can move
+        return 0 if fine[0] < 2.0 else None
+    if e_best >= 0.45 * typical:
+        return None                                          # nothing matches: moved too far / list replaced
+    if fine[0] <= e_best * 1.25 + 0.3 and fine[0] <= 0.6 * runner_up(0) and (expect is None or abs(expect) <= tol):
+        return 0                                             # not moved, whatever else changed
+    if e_best <= 0.6 * runner_up(best):                      # one clear match: trust the pixels,
+        return best if expect is None or abs(best - expect) <= max(40.0, 0.35 * abs(expect)) else None
+    if expect is None:
+        return None                                          # identical rows: can't tell which
+    groups: List[int] = []                                   # equally good matches, one per basin
+    for d in sorted((k for k in err if err[k] <= e_best * 1.5 + 0.6), key=err.get):
+        if all(abs(d - g) > 6 for g in groups):
+            groups.append(d)
+    d = min(groups, key=lambda g: abs(g - expect))
+    if abs(d - expect) > tol:
         return None
-    return best_d
+    best_near = min(range(d - 2, d + 3), key=lambda k: _one(a, b, k) if -maxd <= k <= maxd else 1e9)
+    return best_near
+
+
+def _one(a: np.ndarray, b: np.ndarray, d: int) -> float:
+    h = a.shape[0]
+    if d >= 0:
+        x, y = a[d:], b[:h - d]
+    else:
+        x, y = a[:h + d], b[-d:]
+    return float(np.abs(x - y).mean()) if len(x) else 1e9
+
+
+def scroll_shift(prev: np.ndarray, cur: np.ndarray) -> Optional[int]:
+    """(old name) see list_shift."""
+    return list_shift(prev, cur)
 
 
 # =============================================================================
@@ -703,6 +781,9 @@ class AuctionReader:
         self.status = "Stopped"
         self.progress = ""
         self.found = 0
+        self.aborted = False
+        self.scan_complete = False
+        self.scan_end = ""
         self.ocr = None
         self.last_file = ""
         self.vocab: Dict[str, int] = {}     # item names seen (spelling -> times seen)
@@ -782,17 +863,30 @@ class AuctionReader:
                                int(round((y - vy) * 65535 / max(1, vh - 1))), 0, 0x0001 | 0x8000 | 0x4000, 0, 0)
         u.SendInput(1, (af.INPUT * 1)(inp), af.ctypes.sizeof(af.INPUT))
 
-    def drag_to(self, x0: int, y0: int, x1: int, y1: int, hold: bool = False) -> None:
-        """Press at (x0, y0), slide to (x1, y1) in small steps; release unless hold."""
+    def release_mouse(self) -> None:
+        """Left button up, unless Windows says it is already up.  Called before
+        and after every scan, so a crash/abort mid-drag can never leave Roblox
+        dragging (the next click would then be a drag, not a click)."""
+        try:
+            down = bool(af._user32.GetAsyncKeyState(0x01) & 0x8000)     # VK_LBUTTON
+        except Exception:
+            down = True
+        if down or getattr(self, "_ldown", False):
+            self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
+            time.sleep(0.03)
+
+    def drag_to(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        """Press at (x0, y0), slide to (x1, y1) in small steps, ALWAYS release."""
         self.move(x0, y0)
         self._mouse(af.MOUSEEVENTF_LEFTDOWN, 0)
-        time.sleep(0.08)
-        n = max(2, int(abs(y1 - y0) / 6))
-        for i in range(1, n + 1):
-            self.move_raw(int(x0 + (x1 - x0) * i / n), int(y0 + (y1 - y0) * i / n))
-            time.sleep(0.01)
-        time.sleep(0.05)
-        if not hold:
+        try:
+            time.sleep(0.06)
+            n = max(1, int(max(abs(y1 - y0), abs(x1 - x0)) / 6))
+            for i in range(1, n + 1):
+                self.move_raw(int(round(x0 + (x1 - x0) * i / n)), int(round(y0 + (y1 - y0) * i / n)))
+                time.sleep(0.01)
+            time.sleep(0.04)
+        finally:
             self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
 
     def click(self, x: int, y: int) -> None:
@@ -803,6 +897,10 @@ class AuctionReader:
         time.sleep(0.05)
 
     def _mouse(self, flags: int, data: int) -> None:
+        if flags & af.MOUSEEVENTF_LEFTDOWN:
+            self._ldown = True
+        if flags & af.MOUSEEVENTF_LEFTUP:
+            self._ldown = False
         inp = af.INPUT(type=af.INPUT_MOUSE)
         inp.mi = af.MOUSEINPUT(0, 0, data & 0xFFFFFFFF, flags, 0, 0)
         arr = (af.INPUT * 1)(inp)
@@ -932,11 +1030,11 @@ class AuctionReader:
         while True:
             img = self.grab(board.list_region()).astype(np.int16)
             now = time.time()
-            if last is not None and float(np.abs(img - last).mean()) < 1.0:
+            if last is not None and float(np.abs(_band(img) - _band(last)).mean()) < 1.0:
                 stable_since = stable_since or now
             else:
                 stable_since = None
-            changed = before is None or float(np.abs(img - before).mean()) > 2.0
+            changed = before is None or float(np.abs(_band(img) - _band(before)).mean()) > 2.0
             if stable_since and now - stable_since >= 0.4 and (changed or now - t0 > 2.5) and now - t0 > 0.6:
                 return img
             if now - t0 > timeout:
@@ -997,124 +1095,266 @@ class AuctionReader:
     class _Abort(Exception):
         pass
 
-    def scan_term(self, board: Board, term: Optional[str], on_screen=None,
-                  need_price: bool = True) -> Optional[Dict[int, dict]]:
+    def scan_term(self, board, term, on_screen=None, need_price: bool = True):
         """Search `term`, scroll through every result and read each row.
         Returns {position in the list: row}.  `on_screen(img, rows)` is called
-        for every new screen (rows carry "screen_y", the middle of the row on
-        the screen right now); if it returns True the scan stops at once with
-        that screen still showing, and self.aborted is set."""
+        for every new screen (rows carry "screen_y"); if it returns True the scan
+        stops at once with that screen still showing, and self.aborted is set.
+
+        Scrolling never goes back up.  It ends when the scroll bar handle can't go
+        further (it moved less than asked), when the wheel no longer moves the
+        list, after 3 unreadable steps in a row, or at a page/time cap.  The mouse
+        button is only held while the handle is being moved (~0.1 s per page)."""
         self.aborted = False
+        self.scan_complete = False   # True only when the list was read from its top to its end
+        self.scan_end = ""           # why it stopped: end/changed/aborted/timeout/lost/pagecap/stopped/notyped
+        self.release_mouse()
         px, py = board.scroll_point()
-        notches = max(1, int(self.s.scroll_notches))
         if term is not None:   # None: read whatever list is showing (My Listings, Sell tab)
             before = self.grab(board.list_region()).astype(np.int16)
             if not self._type_search(board, term):
                 self.log(f"Could not type '{term}' into the search bar - skipping it.")
+                self.scan_end = "notyped"
                 return None
             time.sleep(self.s.wait_after_typing_s)
             self._wait_results(board, before)
-        by_pos: Dict[int, dict] = {}     # position in the list -> row (keeps true duplicates)
-        pitch = max(8.0, 32.0 * board.s)
-        lx, ly, lw, lh = board.list_region()
-        state = {"offset": 0.0}
+        by_pos: Dict[int, dict] = {}
+        region = board.list_region()
+        lx, ly, lw, lh = region
+        st = {"offset": 0.0, "pitch": None, "guess": False, "prev": None,
+              "deadline": time.time() + float(self.s.max_scan_s)}
+
+        def key(r):
+            return (r["item"].lower(), r["seller"].lower(), r["price"], r.get("qty", 1))
 
         def take(img):
+            st["prev"] = img
             rows = self.read_screen_img(img, board, need_price)
+            if st["pitch"] is None:
+                tops = sorted(r["y"] for r in rows)
+                gaps = [b - a for a, b in zip(tops, tops[1:]) if 24 * board.s < b - a < 40 * board.s]
+                st["pitch"] = float(np.median(gaps)) if gaps else 32.0 * board.s
             for row in rows:
                 row["item"] = self.canonical(row["item"])
                 row["screen_y"] = int(ly + row["y"] + row.get("h", 26 * board.s) / 2)
-                pos = int(round((state["offset"] + row["y"]) / pitch))
+                pos = int(round((st["offset"] + row["y"]) / st["pitch"]))
                 row["pos"] = pos
-                if pos not in by_pos:
-                    by_pos[pos] = row
+                if pos in by_pos:
+                    continue
+                if st["guess"] and any(key(r) == key(row) for r in by_pos.values()):
+                    continue        # a position was estimated in this scan: skip listings already read
+                by_pos[pos] = row
             self.found = len(by_pos)
             if on_screen is not None and on_screen(img, rows):
                 self.aborted = True
                 raise AuctionReader._Abort()
 
         try:
-            use_wheel = False
-            thumb = self.find_thumb(board)
-            if thumb is not None:
-                # drag the scroll bar handle: much faster than the mouse wheel
-                tx, ty, th, top, bottom = thumb
-                self.drag_to(tx, ty, tx, top - 5)          # handle to the very top
+            handle = self.find_thumb(board)
+            from_top = True
+            for attempt in range(2):
+                if handle is None:
+                    break
+                hx, hy, hh, r0, r1 = handle
+                if attempt and hy - hh / 2.0 - r0 <= 0.04 * (r1 - r0):
+                    break                                         # it is at the top
+                self.drag_to(hx, hy, hx, r0 - 5)                 # handle to the very top
                 time.sleep(self.s.wait_after_scroll_s)
-                thumb = self.find_thumb(board)
-            if thumb is None:
-                self.wheel(px, py, -60)                     # short list / no handle: wheel
+                handle = self.find_thumb(board)
+            if handle is not None and handle[1] - handle[2] / 2.0 - handle[3] > 0.04 * (handle[4] - handle[3]):
+                from_top = False                                  # the drag to the top didn't work
+                self.log("Couldn't scroll this list back to its top - reading it from here (incomplete).")
+            if handle is None:
+                self.wheel(px, py, -60)                           # no handle (short list): wheel
                 time.sleep(self.s.wait_after_scroll_s)
-            prev = self.grab(board.list_region())
-            take(prev)
-            if thumb is not None:
-                tx, ty, th, top, bottom = thumb
-                H = prev.shape[0]
-                step = max(1.0, 0.7 * th)                   # handle px per ~0.7 screen (first guess)
-                y = float(ty)
-                self.move(tx, ty)
-                self._mouse(af.MOUSEEVENTF_LEFTDOWN, 0)
-                time.sleep(0.08)
-                still = 0
-                try:
-                    for page in range(self.s.max_pages_per_term):
-                        if not self.running:
-                            return None
-                        y_try = min(float(bottom + 5), y + step)
-                        self.move_raw(tx, int(round(y_try)))
-                        time.sleep(self.s.wait_after_scroll_s)
-                        img = self.grab(board.list_region())
-                        shift = scroll_shift(prev, img)
-                        if shift is None:                   # jumped more than a screen: go back halfway
-                            step = max(1.0, step * 0.5)
-                            self.move_raw(tx, int(round(y + step)))
-                            time.sleep(self.s.wait_after_scroll_s)
-                            img = self.grab(board.list_region())
-                            shift = scroll_shift(prev, img)
-                            y_try = y + step
-                            if shift is None:
-                                self.log("Lost track of the list position - some rows may be missing.")
-                                shift = int(0.6 * H)
-                        y = y_try
-                        if shift == 0:
-                            still += 1
-                            if state["offset"] == 0 and still >= 2:
-                                use_wheel = True            # the drag never moved the list
-                                self.log("The scroll bar didn't respond - using the mouse wheel instead.")
-                                break
-                            if still >= 2 or y >= bottom:
-                                break                       # bottom of the list
-                            step *= 2
-                            continue
-                        still = 0
-                        state["offset"] += shift
-                        prev = img
-                        take(img)
-                        step = max(1.0, min(4.0 * th + 4, step * (0.7 * H) / shift))
-                finally:
-                    self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
-            if thumb is None or use_wheel:
-                for page in range(self.s.max_pages_per_term):
-                    if not self.running:
-                        return None
-                    self.wheel(px, py, notches)
-                    time.sleep(self.s.wait_after_scroll_s)
-                    img = self.grab(board.list_region())
-                    shift = scroll_shift(prev, img)
-                    if shift == 0:
-                        break
-                    if shift is None:
-                        self.wheel(px, py, -notches)
-                        time.sleep(self.s.wait_after_scroll_s)
-                        notches = max(1, notches // 2)
-                        continue
-                    state["offset"] += shift
-                    notches = int(max(1, min(20, round(0.6 * img.shape[0] / max(1.0, shift / notches)))))
-                    prev = img
-                    take(img)
+            take(self.grab(region))
+            res = "wheel"
+            if handle is not None:
+                res = self._scroll_by_handle(board, take, st, handle)
+            if res == "wheel":
+                res = self._scroll_by_wheel(board, take, st, px, py)
+            if res == "end" and st["guess"]:
+                res = "changed"          # the list changed while it was read: rows may be missing/doubled
+            self.scan_end = res
+            self.scan_complete = res == "end" and from_top
+            if res == "stopped":
+                return None
         except AuctionReader._Abort:
-            pass
+            self.scan_end = "aborted"
+        finally:
+            self.release_mouse()
         return by_pos
+
+    def _drag_handle(self, x: int, y: int, dy: int) -> None:
+        """Press on the handle, slide it down by dy px, release (always)."""
+        self.move(x, y)
+        self._mouse(af.MOUSEEVENTF_LEFTDOWN, 0)
+        try:
+            time.sleep(0.06)
+            n = max(1, int(abs(dy) / 6))
+            for i in range(1, n + 1):
+                self.move_raw(x, int(round(y + dy * i / n)))
+                time.sleep(0.01)
+            time.sleep(0.04)
+        finally:
+            self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
+
+    def _scroll_by_handle(self, board, take, st, handle) -> str:
+        """Drag the handle down about half a screen per page.  The handle's own
+        position is the progress signal: if it moved less than asked, it is at
+        the bottom of its track = end of the list.  Returns "end", "stopped",
+        or "wheel" (the handle never responded); "end" = reached the end of the
+        list, "timeout"/"lost"/"pagecap" = stopped early (incomplete)."""
+        region = board.list_region()
+        H = region[3]
+        hx, hy, hh, r0, r1 = handle
+        k = H / max(1.0, float(hh))          # list px per handle px (handle = track * screen / list)
+        k_measured = False
+        screens = (r1 - r0) / max(1.0, float(hh))
+        # the handle sits `pad` px inside its region at the top; by symmetry its
+        # bottom edge is `pad` px above the region's bottom when the list is at its end
+        pad = min(max(0.0, (hy - hh / 2.0) - r0), 0.03 * (r1 - r0))
+        track_bottom = r1 - pad
+
+        def at_bottom(y, h):
+            return y + h / 2.0 >= track_bottom - 2
+        cap = int(min(self.s.max_pages_per_term, 2.0 * screens / 0.6 + 8))
+        fails = stalls = 0
+        for page in range(cap):
+            if not self.running:
+                return "stopped"
+            if time.time() > st["deadline"]:
+                self.log("This search is taking too long - moving on (some rows may be missing).")
+                return "timeout"
+            frac = 0.6 if k_measured else 0.45                 # careful until k is measured
+            step = int(max(1, min(round(frac * H / k), 0.45 * (r1 - r0))))
+            self._drag_handle(hx, hy, step)
+            time.sleep(self.s.wait_after_scroll_s)
+            img = self.grab(region)
+            now = self.find_thumb(board)
+            if now is None:                  # handle vanished (list got short / replaced)
+                fails += 1
+                st["guess"] = True           # this step was not measured: positions are estimates now
+                st["prev"] = img
+                if fails >= 3:
+                    self.log("Lost the scroll bar handle - stopping this search.")
+                    return "lost"
+                continue
+            moved = now[1] - hy
+            if abs(now[2] - hh) > max(3.0, 0.05 * hh):
+                st["guess"] = True           # the handle changed size = listings were added/removed meanwhile
+            hx, hy, hh = now[0], now[1], now[2]
+            expect = k * moved
+            shift = list_shift(st["prev"], img, expect=expect if (k_measured or moved == 0) else None)
+            if shift is None and moved > 0 and not k_measured:
+                shift = list_shift(st["prev"], img, expect=expect)    # identical rows: the handle decides
+            if moved <= 0:
+                # the handle did not go down: bottom of the track, or the press missed it
+                if shift not in (0, None):
+                    st["offset"] += shift
+                    take(img)
+                if at_bottom(hy, hh):
+                    return "end"             # end of the list
+                stalls += 1                  # the press missed / was ignored: measure and press again
+                if stalls >= 3:
+                    return "wheel"           # carry on from here with the mouse wheel
+                continue
+            stalls = 0
+            if shift is None or shift < 0:
+                fails += 1                   # can't tell how far: estimate from the handle, never go back
+                k_measured = False           # and re-learn list px per handle px from the next clean step
+                st["guess"] = True
+                st["offset"] += max(0.0, expect)
+                take(img)
+                if fails >= 3:
+                    self.log("Can't follow the list (it keeps changing) - stopping this search.")
+                    return "lost"
+            else:
+                fails = 0
+                st["offset"] += shift
+                take(img)
+                if shift > 0:
+                    kk = shift / moved
+                    k = kk if not k_measured else 0.5 * k + 0.5 * kk
+                    k_measured = True
+            if moved < 0.6 * step and at_bottom(hy, hh):
+                return "end"                 # it hit the bottom of its track: that was the last screen
+        self.log("This search hit its page limit - moving on (some rows may be missing).")
+        return "pagecap"
+
+    def _settled_grab(self, region, max_wait: float = 1.2):
+        """The wheel scrolls smoothly (~0.3-0.45 s): grab until two pictures 0.12 s
+        apart show no movement."""
+        a = self.grab(region)
+        t_end = time.time() + max_wait
+        while time.time() < t_end:
+            time.sleep(0.12)
+            b = self.grab(region)
+            if float(np.abs(_band(a) - _band(b)).mean()) < 1.5 or list_shift(a, b) == 0:
+                return b
+            a = b
+        return a
+
+    def _scroll_by_wheel(self, board, take, st, px, py) -> str:
+        """Mouse wheel.  The first step is ONE notch, to learn how far a notch
+        scrolls; then ~0.6 screen per step.  Ends when the wheel no longer moves
+        the list.  Never wheels back up, and the comparison picture is replaced
+        after every step (a stale one is what made 2.1 loop for 400 pages)."""
+        region = board.list_region()
+        H = region[3]
+        notches = 1
+        per_notch = None
+        cand: List[float] = []
+        fails = zeros = 0
+        warned = False
+        for page in range(int(self.s.max_pages_per_term)):
+            if not self.running:
+                return "stopped"
+            if time.time() > st["deadline"]:
+                self.log("This search is taking too long - moving on (some rows may be missing).")
+                return "timeout"
+            self.wheel(px, py, notches)
+            time.sleep(self.s.wait_after_scroll_s * 0.5)
+            img = self._settled_grab(region)
+            expect = per_notch * notches if per_notch else None
+            shift = list_shift(st["prev"], img)                       # the pixels alone first
+            if shift is None and expect:
+                shift = list_shift(st["prev"], img, expect=expect)    # identical rows: the step decides
+            if shift == 0:                                            # the wheel did nothing: end of the list -
+                zeros += 1                                            # unless the wheel event got lost, so
+                if zeros >= 2:                                        # one more try first
+                    return "end"
+                st["prev"] = img
+                continue
+            zeros = 0
+            if shift is None or shift < 0 or (expect and shift > 1.35 * expect + 40):
+                fails += 1                                            # can't tell how far: never go back,
+                st["guess"] = True                                    # place rows by the expected step
+                st["offset"] += expect if expect else 0.9 * H
+                take(img)
+                if expect is None and not warned:
+                    warned = True
+                    self.log("Couldn't measure how far the mouse wheel scrolls this list - some rows may be missed.")
+                if fails >= 3:
+                    self.log("Can't follow the list (it keeps changing) - stopping this search.")
+                    return "lost"
+                notches, per_notch, cand = 1, None, []  # re-learn the notch size from clean 1-notch steps
+                continue
+            fails = 0
+            st["offset"] += shift
+            take(img)
+            if shift >= 0.8 * (expect or 0):                          # a full step (not the end of the list)
+                pn = shift / notches
+                if per_notch is None:                                 # trust the notch size only after two
+                    cand.append(pn)                                   # 1-notch steps agree (a listing added
+                    if len(cand) >= 2 and abs(cand[-1] - cand[-2]) <= 0.15 * max(cand[-1], cand[-2]):
+                        per_notch = 0.5 * (cand[-1] + cand[-2])       # mid-step skews a single sample)
+                else:
+                    per_notch = 0.5 * per_notch + 0.5 * pn
+            if per_notch:                                   # grow at most x2 per step (one bad sample can't jump to the end)
+                notches = int(max(1, min(20, 2 * notches, round(0.6 * H / max(1.0, per_notch)))))
+        self.log("This search hit its page limit - moving on (some rows may be missing).")
+        return "pagecap"
 
     def read_screen_img(self, crop: np.ndarray, board: Board, need_price: bool = True) -> List[dict]:
         up = 3 if board.s < 1.4 else 2

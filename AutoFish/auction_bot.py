@@ -51,7 +51,15 @@ import autofish as af            # noqa: E402
 import auction_reader as ar      # noqa: E402
 
 APP = "AuctionBot"
-VERSION = "2.1"
+VERSION = "2.2"
+
+
+def ver(v) -> Tuple[int, ...]:
+    """'2.1' -> (2, 1); anything unreadable/missing counts as very old."""
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except (TypeError, ValueError):
+        return (0,)
 STATE_PATH = os.path.join(HERE, "auction_bot_state.json")
 SETTINGS_PATH = os.path.join(HERE, "auction_bot_settings.json")
 FEE_KEEP = 0.95                  # the auction house keeps 5%
@@ -119,6 +127,7 @@ class BotSettings(ar.ARSettings):
     sell_only_bought: bool = True           # only sell what the bot bought - your own items are safe
     # ---- safety ----------------------------------------------------------------------
     pause_on_drop_pct: float = 15.0         # pause buying if net worth falls this % below today's start
+    max_cycle_min: float = 20.0             # a cycle skips its remaining searches after this many minutes
     paper_trading: bool = False
     bot_hotkey: str = "F8"
     excel_out: str = "auction_bot.xlsx"
@@ -137,7 +146,7 @@ class BotSettings(ar.ARSettings):
                     setattr(s, f.name, type(getattr(s, f.name))(data[f.name]))
                 except (TypeError, ValueError):
                     pass
-        if data.get("settings_version") != VERSION:      # saved by an older version: new defaults
+        if ver(data.get("settings_version")) < (2, 0):   # saved by version 1.x: new defaults
             d = cls()
             if data.get("watch_items") in OLD_WATCH_DEFAULTS:
                 s.watch_items = d.watch_items
@@ -502,8 +511,8 @@ class AuctionBot(ar.AuctionReader):
         except Exception:
             pass
         self.market = Market(st.get("market"))
-        if st and st.get("version") != VERSION:
-            # older versions read stacks ("x42") as single items: their prices can't be trusted
+        if st and ver(st.get("version")) < (2, 1):
+            # before 2.1 stacks ("x42") were read as single items: those prices can't be trusted
             self.market.obs, self.market.floors = {}, {}
             self.market.sales = [x for x in self.market.sales if "unit" in x]
         self.trades: List[dict] = st.get("trades", [])
@@ -520,6 +529,7 @@ class AuctionBot(ar.AuctionReader):
         self.coins: Optional[int] = None
         self.cycle = 0
         self.buys_this_cycle = 0
+        self.bad_scans = 0
         self.pending: Optional[dict] = None
         self.stats = {"bought": 0, "sold": 0, "profit": 0}
         self.inventory_seen: List[Tuple[str, str]] = []
@@ -994,7 +1004,13 @@ class AuctionBot(ar.AuctionReader):
                 return
             now = time.time()
             if self.pending is None:
-                if not self.aborted and res:
+                if not self.scan_complete:
+                    if self.scan_end in ("timeout", "lost", "pagecap", "notyped"):
+                        self.bad_scans += 1
+                    self.log(f"'{term}': the list couldn't be read to its end ({self.scan_end}) - "
+                             f"floors and sales not updated from it.")
+                    return
+                if res:
                     gone = self.market.end_scan(term, sid, now)
                     if gone:
                         self.log(f"'{term}': {gone} listing(s) look sold since the last look.")
@@ -1093,6 +1109,10 @@ class AuctionBot(ar.AuctionReader):
         rows = self.scan_term(board, None)
         if rows is None or self.aborted:
             return
+        complete = self.scan_complete
+        if not complete:
+            self.log(f"My Listings couldn't be read to its end ({self.scan_end}) - only confirming "
+                     f"the listings it saw; nothing is booked as sold this time.")
         now = time.time()
         shown = [dict(r) for r in rows.values()]
         sellers = {norm(r["seller"]) for r in shown if r.get("seller")}
@@ -1108,7 +1128,7 @@ class AuctionBot(ar.AuctionReader):
                 shown.remove(match)
                 matched += 1
             plan.append((l, match))
-        if real and (not rows or matched < 0.5 * sum(1 for l in real if not l.get("unconfirmed"))) and \
+        if complete and real and (not rows or matched < 0.5 * sum(1 for l in real if not l.get("unconfirmed"))) and \
                 matched < len(real):
             if not rows or matched == 0 and len(real) >= 2:
                 self.log("My Listings didn't read properly - nothing changed this time.")
@@ -1117,6 +1137,8 @@ class AuctionBot(ar.AuctionReader):
             if match is not None:
                 l["seen"], l["missing"], l["unconfirmed"] = now, 0, False
                 continue
+            if not complete:
+                continue                       # not seen in a partial read: proves nothing
             if l.get("unconfirmed"):
                 # the listing never showed up: the item is still in the bag
                 self.listings.remove(l)
@@ -1245,7 +1267,7 @@ class AuctionBot(ar.AuctionReader):
                 return False
 
             rows = self.scan_term(board, None, on_screen, need_price=False)
-            if rows is not None:
+            if rows is not None and self.scan_complete:
                 self.inventory_seen = [(r["item"], r.get("sub", "")) for r in rows.values()]
             if not pick:
                 break
@@ -1356,9 +1378,23 @@ class AuctionBot(ar.AuctionReader):
         self.log(f"Cycle {self.cycle}: coins {fmt(self.coins)}, net worth {fmt(self.net_worth(now))}, "
                  f"{len(terms)} searches" + (f"  [buying paused: {self.pause_reason}]" if self.pause_reason else ""))
         self.tab(board, "browse")
+        t_cycle = time.time()
+        self.bad_scans = 0
         for i, term in enumerate(terms):
             if not self.running:
                 return False
+            if time.time() - t_cycle > 60.0 * self.s.max_cycle_min:
+                self.log(f"This cycle is taking over {self.s.max_cycle_min:g} min - skipping the last "
+                         f"{len(terms) - i} search(es) this time.")
+                break
+            if self.bad_scans >= 3:
+                self.log("Several searches couldn't be read - looking for the auction board again.")
+                board = self.locate()
+                if board is None:
+                    self.log("The auction board isn't where it was - starting a new cycle.")
+                    return False
+                self.tab(board, "browse")
+                self.bad_scans = 0
             self.progress = f"cycle {self.cycle}: '{term}' ({i + 1}/{len(terms)})"
             self.watch_term(board, term)
             self.save_state()

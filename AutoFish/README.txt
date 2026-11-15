@@ -134,7 +134,9 @@ Reads every listing on the auction board into an Excel file.
 2. Double-click START_AUCTION_READER.bat (first time it installs openpyxl
    too), then press START or F7. Don't touch the mouse while it scans -
    it clicks the search bar, types a, b, c ... z and scrolls each result
-   list with the mouse wheel.
+   list (by dragging its scroll bar, or with the mouse wheel). It only ever
+   scrolls DOWN, and a search never takes longer than 4 minutes
+   ("max_scan_s" in auction_settings.json).
 3. Results: auction_listings.xlsx next to the script ("Open Excel file"):
      Latest scan  every listing: item, rarity colour, price, seller,
                   time left, note (e.g. an enchant), which search found it
@@ -155,7 +157,7 @@ If a name/price is read wrong, set "save_debug_images": true in
 auction_settings.json, run a scan and send me the auction_debug folder.
 
 
-AUCTION BOT (auction_bot.py) - trades by itself (version 2.1)
+AUCTION BOT (auction_bot.py) - trades by itself (version 2.2)
 =============================================================
 1. Open the auction board (Browse tab), double-click START_AUCTION_BOT.bat,
    press START or F8. Hands off the mouse while it runs.
@@ -215,6 +217,15 @@ SAFETY
  - learning: an item that expired unsold needs a bigger margin next time
    (and is not bought again after 2 expiries in a week, or while one of
    ours has sat unsold for 48h).
+
+SCROLLING (2.2): each list is read top to bottom, never scrolling back up.
+Moving item icons, a highlighted row or Buy buttons changing colour no longer
+confuse it (2.1 could get stuck scrolling back and forth for minutes). If a
+list can't be read to its end (it kept changing, a search hit its time
+limit...), the log says so and that read is NOT used for floors, market
+sales or "sold" - only a complete read counts. A cycle skips its remaining
+searches after 20 minutes ("max_cycle_min"). Your floor history and settings
+from 2.1 are kept.
 
 GRAPH: blue = coins, green = net worth (coins + bought items at today's
 floor after the fee). Buying turns coins into items, so coins dip while net
