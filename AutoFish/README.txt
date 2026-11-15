@@ -47,7 +47,10 @@ Tick "Leviathan mode" when you only need the bite (the "!") to happen and
 don't care about catching the fish. As soon as the reel bar appears,
 AutoFish presses while the fish is far from the gold zone - three quick
 deliberate misses end the round - and then recasts straight away.
-"Stop on the first miss" is ignored in this mode. The "Bites" counter
+"Stop on the first miss" is ignored in this mode. With several windows,
+Leviathan mode always plays all minigames at the same time, and casting
+comes first: a window whose round just ended is recast the moment its Cast
+prompt shows (the Recast delay setting is skipped in this mode). The "Bites" counter
 shows how many bites were triggered.
 
 

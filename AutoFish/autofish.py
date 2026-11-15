@@ -35,7 +35,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.4"
+APP_VERSION = "1.5"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -1393,12 +1393,12 @@ class FishingBot:
         self._strip = (self.env.now(), img, (reg[0], reg[1]))
         return read_minigame(img, self.geom, (reg[0], reg[1]))
 
-    def _fresh_prompt(self, since: float) -> Optional[str]:
+    def _fresh_prompt(self, since: float, need: int = 2) -> Optional[str]:
         """Prompt state if it was read after `since`, else 'unknown' (None)."""
         since = max(since, self._last_key_t + self.PROMPT_SETTLE)
         recent = [st for (t, st) in self.prompt_hist if t >= since]
-        # two readings in a row must agree before we act on them
-        if len(recent) >= 2 and recent[-1] == recent[-2]:
+        # (normally) two readings in a row must agree before we act on them
+        if len(recent) >= need and all(r == recent[-1] for r in recent[-need:]):
             return recent[-1]
         return None
 
@@ -1447,7 +1447,7 @@ class FishingBot:
         reading = self._strip_scan()
         interval = self.FULL_SCAN_IDLE if self.geom is None else self.FULL_SCAN_KNOWN
         if self.state in (ST_START, ST_AFTER) or (self.state == ST_WAIT and not self._verified):
-            interval = min(interval, 0.15)  # we want fresh prompt readings here
+            interval = min(interval, 0.05 if s.leviathan else 0.15)  # we want fresh prompt readings here
         if (reading is None or not reading.visible) and now - self._last_full >= interval:
             full = self._full_scan(now)
             if full is not None and full.visible:
@@ -1685,7 +1685,7 @@ class FishingBot:
     def _on_no_minigame(self, now: float) -> float:
         s = self.s
         if self.state == ST_REEL:
-            if now - self.round_last_visible < self.END_GRACE:
+            if now - self.round_last_visible < (0.15 if s.leviathan else self.END_GRACE):
                 return 0.0
             # round over
             if self.round_total and self.round_filled >= self.round_total:
@@ -1714,24 +1714,25 @@ class FishingBot:
 
         if self.state == ST_AFTER:
             elapsed = now - self._state_t
-            if elapsed < s.recast_delay_s:
-                self.detail = f"recasting in {s.recast_delay_s - elapsed:.1f}s"
+            delay = 0.0 if s.leviathan else s.recast_delay_s   # Leviathan: recast the moment we can
+            if elapsed < delay:
+                self.detail = f"recasting in {delay - elapsed:.1f}s"
                 return 0.03
-            prompt = self._fresh_prompt(self._state_t + s.recast_delay_s - 0.2)
+            prompt = self._fresh_prompt(self._state_t + delay - 0.2, need=1 if s.leviathan else 2)
             if prompt == PROMPT_REEL:
                 self.log("Line is already in the water - waiting for a bite.")
                 self._cast_t = now
                 self._verified = True
                 self._set_state(ST_WAIT)
                 return 0.02
-            if prompt == PROMPT_CAST or elapsed >= s.recast_delay_s + self.PROMPT_WAIT:
+            if prompt == PROMPT_CAST or elapsed >= delay + (0.8 if s.leviathan else self.PROMPT_WAIT):
                 if prompt != PROMPT_CAST:
                     why = self.prompt.note or "no prompt"
                     self.log(f"Casting without seeing the Cast prompt ({why}).")
                 self._do_cast(now)
                 return 0.02
             self.detail = "looking for the Cast prompt"
-            return 0.03
+            return 0.01 if s.leviathan else 0.03
 
         if self.state == ST_WAIT:
             waited = now - self._cast_t
@@ -2116,7 +2117,7 @@ class MultiBot:
         if any(b.stopped_by_miss for b in bots):
             self.stop()
             return 0.05
-        if self.s.parallel_minigames and len(self.lanes) > 1:
+        if (self.s.parallel_minigames or self.s.leviathan) and len(self.lanes) > 1:
             return self._step_parallel(now)
         for _, b in self.lanes:
             b.focus_gate = None
@@ -2151,8 +2152,12 @@ class MultiBot:
             b.focus_gate = (lambda h=h: self.foreground() == h)
         reeling = [(h, b) for h, b in self.lanes if b.running and b.state == ST_REEL]
         switch_cost = self.s.focus_settle_ms / 1000.0 + 0.015
-        soon = any(b.plan_at is not None and b.plan_at - now < 0.3 for _, b in reeling)
-        for h, b in self.lanes:
+        lev = self.s.leviathan
+        soon = (not lev) and any(b.plan_at is not None and b.plan_at - now < 0.3 for _, b in reeling)
+        # Leviathan: casting is the priority - windows that need a cast go first
+        order = sorted(self.lanes, key=lambda hb: 0 if hb[1].state in (ST_AFTER, ST_START) else 1) \
+            if lev else self.lanes
+        for h, b in order:
             if not b.running:
                 continue
             if b.state != ST_REEL and soon:
@@ -2160,7 +2165,7 @@ class MultiBot:
             b.tick()
         reeling = [(h, b) for h, b in self.lanes if b.running and b.state == ST_REEL]
         if not reeling or self.s.dry_run:
-            return 0.0 if reeling else 0.02
+            return 0.0 if reeling else (0.005 if lev else 0.02)
         now = time.perf_counter()
         fg = self.foreground()
         cur = next((b for h, b in reeling if h == fg), None)
@@ -2320,7 +2325,7 @@ def run_gui() -> None:
     add_bool(10, "Keep this window on top", "always_on_top")
     add_bool(11, "Fish in EVERY Roblox window (switches between them)", "multi_window")
     add_bool(12, "Leviathan mode - only trigger the bite, then miss on purpose", "leviathan")
-    add_bool(13, "Play all windows' minigames at the same time (switches between presses)", "parallel_minigames")
+    add_bool(13, "Play all windows' minigames at the same time (always on in Leviathan mode)", "parallel_minigames")
 
     def apply_settings(*_):
         for attr, (v, lo, hi) in num_vars.items():
