@@ -35,7 +35,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -70,6 +70,7 @@ class Settings:
     leviathan: bool = False        # only trigger the bite: miss on purpose so the round ends fast
     multi_window: bool = True      # fish in every Roblox window at once (switches between them)
     focus_settle_ms: float = 60.0  # wait after switching windows before pressing
+    parallel_minigames: bool = False  # play every window's minigame at the same time
     # --- ui ----------------------------------------------------------------
     always_on_top: bool = True
 
@@ -1185,6 +1186,8 @@ class FishingBot:
                  log: Optional[Callable[[str], None]] = None, name: str = "") -> None:
         self.name = name                     # "Window 2" etc. when fishing in several windows
         self.ignore_focus = False            # multi-window: the controller handles focus
+        self.focus_gate: Optional[Callable[[], bool]] = None  # parallel: may I press right now?
+        self.plan_at: Optional[float] = None  # parallel: when this window wants its next reel press
         self.stopped_by_miss = False
         self.s = settings
         self.env = env
@@ -1605,6 +1608,7 @@ class FishingBot:
             if (since >= s.min_press_gap_s and (self._outcome_seen or since > 0.25)
                     and (not inside or since > 0.6)):
                 self._armed = True
+        self.plan_at = None
         if s.leviathan:
             return self._leviathan_press(now, rd)
         if not self._armed or rd.pointer is None or rd.zone is None:
@@ -1624,8 +1628,13 @@ class FishingBot:
             c0 = zone_t[1]
         wait = plan_press(p, v, c0, (zr - zl) / 2.0, vz, rd.width, self.current_lead(),
                           s.zone_margin_pct / 100.0, self.env.now() - t_fish, dz, walls=walls)
+        if wait is not None:
+            self.plan_at = self.env.now() + wait
         if wait is None or wait > min(0.04, max(1.5 * self._loop_dt, 0.004)):
             return 0.0  # not yet - look again
+        if self.focus_gate is not None and not self.focus_gate():
+            return 0.0  # no keyboard here right now: skip this pass, the next one comes soon
+        self.plan_at = None
         if wait > 0:
             self.env.sleep_precise(wait)  # sub-frame precise timing
         self._armed = False
@@ -1660,6 +1669,10 @@ class FishingBot:
         safe = hw + max(0.12 * rd.width, hw)   # far outside the gold, even after our input lag
         if abs(rd.pointer - (zl + zr) / 2.0) < safe:
             return 0.0
+        self.plan_at = now
+        if self.focus_gate is not None and not self.focus_gate():
+            return 0.0  # another window has the keyboard: the controller will switch here
+        self.plan_at = None
         self._armed = False
         self._outcome_seen = False
         self.round_presses += 1
@@ -2103,6 +2116,10 @@ class MultiBot:
         if any(b.stopped_by_miss for b in bots):
             self.stop()
             return 0.05
+        if self.s.parallel_minigames and len(self.lanes) > 1:
+            return self._step_parallel(now)
+        for _, b in self.lanes:
+            b.focus_gate = None
         # a window that is reeling gets the whole loop (fast, precise presses)
         for h, b in self.lanes:
             if b.running and b.state == ST_REEL:
@@ -2123,6 +2140,39 @@ class MultiBot:
                 return 0.0
             delay = min(delay, max(0.0, d))
         return delay
+
+    def _step_parallel(self, now: float) -> float:
+        """Every window's minigame at once.  Only the active window receives
+        key presses, so: look at all of them, work out when each one next
+        needs a press, and switch to the window whose press comes first just
+        early enough for the switch to settle."""
+        fg = self.foreground()
+        for h, b in self.lanes:
+            b.focus_gate = (lambda h=h: self.foreground() == h)
+        reeling = [(h, b) for h, b in self.lanes if b.running and b.state == ST_REEL]
+        switch_cost = self.s.focus_settle_ms / 1000.0 + 0.015
+        soon = any(b.plan_at is not None and b.plan_at - now < 0.3 for _, b in reeling)
+        for h, b in self.lanes:
+            if not b.running:
+                continue
+            if b.state != ST_REEL and soon:
+                continue  # don't steal the keyboard for a cast right before a reel press
+            b.tick()
+        reeling = [(h, b) for h, b in self.lanes if b.running and b.state == ST_REEL]
+        if not reeling or self.s.dry_run:
+            return 0.0 if reeling else 0.02
+        now = time.perf_counter()
+        fg = self.foreground()
+        cur = next((b for h, b in reeling if h == fg), None)
+        if cur is not None and cur.plan_at is not None and cur.plan_at - now < switch_cost + 0.05:
+            return 0.0  # the active window presses next: stay
+        cands = [(b.plan_at, h, b) for h, b in reeling if b.plan_at is not None
+                 and (self.s.leviathan or b.plan_at - now >= switch_cost * 0.9)]
+        if cands:
+            t, h, b = min(cands, key=lambda c: c[0])
+            if h != fg and (cur is None or cur.plan_at is None or t < cur.plan_at):
+                b.env.ensure_focus()
+        return 0.0
 
     # ---------------------------------------------------------------- status
     def current_lead(self) -> float:
@@ -2270,6 +2320,7 @@ def run_gui() -> None:
     add_bool(10, "Keep this window on top", "always_on_top")
     add_bool(11, "Fish in EVERY Roblox window (switches between them)", "multi_window")
     add_bool(12, "Leviathan mode - only trigger the bite, then miss on purpose", "leviathan")
+    add_bool(13, "Play all windows' minigames at the same time (switches between presses)", "parallel_minigames")
 
     def apply_settings(*_):
         for attr, (v, lo, hi) in num_vars.items():
