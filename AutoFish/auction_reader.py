@@ -436,7 +436,12 @@ BY_WORDS = r"(?:by|bv|try|wy|ty|ry|hy|ly|hv|tv|bry|bey|boy)"
 SELLER_RE = re.compile(r"(?:^|[^A-Za-z])" + BY_WORDS + r"[:;,.]?\s+([A-Za-z0-9_]{2,24})", re.I)
 TIME_RE = re.compile(r"(\d{1,3})\s*([hmd])\w*", re.I)
 
-RARITY_BY_COLOUR = {"white": "Limited", "blue": "Legendary", "red": "Mythic"}
+# name colour -> rarity (the player told us). Mutations recolour the name
+# (Crystal = purple, Celestial = gold...), so for mutated items this is the
+# mutation, not the rarity. White = Limited (event item; its real tier is
+# written on it, e.g. "Limited, Mythic tier").
+RARITY_BY_COLOUR = {"green": "Uncommon", "blue": "Rare", "purple": "Epic", "orange": "Legendary",
+                    "red": "Mythic", "gold": "Divine", "white": "Limited"}
 
 
 def colour_name(rgb: np.ndarray) -> str:
@@ -507,6 +512,20 @@ def segment_rows(crop: np.ndarray) -> List[Tuple[int, int]]:
             if e_ - s_ + 1 >= 0.85 * full and s_ > 0 and e_ < m.shape[0] - 1]
 
 
+def parse_price(text: str) -> Tuple[int, bool]:
+    """(price, trustworthy).  Trustworthy only if the text is a clean number:
+    "1,000,000" / "1000000" - not "6S0,000", "100,00" or "800,0000" (a digit
+    lost or added by the text reader)."""
+    t = re.sub(r"\s+", "", text or "")
+    t = t.strip("cCeE©@¢€$:;|'`\"")                  # coin icon / junk at the ends
+    t = re.sub(r"(?<=[\d,.])[oO]|[oO](?=[\d,.])", "0", t)          # O read for 0, inside the number
+    digits = re.sub(r"\D", "", t)
+    if not digits:
+        return 0, False
+    ok = bool(re.fullmatch(r"\d{1,3}(,\d{3})+|\d{1,3}(\.\d{3})+|\d{1,10}", t))
+    return int(digits), ok and int(digits) > 0
+
+
 def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> List[dict]:
     """Cut every whole row into a name, a seller and a price strip, stack all
     strips into one picture, read it with one OCR call, and put it together."""
@@ -552,6 +571,7 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> Li
         digits = re.sub(r"\D", "", re.sub(r"[cC¢€]\s*$", "", pr.replace("O", "0").replace("o", "0")))
         if not nm or (need_price and (not digits or int(digits) <= 0)):
             continue
+        p_strict, p_ok = parse_price(pr)
         st = st.replace("|", " ").strip()
         m = SELLER_RE.search(st)
         seller, left, extra = "", "", ""
@@ -568,7 +588,8 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> Li
         colour = colour_name(nm_img)
         out.append({"item": re.sub(r"\s+", " ", nm.replace("|", " ")).strip(" _-~*+'.,;:"), "seller": seller, "time_left": left,
                     "extra": extra, "price": int(digits) if digits else 0, "colour": colour, "sub": st,
-                    "rarity": RARITY_BY_COLOUR.get(colour, colour), "y": ya, "h": yb - ya + 1})
+                    "rarity": RARITY_BY_COLOUR.get(colour, colour), "y": ya, "h": yb - ya + 1,
+                    "price_text": pr, "price_ok": bool(p_ok and p_strict == (int(digits) if digits else 0))})
     return out
 
 
@@ -652,7 +673,12 @@ class AuctionReader:
                 self.vocab[known] += 1
                 return known
         m = difflib.get_close_matches(name, list(self.vocab), n=1, cutoff=0.86)
-        if m:
+        # never snap across a different first word: "Shadow Heart of the White
+        # Death" is another item (a mutation), not a misspelling of the Heart
+        if m and name.split()[:1] and m[0].split()[:1] and \
+                (name.split()[0].lower() == m[0].split()[0].lower() or
+                 difflib.SequenceMatcher(None, name.split()[0].lower(), m[0].split()[0].lower()).ratio() >= 0.8) and \
+                len(name.split()) == len(m[0].split()):
             self.vocab[m[0]] += 1
             return m[0]
         self.vocab[name] = 1
@@ -941,6 +967,7 @@ class AuctionReader:
                 row["item"] = self.canonical(row["item"])
                 row["screen_y"] = int(ly + row["y"] + row.get("h", 26 * board.s) / 2)
                 pos = int(round((state["offset"] + row["y"]) / pitch))
+                row["pos"] = pos
                 if pos not in by_pos:
                     by_pos[pos] = row
             self.found = len(by_pos)

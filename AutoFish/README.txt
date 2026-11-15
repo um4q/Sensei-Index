@@ -155,48 +155,64 @@ If a name/price is read wrong, set "save_debug_images": true in
 auction_settings.json, run a scan and send me the auction_debug folder.
 
 
-AUCTION BOT (auction_bot.py) - trades by itself
-===============================================
-1. Run a full AuctionReader scan first (it uses auction_listings.xlsx as
-   its starting knowledge of prices and demand).
-2. Open the auction board (Browse tab), double-click START_AUCTION_BOT.bat,
+AUCTION BOT (auction_bot.py) - trades by itself (version 2.0)
+=============================================================
+1. Open the auction board (Browse tab), double-click START_AUCTION_BOT.bat,
    press START or F8. Hands off the mouse while it runs.
+2. Start with "Paper trading" ticked for an hour: it makes every decision
+   and records it (Trades sheet) without clicking Buy or List.
 
-Every cycle (a few minutes) it:
- - searches your WATCH LIST (editable in the window, ";" between items):
-     White Dragon Scale; Whitescale; White Death; Whitedeath;
-     Divine Darkness; Darkness Within; Abyssal Devastator; Gem
-   A term matches every item whose name contains it, so "White Death" also
-   covers Crystal/Frostbitten White Death, Heart of the White Death and
-   White Death armour; "Whitescale" is the Whitescale Helm/Plate/Greaves/
-   Sabatons set; "Gem" is every Gem of ... and the Mythic Gemstone.
- - only buys items on the watch list, and NEVER buys anything on the
-   "Never buy" list (Celestial Scepter, including Blazing/Charged/... ones),
- - BUYS any listing it can resell at a profit after the 5% fee (items it
-   hasn't seen sell at least once a day need 30% profit, the rest 15%,
-   max 2 held of one item); a STEAL
-   (price <= 40% of the item's value, e.g. a Divine Darkness for 100k) is
-   bought immediately,
- - reads My Listings: anything gone has SOLD - price, profit and the time
-   from listing to sale are recorded; undercut listings are cancelled and
-   relisted (never below cost + margin),
- - lists what it bought from the Sell tab, one at a time, just under the
-   cheapest competitor. RARE items (worth >= 250k, or Mythic/Limited):
-   ONE of each always stays in your bag,
- - tracks every listing it ever saw; listings that vanish early count as
-   market sales -> sales/day, sale price and hours-to-sale per item, which
-   drive values and prices. "Also search trending items" (off by default)
-   adds the busiest items it has learned to the searches (untick "Only buy
-   items on the watch list" too if you want it to buy those).
+WHAT IT WATCHES (all editable in the window, ";" between items)
+  Watch list   White Death; Whitedeath; White Dragon Scale; Whitescale;
+               Whiteflame Ember; Divine Darkness; Darkness Within;
+               Abyssal Devastator; Gem; Gold Ore; Opal
+               A term matches every item whose name contains it: "White
+               Death" also covers Crystal/Frostbitten White Death, Heart of
+               the White Death and White Death armour.
+  Never buy    Celestial Scepter; Abyssal  (a longer watch-list name wins,
+               so the Abyssal Devastator IS bought, other Abyssal items not)
+  High demand  White Dragon Scale; Heart of the White Death; Whiteflame
+               Ember; Darkness Within  -> the normal 15% margin applies
+               (other items need 30% until the bot has seen them sell daily)
+  Long term    Gold Ore; Opal -> bought only at <= 75% of their usual floor,
+               listed at least 25% over cost
+  Any rarity   Gold Ore; Opal -> bought whatever their rarity
+Rarity: nothing below Legendary is bought. Name colours: green Uncommon,
+blue Rare, purple Epic, orange Legendary, red Mythic, gold Divine, white
+Limited (always OK). Mutations (Crystal, Celestial, Frostbitten...) recolour
+the name, so a mutated item counts at its base item's rarity.
 
-Money rules (editable in the window): min profit %, slow-seller profit %,
-steal ratio, max share of your coins per buy, daily spend cap, coin
-reserve, max listings.
-"Paper trading" makes all decisions and records them without clicking.
-"known_values" in auction_bot_settings.json lets you tell it what rare
-items are worth (item=value; ...).
+PRICES = TODAY'S FLOOR
+Every search records each item's floor (cheapest listing), how many are
+listed, and a log line when a floor moves ("FLOOR: Abyssal Devastator
+floor 1,000,000 -> 800,000 (-20%)"). The window shows a live floor table;
+the Excel file has "Watched items", "Floor history" and one floor chart per
+item. A purchase is valued at what it can be resold for: just under the
+cheapest OTHER listing (all copies counted, enchanted and mutated copies
+kept apart). If an item's floor fell 20%+ in 24h, only steals are bought.
 
-Your balance is read every cycle and around every trade: a live graph in
-the window, and a "Balance" sheet with a chart in auction_bot.xlsx.
-Report sheets: Balance, Trades, Market, Market sales, Watchlist, Inventory.
-Memory between runs: auction_bot_state.json. Full log: auction_bot_log.txt.
+SAFETY
+ - the price is read twice (and must be a clean number) before clicking,
+   the row's button must say Buy, and the coins that left your balance must
+   match the price; anything odd PAUSES BUYING (orange line in the window,
+   "Resume buying" button). Selling keeps going.
+ - no buying while your balance can't be read; max 2 buys per cycle; max
+   share of coins per buy; daily cap (rolling 24h); coin reserve; bought
+   items may be at most 60% of your net worth; max 2 of one item (bag +
+   listed; 3 for high-demand, 5 for long-term).
+ - buying also pauses if net worth falls 15% below the day's start, or if
+   coins leave your balance without a purchase it recorded.
+ - EVERYTHING THE BOT BUYS IS RESOLD. Items you owned before are never
+   listed ("Only sell what the bot bought").
+ - a listing counts as SOLD only after it is missing from My Listings twice
+   in a row; a bad read of My Listings changes nothing.
+ - learning: an item that expired unsold needs a bigger margin next time
+   (and is not bought again after 2 expiries in a week, or while one of
+   ours has sat unsold for 48h).
+
+GRAPH: blue = coins, green = net worth (coins + bought items at today's
+floor after the fee). Buying turns coins into items, so coins dip while net
+worth should hold - watch the green line.
+Report: auction_bot.xlsx (Balance, Watched items, Floor history, Floor
+charts, Trades, Inventory, Market, Market sales). Memory:
+auction_bot_state.json. Full log: auction_bot_log.txt.
