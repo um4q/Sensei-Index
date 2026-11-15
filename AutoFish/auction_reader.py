@@ -44,7 +44,7 @@ sys.path.insert(0, HERE)
 import autofish as af  # noqa: E402  (screen capture, keys, PNG writer)
 
 APP = "AuctionReader"
-VERSION = "1.4"
+VERSION = "1.5"
 SETTINGS_PATH = os.path.join(HERE, "auction_settings.json")
 
 
@@ -140,7 +140,7 @@ while ($true) {
 
 
 class WindowsOCR:
-    name = "Windows OCR"
+    name = "Windows OCR (PowerShell)"
 
     def __init__(self) -> None:
         self.dir = tempfile.mkdtemp(prefix="auctionocr_")
@@ -171,8 +171,17 @@ class WindowsOCR:
             rgb = rgb[ys][:, xs]
         path = os.path.join(self.dir, f"img{self.n % 4}.png")
         af.write_png(path, rgb)
-        self.proc.stdin.write(path + "\n")
-        self.proc.stdin.flush()
+        try:
+            self.proc.stdin.write(path + "\n")
+            self.proc.stdin.flush()
+        except OSError:
+            code = self.proc.poll()
+            err = ""
+            try:
+                err = (self.proc.stderr.read() or "").strip().replace("\n", " ")[-400:]
+            except Exception:
+                pass
+            raise RuntimeError(f"PowerShell OCR stopped (exit code {code}): {err or 'no message'}")
         out = self.proc.stdout.readline().strip()
         if out.startswith("ERR"):
             raise RuntimeError(out)
@@ -207,6 +216,70 @@ class WindowsOCR:
                 self.proc.kill()
             except Exception:
                 pass
+
+
+class WinRTOCR:
+    """Windows' own OCR called directly from Python (pip: winrt-Windows.Media.Ocr
+    and friends) - no helper process, nothing to crash."""
+    name = "Windows OCR"
+
+    def __init__(self) -> None:
+        import asyncio
+        from winrt.windows.globalization import Language
+        from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
+        from winrt.windows.media.ocr import OcrEngine
+        from winrt.windows.storage.streams import DataWriter
+        self._SB, self._PF, self._DW = SoftwareBitmap, BitmapPixelFormat, DataWriter
+        eng = None
+        try:
+            lang = Language("en-US")
+            if OcrEngine.is_language_supported(lang):
+                eng = OcrEngine.try_create_from_language(lang)
+        except Exception:
+            eng = None
+        if eng is None:
+            eng = OcrEngine.try_create_from_user_profile_languages()
+        if eng is None:
+            raise RuntimeError("no OCR language installed")
+        self.engine = eng
+        self.loop = asyncio.new_event_loop()
+
+    async def _recognize(self, bmp):
+        return await self.engine.recognize_async(bmp)
+
+    def read(self, rgb: np.ndarray) -> List[dict]:
+        h, w = rgb.shape[:2]
+        if max(h, w) > 9000:
+            f = 9000.0 / max(h, w)
+            rgb = rgb[(np.arange(int(h * f)) / f).astype(int)][:, (np.arange(int(w * f)) / f).astype(int)]
+            h, w = rgb.shape[:2]
+        rgba = np.empty((h, w, 4), np.uint8)
+        rgba[..., :3] = rgb
+        rgba[..., 3] = 255
+        dw = self._DW()
+        dw.write_bytes(rgba.tobytes())
+        bmp = self._SB.create_copy_from_buffer(dw.detach_buffer(), self._PF.RGBA8, w, h)
+        res = self.loop.run_until_complete(self._recognize(bmp))
+        lines = []
+        for ln in res.lines:
+            ws = []
+            for wd in ln.words:
+                r = wd.bounding_rect
+                ws.append({"t": wd.text, "x": int(r.x), "y": int(r.y), "w": int(r.width), "h": int(r.height)})
+            if not ws:
+                continue
+            x0 = min(q["x"] for q in ws)
+            y0 = min(q["y"] for q in ws)
+            x1 = max(q["x"] + q["w"] for q in ws)
+            y1 = max(q["y"] + q["h"] for q in ws)
+            lines.append({"text": ln.text, "x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "words": ws})
+        return lines
+
+    def close(self) -> None:
+        try:
+            self.loop.close()
+        except Exception:
+            pass
 
 
 class TesseractOCR:
@@ -255,7 +328,8 @@ class TesseractOCR:
 
 def make_ocr(pref: str):
     errors = []
-    order = {"windows": [WindowsOCR], "tesseract": [TesseractOCR]}.get(pref, [WindowsOCR, TesseractOCR])
+    order = {"windows": [WinRTOCR, WindowsOCR], "tesseract": [TesseractOCR]}.get(
+        pref, [WinRTOCR, WindowsOCR, TesseractOCR])
     for cls in order:
         try:
             return cls()
@@ -319,7 +393,8 @@ def find_board(rgb: np.ndarray, origin=(0, 0)) -> Optional[Board]:
         cs, ce = max(af.runs(np.isin(np.arange(W), cols), gap=3), key=lambda t: t[1] - t[0])
         w = ce - cs + 1
         fill = float(blk[:, cs:ce + 1].mean())
-        if w < minw or h < 6 or not (5.0 <= w / h <= 16.0) or fill < 0.35:
+        # (the banner is ~1/6 of the window's width at any resolution)
+        if w < max(minw, 0.08 * W) or h < 6 or not (5.0 <= w / h <= 16.0) or fill < 0.35:
             continue
         # include the banner's lighter top edge rows
         top = ys
@@ -334,6 +409,15 @@ def find_board(rgb: np.ndarray, origin=(0, 0)) -> Optional[Board]:
             continue
         panel = rgb[py0:py1, px0:px1].max(axis=2)
         if float((panel < 90).mean()) < 0.55:
+            continue
+        # and it must have the red X (close) button and the red "Browse" tab
+        def crimson_at(dx0, dy0, dx1, dy1):
+            ax0, ay0 = int((cs + ce) / 2 + dx0 * sc), int(top + dy0 * sc)
+            ax1, ay1 = int((cs + ce) / 2 + dx1 * sc), int(top + dy1 * sc)
+            if ax0 < 0 or ay0 < 0 or ax1 > W or ay1 > H or ax1 <= ax0 or ay1 <= ay0:
+                return 0.0
+            return float(crim[ay0:ay1, ax0:ax1].mean())
+        if crimson_at(164, 20, 180, 34) < 0.2 or crimson_at(-172, 30, -128, 42) < 0.2:
             continue
         if best is None or w * h > best[0]:
             best = (w * h, top, cs, ce)
@@ -476,7 +560,8 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3) -> List[dict]:
             mt = TIME_RE.search(st[m.end():])
             left = (mt.group(1) + mt.group(2).lower()) if mt else ""
         else:
-            seller = st.split()[1] if len(st.split()) > 1 else st
+            words = [w for w in st.split() if re.search(r"[A-Za-z0-9]{2,}", w)]
+            seller = words[1] if len(words) > 1 else (words[0] if words else "")
         hr = yb - ya + 1
         nm_img = crop[ya:ya + int(0.5 * hr) + 1, int(0.085 * W):int(0.66 * W)]
         colour = colour_name(nm_img)
@@ -484,6 +569,31 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3) -> List[dict]:
                     "extra": extra, "price": int(digits), "colour": colour,
                     "rarity": RARITY_BY_COLOUR.get(colour, colour), "y": ya})
     return out
+
+
+def find_thumb_in(grab, board: "Board") -> Optional[Tuple[int, int, int, int, int]]:
+    x0, y0 = board.pt(175.5, 49)       # right of the row borders (a hovered row has a bright one)
+    x1, y1 = board.pt(181.5, 249)
+    img = grab((x0, y0, max(3, x1 - x0), y1 - y0)).astype(np.int16)
+    bright = img.max(axis=2) > 85
+    cols = bright.mean(axis=0) < 0.6          # drop full-height lines (the track's border)
+    if not cols.any():
+        return None
+    sub = bright[:, cols]
+    need = max(1, int(round(1.0 * board.s)))
+    rows = sub.sum(axis=1) >= need
+    rs = [(a, b) for a, b in af.runs(rows, gap=1) if b - a + 1 >= max(2, int(2 * board.s))]
+    if not rs:
+        return None
+    a, b = max(rs, key=lambda t: t[1] - t[0])
+    if b - a + 1 > 0.9 * (y1 - y0):
+        return None
+    col_idx = np.flatnonzero(cols)
+    hits = bright[a:b + 1][:, cols].sum(axis=0)
+    if hits.sum() == 0:
+        return None
+    cx = float((col_idx * hits).sum() / hits.sum())
+    return (int(round(x0 + cx)), y0 + (a + b) // 2, b - a + 1, y0, y1)
 
 
 def scroll_shift(prev: np.ndarray, cur: np.ndarray) -> Optional[int]:
@@ -682,18 +792,10 @@ class AuctionReader:
     # ---- one full scan -----------------------------------------------------
     def find_thumb(self, board: Board) -> Optional[Tuple[int, int, int, int, int]]:
         """The scroll bar handle right of the Buy buttons: (x, y_mid, height,
-        track_top, track_bottom) in screen px, or None (no scroll bar)."""
-        x0, y0 = board.pt(176.5, 49)
-        x1, y1 = board.pt(179.5, 249)
-        img = self.grab((x0, y0, max(2, x1 - x0), y1 - y0)).astype(np.int16)
-        bright = (img.max(axis=2) > 85).mean(axis=1) >= 0.5
-        rs = [(a, b) for a, b in af.runs(bright, gap=1) if b - a + 1 >= max(2, int(2 * board.s))]
-        if not rs:
-            return None
-        a, b = max(rs, key=lambda t: t[1] - t[0])
-        if b - a + 1 > 0.9 * (y1 - y0):
-            return None  # the whole column is bright: that's not a handle
-        return (x0 + (x1 - x0) // 2, y0 + (a + b) // 2, b - a + 1, y0, y1)
+        track_top, track_bottom) in screen px, or None (no scroll bar).
+        x is the middle of the handle's own bright pixels (the bar is only a
+        few pixels wide - aiming at a computed spot can miss it)."""
+        return find_thumb_in(self.grab, board)
 
     def _search_box_img(self, board: Board) -> np.ndarray:
         x0, y0 = board.pt(50, 29)
@@ -801,6 +903,7 @@ class AuctionReader:
                         by_pos[pos] = row
                 self.found = sum(n for n, _ in overall.values()) + len(by_pos)
 
+            use_wheel = False
             thumb = self.find_thumb(board)
             if thumb is not None:
                 # drag the scroll bar handle: much faster than the mouse wheel
@@ -844,6 +947,10 @@ class AuctionReader:
                         y = y_try
                         if shift == 0:
                             still += 1
+                            if offset == 0 and still >= 2:
+                                use_wheel = True            # the drag never moved the list
+                                self.log("The scroll bar didn't respond - using the mouse wheel instead.")
+                                break
                             if still >= 2 or y >= bottom:
                                 break                       # bottom of the list
                             step *= 2
@@ -855,7 +962,7 @@ class AuctionReader:
                         step = max(1.0, min(4.0 * th + 4, step * (0.7 * H) / shift))
                 finally:
                     self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
-            else:
+            if thumb is None or use_wheel:
                 for page in range(self.s.max_pages_per_term):
                     if not self.running:
                         return None

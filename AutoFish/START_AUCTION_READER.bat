@@ -44,6 +44,12 @@ if errorlevel 1 (
     %PY% -m pip install --user --quiet openpyxl
     if errorlevel 1 set INSTALL_FAILED=1
 )
+REM Windows' own text reader, called directly (optional: falls back to PowerShell)
+%PY% -c "import winrt.windows.media.ocr" >nul 2>nul
+if errorlevel 1 (
+    echo   Installing the Windows text-reader bridge ^(optional^)...
+    %PY% -m pip install --user --quiet winrt-runtime winrt-Windows.Media.Ocr winrt-Windows.Graphics.Imaging winrt-Windows.Storage.Streams winrt-Windows.Globalization winrt-Windows.Foundation winrt-Windows.Foundation.Collections
+)
 if "%INSTALL_FAILED%"=="1" (
     echo Couldn't install the required packages. Check your internet connection.
     pause
