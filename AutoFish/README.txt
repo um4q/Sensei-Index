@@ -153,3 +153,39 @@ Rarity: white = Limited, blue = Legendary, red = Mythic (from the Sell
 tab); other colours are written as their colour until we know the names.
 If a name/price is read wrong, set "save_debug_images": true in
 auction_settings.json, run a scan and send me the auction_debug folder.
+
+
+AUCTION BOT (auction_bot.py) - trades by itself
+===============================================
+1. Run a full AuctionReader scan first (it uses auction_listings.xlsx as
+   its starting knowledge of prices and demand).
+2. Open the auction board (Browse tab), double-click START_AUCTION_BOT.bat,
+   press START or F8. Hands off the mouse while it runs.
+
+Every cycle (a few minutes) it:
+ - searches the items worth trading (high demand + good margin, learned
+   from what it sees) and rare-sweep words (Darkness, Divine, Celestial,
+   Crystal, Abyssal...),
+ - BUYS any listing it can resell at a profit after the 5% fee; a STEAL
+   (price <= 40% of the item's value, e.g. a Divine Darkness for 100k) is
+   bought immediately,
+ - reads My Listings: anything gone has SOLD - price, profit and the time
+   from listing to sale are recorded; undercut listings are cancelled and
+   relisted (never below cost + margin),
+ - lists what it bought from the Sell tab, one at a time, just under the
+   cheapest competitor. RARE items (worth >= 250k, or Mythic/Limited):
+   ONE of each always stays in your bag,
+ - tracks every listing it ever saw; listings that vanish early count as
+   market sales -> sales/day, sale price and hours-to-sale per item, which
+   drive the watchlist, values and prices.
+
+Money rules (editable in the window): min profit %, steal ratio, max share
+of your coins per buy, daily spend cap, coin reserve, max listings.
+"Paper trading" makes all decisions and records them without clicking.
+"known_values" in auction_bot_settings.json lets you tell it what rare
+items are worth (item=value; ...).
+
+Your balance is read every cycle and around every trade: a live graph in
+the window, and a "Balance" sheet with a chart in auction_bot.xlsx.
+Report sheets: Balance, Trades, Market, Market sales, Watchlist, Inventory.
+Memory between runs: auction_bot_state.json. Full log: auction_bot_log.txt.

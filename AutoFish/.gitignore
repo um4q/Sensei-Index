@@ -1,6 +1,10 @@
 __pycache__/
 autofish_settings.json
 auction_settings.json
+auction_bot_settings.json
+auction_bot_state.json
+auction_bot_log.txt
+auction_bot*.xlsx
 auction_listings*.xlsx
 auction_debug/
 debug_snapshots/

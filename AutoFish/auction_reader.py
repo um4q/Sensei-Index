@@ -417,7 +417,8 @@ def find_board(rgb: np.ndarray, origin=(0, 0)) -> Optional[Board]:
             if ax0 < 0 or ay0 < 0 or ax1 > W or ay1 > H or ax1 <= ax0 or ay1 <= ay0:
                 return 0.0
             return float(crim[ay0:ay1, ax0:ax1].mean())
-        if crimson_at(164, 20, 180, 34) < 0.2 or crimson_at(-172, 30, -128, 42) < 0.2:
+        # (whichever tab is open - Browse, Sell or My Listings - is the red one)
+        if crimson_at(164, 20, 180, 34) < 0.2 or crimson_at(-178, 30, -4, 42) < 0.07:
             continue
         if best is None or w * h > best[0]:
             best = (w * h, top, cs, ce)
@@ -506,7 +507,7 @@ def segment_rows(crop: np.ndarray) -> List[Tuple[int, int]]:
             if e_ - s_ + 1 >= 0.85 * full and s_ > 0 and e_ < m.shape[0] - 1]
 
 
-def read_rows(crop: np.ndarray, ocr, up: int = 3) -> List[dict]:
+def read_rows(crop: np.ndarray, ocr, up: int = 3, need_price: bool = True) -> List[dict]:
     """Cut every whole row into a name, a seller and a price strip, stack all
     strips into one picture, read it with one OCR call, and put it together."""
     rows = segment_rows(crop)
@@ -549,7 +550,7 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3) -> List[dict]:
         get = lambda kind: " ".join(t for _, t in sorted(texts.get((i, kind), []))).strip()
         nm, st, pr = get("name"), get("sub"), get("price")
         digits = re.sub(r"\D", "", re.sub(r"[cC¢€]\s*$", "", pr.replace("O", "0").replace("o", "0")))
-        if not nm or not digits or int(digits) <= 0:
+        if not nm or (need_price and (not digits or int(digits) <= 0)):
             continue
         st = st.replace("|", " ").strip()
         m = SELLER_RE.search(st)
@@ -566,8 +567,8 @@ def read_rows(crop: np.ndarray, ocr, up: int = 3) -> List[dict]:
         nm_img = crop[ya:ya + int(0.5 * hr) + 1, int(0.085 * W):int(0.66 * W)]
         colour = colour_name(nm_img)
         out.append({"item": re.sub(r"\s+", " ", nm.replace("|", " ")).strip(" _-~*+'.,;:"), "seller": seller, "time_left": left,
-                    "extra": extra, "price": int(digits), "colour": colour,
-                    "rarity": RARITY_BY_COLOUR.get(colour, colour), "y": ya})
+                    "extra": extra, "price": int(digits) if digits else 0, "colour": colour, "sub": st,
+                    "rarity": RARITY_BY_COLOUR.get(colour, colour), "y": ya, "h": yb - ya + 1})
     return out
 
 
@@ -879,30 +880,75 @@ class AuctionReader:
         terms = [t for t in re.split(r"[\s,;]+", self.s.search_terms.strip()) if t] or [""]
         stamp = time.strftime("%Y-%m-%d %H:%M")
         overall: Dict[tuple, Tuple[int, dict]] = {}   # listing key -> (how many, example row)
-        px, py = board.scroll_point()
-        notches = max(1, int(self.s.scroll_notches))
         for ti, term in enumerate(terms):
             if not self.running:
                 return None
             self.progress = f"search '{term}' ({ti + 1}/{len(terms)})"
+            by_pos = self.scan_term(board, term)
+            if by_pos is None:
+                if not self.running:
+                    return None
+                continue
+            counts: Dict[tuple, int] = {}
+            for row in by_pos.values():
+                k = (row["item"].lower(), row["seller"].lower(), row["price"])
+                counts[k] = counts.get(k, 0) + 1
+                if k not in overall:
+                    row.update(search=term, scanned=stamp)
+                    overall[k] = (0, row)
+            for k, n in counts.items():
+                if n > overall[k][0]:
+                    overall[k] = (n, overall[k][1])
+            total = sum(n for n, _ in overall.values())
+            self.log(f"'{term}': {len(by_pos)} listing(s) shown, {total} different listings so far.")
+            self.partial = [dict(r) for n, r in overall.values() for _ in range(n)]
+            self.save_partial()
+        self._type_search(board, "")
+        self.partial = None
+        out = []
+        for n, row in overall.values():
+            out.extend(dict(row) for _ in range(n))
+        return out
+
+    class _Abort(Exception):
+        pass
+
+    def scan_term(self, board: Board, term: Optional[str], on_screen=None,
+                  need_price: bool = True) -> Optional[Dict[int, dict]]:
+        """Search `term`, scroll through every result and read each row.
+        Returns {position in the list: row}.  `on_screen(img, rows)` is called
+        for every new screen (rows carry "screen_y", the middle of the row on
+        the screen right now); if it returns True the scan stops at once with
+        that screen still showing, and self.aborted is set."""
+        self.aborted = False
+        px, py = board.scroll_point()
+        notches = max(1, int(self.s.scroll_notches))
+        if term is not None:   # None: read whatever list is showing (My Listings, Sell tab)
             before = self.grab(board.list_region()).astype(np.int16)
             if not self._type_search(board, term):
                 self.log(f"Could not type '{term}' into the search bar - skipping it.")
-                continue
+                return None
             time.sleep(self.s.wait_after_typing_s)
             self._wait_results(board, before)
-            by_pos: Dict[int, dict] = {}     # position in the list -> row (keeps true duplicates)
-            pitch = max(8.0, 32.0 * board.s)
-            offset = 0.0                     # how far we have scrolled (list pixels)
+        by_pos: Dict[int, dict] = {}     # position in the list -> row (keeps true duplicates)
+        pitch = max(8.0, 32.0 * board.s)
+        lx, ly, lw, lh = board.list_region()
+        state = {"offset": 0.0}
 
-            def take(img):
-                for row in self.read_screen_img(img, board):
-                    row["item"] = self.canonical(row["item"])
-                    pos = int(round((offset + row["y"]) / pitch))
-                    if pos not in by_pos:
-                        by_pos[pos] = row
-                self.found = sum(n for n, _ in overall.values()) + len(by_pos)
+        def take(img):
+            rows = self.read_screen_img(img, board, need_price)
+            for row in rows:
+                row["item"] = self.canonical(row["item"])
+                row["screen_y"] = int(ly + row["y"] + row.get("h", 26 * board.s) / 2)
+                pos = int(round((state["offset"] + row["y"]) / pitch))
+                if pos not in by_pos:
+                    by_pos[pos] = row
+            self.found = len(by_pos)
+            if on_screen is not None and on_screen(img, rows):
+                self.aborted = True
+                raise AuctionReader._Abort()
 
+        try:
             use_wheel = False
             thumb = self.find_thumb(board)
             if thumb is not None:
@@ -947,7 +993,7 @@ class AuctionReader:
                         y = y_try
                         if shift == 0:
                             still += 1
-                            if offset == 0 and still >= 2:
+                            if state["offset"] == 0 and still >= 2:
                                 use_wheel = True            # the drag never moved the list
                                 self.log("The scroll bar didn't respond - using the mouse wheel instead.")
                                 break
@@ -956,9 +1002,9 @@ class AuctionReader:
                             step *= 2
                             continue
                         still = 0
-                        offset += shift
-                        take(img)
+                        state["offset"] += shift
                         prev = img
+                        take(img)
                         step = max(1.0, min(4.0 * th + 4, step * (0.7 * H) / shift))
                 finally:
                     self._mouse(af.MOUSEEVENTF_LEFTUP, 0)
@@ -977,37 +1023,20 @@ class AuctionReader:
                         time.sleep(self.s.wait_after_scroll_s)
                         notches = max(1, notches // 2)
                         continue
-                    offset += shift
+                    state["offset"] += shift
                     notches = int(max(1, min(20, round(0.6 * img.shape[0] / max(1.0, shift / notches)))))
-                    take(img)
                     prev = img
-            counts: Dict[tuple, int] = {}
-            for row in by_pos.values():
-                k = (row["item"].lower(), row["seller"].lower(), row["price"])
-                counts[k] = counts.get(k, 0) + 1
-                if k not in overall:
-                    row.update(search=term, scanned=stamp)
-                    overall[k] = (0, row)
-            for k, n in counts.items():
-                if n > overall[k][0]:
-                    overall[k] = (n, overall[k][1])
-            total = sum(n for n, _ in overall.values())
-            self.log(f"'{term}': {len(by_pos)} listing(s) shown, {total} different listings so far.")
-            self.partial = [dict(r) for n, r in overall.values() for _ in range(n)]
-            self.save_partial()
-        self._type_search(board, "")
-        self.partial = None
-        out = []
-        for n, row in overall.values():
-            out.extend(dict(row) for _ in range(n))
-        return out
+                    take(img)
+        except AuctionReader._Abort:
+            pass
+        return by_pos
 
-    def read_screen_img(self, crop: np.ndarray, board: Board) -> List[dict]:
+    def read_screen_img(self, crop: np.ndarray, board: Board, need_price: bool = True) -> List[dict]:
         up = 3 if board.s < 1.4 else 2
         if self.s.save_debug_images:
             os.makedirs(os.path.join(HERE, "auction_debug"), exist_ok=True)
             af.write_png(os.path.join(HERE, "auction_debug", f"list_{int(time.time() * 1000)}.png"), crop)
-        return read_rows(crop, self, up)
+        return read_rows(crop, self, up, need_price)
 
     # ---- loop --------------------------------------------------------------
     def run_forever(self) -> None:
