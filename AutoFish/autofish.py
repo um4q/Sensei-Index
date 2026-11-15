@@ -35,11 +35,12 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.6"
+APP_VERSION = "1.7"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
 MISS_DIR = os.path.join(HERE, "miss_reports")
+ALARM_WAV = os.path.join(HERE, "leviathan_alarm.wav")   # replace it with your own sound if you like
 IS_WINDOWS = sys.platform.startswith("win")
 
 
@@ -71,6 +72,10 @@ class Settings:
     multi_window: bool = True      # fish in every Roblox window at once (switches between them)
     focus_settle_ms: float = 60.0  # wait after switching windows before pressing
     parallel_minigames: bool = False  # play every window's minigame at the same time
+    # --- leviathan alarm ---------------------------------------------------
+    leviathan_alarm: bool = True   # sound + flash when a leviathan pulls (while fishing)
+    alarm_stops_fishing: bool = True  # stop fishing once you are pulled in (screen goes dark / boss bar)
+    alarm_max_s: float = 300.0     # the sound stops by itself after this long (s)
     # --- ui ----------------------------------------------------------------
     always_on_top: bool = True
 
@@ -549,6 +554,219 @@ def read_prompt(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> PromptRead
     if truncated is not None:
         return PromptReading(None, truncated, 0.0, "prompt partly hidden (mouse cursor?)")
     return PromptReading(note="no prompt")
+
+
+# =============================================================================
+#  Leviathan alarm - spot a leviathan pull on screen
+#
+#  Measured from a real recording of a pull (4 windows):
+#     announcement  "<name> was pulled into the deep by the Serpent of the ..."
+#                   / "Something vast took the bait." - a wide dark panel
+#                   (#0E1418-ish) with a thin teal border (#74B9B2 / #2D757B),
+#                   two lines of light text, top centre (about 22%..78% of the
+#                   width, 10%..25% of the height).  Shown in the windows of
+#                   everyone nearby, ~3 s; the pulled player's own window
+#                   shows a cut-scene instead.
+#     then          every pulled window turns teal (underwater), then black
+#                   for a few seconds, then the arena.
+#     boss fight    a thin light-blue health bar (#98DCFC -> #1C72B7) in a
+#                   gold frame, about 28%..72% of the width, ~15% from the
+#                   top, with "The Serpent of the Sea - Lv 250" above it.
+# =============================================================================
+def _spans(mask_1d: np.ndarray, gap: int) -> List[Tuple[int, int]]:
+    """[start, end) runs of True, merging runs split by <= `gap` False pixels."""
+    return [(a, b + 1) for a, b in runs(mask_1d, gap)]
+
+
+def _small(rgb: np.ndarray) -> Tuple[np.ndarray, int]:
+    """Every row (the borders are thin horizontal lines), but only every k-th
+    column, so a big window costs about as much as a 640 px wide one."""
+    k = max(1, int(rgb.shape[1] // 640))
+    return rgb[:, ::k].astype(np.int16), k
+
+
+def _centred_lines(mask: np.ndarray, W: int, min_frac: float, centre_tol: float,
+                   gap: int) -> List[Tuple[int, int, int]]:
+    """Rows of `mask` holding one long, roughly centred horizontal run: [(y, x0, x1)]."""
+    out = []
+    for y in np.flatnonzero(mask.sum(axis=1) >= min_frac * W):
+        for a, b in _spans(mask[y], gap):
+            if b - a >= min_frac * W and abs((a + b) / 2.0 - W / 2.0) <= centre_tol * W:
+                out.append((int(y), int(a), int(b)))
+    return out
+
+
+# The game's UI does not grow with the window (in a quarter-screen window the
+# panel is ~55% of the width, fullscreen only ~25%), so sizes are checked
+# against the panel's own shape, not the window's.
+BANNER_ASPECT = 0.137      # panel height / width
+BOSS_ASPECT = 0.035        # health bar height / width
+
+
+def find_pull_banner(rgb: np.ndarray) -> Optional[dict]:
+    """The "... was pulled into the deep by the Serpent ..." announcement panel."""
+    a, k = _small(rgb)
+    H, W = a.shape[:2]
+    y0 = int(0.02 * H)
+    reg = a[y0:int(0.45 * H)]
+    r, g, b = reg[..., 0], reg[..., 1], reg[..., 2]
+    teal = (g >= 85) & (b >= 80) & (g - r >= 40) & (b - r >= 35) & (np.abs(g - b) <= 45) & (b < g + 25)
+    lines = _centred_lines(teal, W, 0.16, 0.06, max(3, W // 40))
+    if not lines:
+        return None
+    lum = reg.max(axis=2)
+    RH = reg.shape[0]
+    tried = set()
+    for (y, a0, a1) in lines:
+        if not (0.18 * W <= a1 - a0 <= 0.80 * W) or a0 < 0.06 * W:
+            continue
+        wpx = (a1 - a0) * k                       # the panel's width in screen pixels
+        for up in (False, True):              # this line is the top border (panel below it) or the bottom one
+            other = [yy for (yy, b0, b1) in lines
+                     if 0.6 * BANNER_ASPECT * wpx <= ((yy - y) if not up else (y - yy)) <= 1.8 * BANNER_ASPECT * wpx
+                     and min(a1, b1) - max(a0, b0) >= 0.6 * (a1 - a0)]
+            hgt = (min(other, key=lambda yy: abs(yy - y)) - y) if other else \
+                (-1 if up else 1) * int(BANNER_ASPECT * wpx)
+            yt, yb = (y, y + hgt) if not up else (y + hgt, y)
+            yt, yb = max(0, yt), min(RH - 1, yb)
+            key = (yt // 3, yb // 3, a0 // 8)
+            if key in tried or yb - yt < max(10, 0.6 * BANNER_ASPECT * wpx):
+                continue
+            tried.add(key)
+            # the panel's left and right edges are teal too
+            e = max(5, (a1 - a0) // 40)
+            sides = (teal[yt:yb + 1, max(0, a0 - e):a0 + e].any(axis=1).mean()
+                     + teal[yt:yb + 1, max(0, a1 - e):a1 + e].any(axis=1).mean()) / 2.0
+            if sides < 0.4:
+                continue
+            m = max(2, (yb - yt) // 12)
+            inner_l = lum[yt + m:yb - m + 1, a0 + 3:a1 - 3]
+            if inner_l.size == 0:
+                continue
+            bright = inner_l >= 150
+            fb = float(bright.mean())
+            if float(np.median(inner_l)) > 60 or not (0.012 <= fb <= 0.35) \
+                    or teal[yt + m:yb - m + 1, a0 + 3:a1 - 3].mean() > 0.08:
+                continue                      # not a dark panel holding some light text
+            rows = bright.mean(axis=1)
+            half = len(rows) // 2
+            if rows[:half].max(initial=0) < 0.03 or rows[half:].max(initial=0) < 0.02:
+                continue                      # two lines of text
+            cols = bright.mean(axis=0)
+            n = len(cols)
+            if cols[n // 4: 3 * n // 4].mean() < 0.6 * cols.mean():
+                continue                      # centred text
+            return {"y": round((yt + y0) / H, 3), "h": round((yb - yt) / H, 3),
+                    "x0": round(a0 / W, 3), "x1": round(a1 / W, 3), "text": round(fb, 3)}
+    return None
+
+
+def find_boss_bar(rgb: np.ndarray) -> Optional[dict]:
+    """A boss health bar: thin, wide, light blue, top centre, the boss's name above it."""
+    a, k = _small(rgb)
+    H, W = a.shape[:2]
+    y0 = int(0.03 * H)
+    reg = a[y0:int(0.40 * H)]
+    r, g, b = reg[..., 0], reg[..., 1], reg[..., 2]
+    blue = (b >= 170) & (b - r >= 60) & (g >= 105) & (b >= g + 10)
+    # rows holding a long blue run centred in the window (the health number in the middle is bridged)
+    ys = np.array(sorted({y for y, _, _ in _centred_lines(blue, W, 0.14, 0.04, max(3, int(0.08 * W)))}), dtype=int)
+    if ys.size == 0:
+        return None
+    bands, cur = [], [int(ys[0])]
+    for y in ys[1:]:
+        if y - cur[-1] <= 3:
+            cur.append(int(y))
+        else:
+            bands.append(cur)
+            cur = [int(y)]
+    bands.append(cur)
+    lum = reg.max(axis=2)
+    for band in bands:
+        top, bot = band[0], band[-1]
+        hgt = bot - top + 1
+        filled = blue[top:bot + 1].mean(axis=0) >= 0.4
+        spans = [(s, e) for s, e in _spans(filled, max(3, int(0.08 * W))) if e - s >= 0.14 * W]
+        if not spans:
+            continue
+        x0, x1 = max(spans, key=lambda s: s[1] - s[0])
+        wpx = (x1 - x0) * k
+        if not (max(4, 0.6 * BOSS_ASPECT * wpx) <= hgt <= 2.5 * BOSS_ASPECT * wpx):
+            continue                          # a bar, not a thin line or a big blue area
+        if x0 < 0.10 * W or x1 > 0.90 * W or abs((x0 + x1) / 2.0 - W / 2.0) > 0.04 * W:
+            continue                          # exactly centred, inside the window (not sky, water or
+                                              # Roblox's network-stats bars)
+        strip = reg[top:bot + 1, x0:x1].max(axis=2).mean(axis=1)
+        third = max(1, len(strip) // 3)
+        if strip[:third].mean() - strip[-third:].mean() < 25:
+            continue                          # the bar shades from light blue (top) to deep blue
+        reach = max(4, int(1.5 * hgt))
+        above = blue[max(0, top - reach):max(0, top - 2), x0:x1]
+        below = blue[bot + 3:bot + reach, x0:x1]
+        if (above.size and above.mean() > 0.3) or (below.size and below.mean() > 0.3):
+            continue
+        name = lum[max(0, top - 4 * hgt):max(0, top - 2), x0:x1] >= 170
+        if not name.size or name.mean() < 0.01:
+            continue                          # no name above it
+        return {"y": round((top + y0) / H, 3), "x0": round(x0 / W, 3), "x1": round(x1 / W, 3)}
+    return None
+
+
+def dark_fraction(rgb: np.ndarray) -> float:
+    """How much of the view (below Roblox's top bar) is black - pulled into the deep."""
+    a = rgb[::2, ::max(2, int(rgb.shape[1] // 320))]
+    H, W = a.shape[:2]
+    reg = a[int(0.12 * H):int(0.97 * H), int(0.03 * W):int(0.97 * W)]
+    return float((reg.max(axis=2) < 32).mean())
+
+
+class LeviathanWatch:
+    """Turns per-window screenshots into alarm events.
+
+    "pull" - the announcement panel, seen twice in a row in one window
+    "dark" - after an announcement, a window went black (you are being pulled in)
+    "boss" - a boss health bar, seen twice in a row in one window
+    One alarm per leviathan: it re-arms once neither the panel nor a boss bar
+    has been seen anywhere for REARM_S seconds."""
+    HITS = 2
+    CONFIRM_S = 45.0
+    REARM_S = 90.0
+    DARK = 0.90
+
+    def __init__(self) -> None:
+        self.hits: dict = {}
+        self.banner_t: Optional[float] = None
+        self.last_seen = -1e9
+        self.fired = False
+        self.confirmed = False
+
+    def feed(self, name: str, rgb: np.ndarray, now: float) -> List[Tuple[str, str]]:
+        if now - self.last_seen > self.REARM_S:
+            self.fired, self.confirmed, self.banner_t = False, False, None
+        h = self.hits.setdefault(name, {"pull": 0, "boss": 0, "dark": 0})
+        events = []
+        banner = find_pull_banner(rgb) is not None
+        boss = find_boss_bar(rgb) is not None
+        h["pull"] = h["pull"] + 1 if banner else 0
+        h["boss"] = h["boss"] + 1 if boss else 0
+        if banner or boss:
+            self.last_seen = now
+        if h["pull"] >= self.HITS:
+            self.banner_t = now
+            if not self.fired:
+                self.fired = True
+                events.append(("pull", name))
+        if h["boss"] >= self.HITS and not self.confirmed:
+            self.fired = self.confirmed = True
+            events.append(("boss", name))
+        if self.banner_t is not None and now - self.banner_t <= self.CONFIRM_S and not self.confirmed:
+            h["dark"] = h["dark"] + 1 if dark_fraction(rgb) >= self.DARK else 0
+            if h["dark"] >= self.HITS:
+                self.confirmed = True
+                events.append(("dark", name))
+        else:
+            h["dark"] = 0
+        return events
 
 
 # =============================================================================
@@ -2040,6 +2258,8 @@ class FishingBot:
         if pr.box:
             rect(pr.box[0] - 2, pr.box[1] - 2, pr.box[2] + 2, pr.box[3] + 2, (0, 255, 255))
         notes.append(f"prompt={pr.state} ratio={pr.ratio:.2f} note={pr.note}")
+        notes.append(f"leviathan: announcement={find_pull_banner(img)} boss bar={find_boss_bar(img)} "
+                     f"dark={dark_fraction(img):.2f}")
         os.makedirs(DEBUG_DIR, exist_ok=True)
         path = os.path.join(DEBUG_DIR, time.strftime("snapshot_%Y%m%d_%H%M%S.png"))
         write_png(path, img)
@@ -2073,6 +2293,9 @@ class MultiBot:
         self._paused_since: Optional[float] = None
         self._next_num = 1
         self.own_foreground: Callable[[], bool] = lambda: False  # is the AutoFish window active?
+        self.lev = LeviathanWatch()
+        self.alarm: Optional[dict] = None   # the latest leviathan alarm (the GUI shows it)
+        self._alarm_seq = 0
 
     def log(self, msg: str) -> None:
         self._log_cb(f"[{time.strftime('%H:%M:%S')}] {msg}")
@@ -2286,6 +2509,148 @@ class MultiBot:
         paths = [b.debug_snapshot() for _, b in self.lanes]
         return ", ".join(paths)
 
+    # -------------------------------------------------------- leviathan alarm
+    def start_watcher(self) -> None:
+        threading.Thread(target=self._watch_forever, name="autofish-leviathan", daemon=True).start()
+
+    def _watch_busy(self) -> bool:
+        """A window is in the middle of a precisely timed reel: don't take CPU
+        time from it (Leviathan mode misses on purpose, so it never minds)."""
+        if self.s.leviathan:
+            return False
+        now = time.perf_counter()
+        for _, b in list(self.lanes):
+            if b.running and b.state == ST_REEL and (b.plan_at is None or b.plan_at - now < 0.15):
+                return True
+        return False
+
+    def _watch_forever(self) -> None:
+        """Every ~0.4 s, look at the top of each Roblox window for a leviathan pull."""
+        errors = 0
+        while self.alive:
+            if not (self.running and self.s.leviathan_alarm):
+                time.sleep(0.3)
+                continue
+            t0 = time.perf_counter()
+            try:
+                for h, b in list(self.lanes):
+                    while self._watch_busy() and self.running and self.alive:
+                        time.sleep(0.05)
+                    if not self.running:
+                        break
+                    img = b.env.grab(b.env.game_region())
+                    for kind, name in self.lev.feed(b.name or "the Roblox window", img, time.perf_counter()):
+                        self.raise_alarm(kind, name)
+                errors = 0
+            except Exception as exc:
+                errors += 1
+                if errors in (1, 20):
+                    self.log(f"Leviathan alarm: couldn't read a window ({exc!r}) - still trying.")
+            time.sleep(max(0.05, 0.4 - (time.perf_counter() - t0)))
+
+    def raise_alarm(self, kind: str, name: str, test: bool = False) -> None:
+        when = time.strftime("%H:%M:%S")
+        if kind == "pull":
+            title, detail = "LEVIATHAN PULLED!", f"'...pulled into the deep by the Serpent' in {name} at {when}"
+        elif kind == "dark":
+            title, detail = "LEVIATHAN - YOU'RE BEING PULLED IN!", f"{name} went dark at {when}"
+        elif kind == "boss":
+            title, detail = "LEVIATHAN - BOSS FIGHT!", f"boss health bar in {name} at {when}"
+        else:
+            title, detail = "ALARM TEST", "this is what the leviathan alarm looks and sounds like"
+        stop = kind in ("dark", "boss") and self.s.alarm_stops_fishing and self.running and not test
+        if stop:
+            detail += " - fishing stopped"
+        self._alarm_seq += 1
+        self.alarm = {"seq": self._alarm_seq, "kind": kind, "title": title, "detail": detail, "t": time.time()}
+        if not test:
+            self.log(f"!!! {title} {detail}.")
+        if stop:
+            self.stop()
+            self.log(f"Stopped fishing (you're in the leviathan's arena). Press {self.s.toggle_hotkey} "
+                     f"to silence the alarm, and again to fish once you're back at the water.")
+
+
+# =============================================================================
+#  Alarm sound
+# =============================================================================
+def make_alarm_wav(path: str) -> None:
+    """A loud two-tone siren, 2 s long (played in a loop)."""
+    import wave
+    rate = 22050
+    parts = []
+    for f in (988.0, 740.0) * 4:
+        n = int(rate * 0.25)
+        t = np.arange(n) / rate
+        fade = np.minimum(1.0, np.minimum(np.arange(n), n - 1 - np.arange(n)) / 200.0)
+        parts.append(0.9 * fade * np.sign(np.sin(2 * np.pi * f * t)) * 0.6
+                     + 0.4 * fade * np.sin(2 * np.pi * f * t))
+    pcm = (np.clip(np.concatenate(parts), -1, 1) * 32000).astype("<i2")
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm.tobytes())
+
+
+class AlarmSound:
+    """Loops leviathan_alarm.wav (made on first use; put your own .wav there to
+    change it) until stop().  Falls back to beeps if the file can't be played."""
+
+    def __init__(self) -> None:
+        self.playing = False
+        self.since = 0.0
+        self._beeper: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self.stop()
+        self.playing, self.since = True, time.time()
+        if not IS_WINDOWS:
+            return
+        import winsound
+        try:
+            if not os.path.exists(ALARM_WAV):
+                make_alarm_wav(ALARM_WAV)
+            winsound.PlaySound(ALARM_WAV, winsound.SND_FILENAME | winsound.SND_ASYNC
+                               | winsound.SND_LOOP | winsound.SND_NODEFAULT)
+            return
+        except Exception:
+            pass
+
+        def beep():
+            while self.playing:
+                try:
+                    winsound.Beep(988, 250)
+                    winsound.Beep(740, 250)
+                except Exception:
+                    time.sleep(0.5)
+        self._beeper = threading.Thread(target=beep, daemon=True)
+        self._beeper.start()
+
+    def stop(self) -> None:
+        was = self.playing
+        self.playing = False
+        if was and IS_WINDOWS:
+            try:
+                import winsound
+                winsound.PlaySound(None, 0)
+            except Exception:
+                pass
+
+
+def flash_taskbar(hwnd: int) -> None:
+    """Flash the AutoFish button on the taskbar until its window is clicked."""
+    if not IS_WINDOWS or not hwnd:
+        return
+    try:
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.UINT), ("hwnd", wintypes.HWND), ("dwFlags", wintypes.DWORD),
+                        ("uCount", wintypes.UINT), ("dwTimeout", wintypes.DWORD)]
+        fi = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, 3 | 12, 0, 0)   # FLASHW_ALL | FLASHW_TIMERNOFG
+        _user32.FlashWindowEx(ctypes.byref(fi))
+    except Exception:
+        pass
+
 
 # =============================================================================
 #  GUI
@@ -2315,6 +2680,7 @@ def run_gui() -> None:
     bot.own_foreground = own_fg
     worker = threading.Thread(target=bot.run_forever, name="autofish-bot", daemon=True)
     worker.start()
+    bot.start_watcher()
 
     root = tk.Tk()
     root.title(f"{APP_NAME} {APP_VERSION}")
@@ -2404,6 +2770,8 @@ def run_gui() -> None:
     add_bool(11, "Fish in EVERY Roblox window (switches between them)", "multi_window")
     add_bool(12, "Leviathan mode - only trigger the bite, then miss on purpose", "leviathan")
     add_bool(13, "Play all windows' minigames at the same time (always on in Leviathan mode)", "parallel_minigames")
+    add_bool(14, "Leviathan alarm - sound + flashing when a leviathan pulls", "leviathan_alarm")
+    add_bool(15, "...and stop fishing once you're pulled in (screen goes dark / boss bar)", "alarm_stops_fishing")
 
     def apply_settings(*_):
         for attr, (v, lo, hi) in num_vars.items():
@@ -2450,8 +2818,11 @@ def run_gui() -> None:
         # run in the bot's absence of a lock is fine: it only reads the screen
         threading.Thread(target=work, daemon=True).start()
 
+    def test_alarm():
+        bot.raise_alarm("test", "", test=True)
+
     for i, (txt, cmd) in enumerate([("Save settings", save), ("Defaults", defaults),
-                                    ("Debug snapshot", snapshot)]):
+                                    ("Debug snapshot", snapshot), ("Test alarm", test_alarm)]):
         tk.Button(btns, text=txt, command=cmd, bg="#30363d", fg=FG, activebackground="#3d444d",
                   activeforeground=FG, relief="flat", padx=8).grid(row=0, column=i, padx=3, sticky="ew")
         btns.columnconfigure(i, weight=1)
@@ -2460,6 +2831,63 @@ def run_gui() -> None:
                                        insertbackground=FG, relief="flat", font=("Consolas", 9))
     logbox.grid(row=6, column=0, columnspan=2, sticky="nsew", padx=10, pady=(4, 10))
     logbox.configure(state="disabled")
+
+    # ---- leviathan alarm: a big flashing panel over the top of the window + a siren
+    ALARM_A, ALARM_B = "#d7263d", "#ffb000"
+    alarm_box = tk.Frame(root, bg=ALARM_A, bd=0)
+    alarm_title = tk.Label(alarm_box, text="", font=("Segoe UI", 20, "bold"), bg=ALARM_A, fg="white")
+    alarm_title.pack(fill="x", padx=10, pady=(12, 0))
+    alarm_detail = tk.Label(alarm_box, text="", font=("Segoe UI", 10), bg=ALARM_A, fg="white", wraplength=520)
+    alarm_detail.pack(fill="x", padx=10, pady=(2, 6))
+    alarm_btn = tk.Button(alarm_box, text=f"Silence alarm  ({hotkey_lbl})", font=("Segoe UI", 12, "bold"),
+                          bg="white", fg="#7a0010", relief="flat", cursor="hand2")
+    alarm_btn.pack(pady=(0, 12))
+    sound = AlarmSound()
+    alarm_state = {"seq": 0, "on": False, "flash": 0.0, "lit": False}
+
+    def show_alarm(a: dict) -> None:
+        alarm_state.update(seq=a["seq"], on=True, flash=0.0)
+        alarm_title.configure(text=a["title"])
+        alarm_detail.configure(text=a["detail"])
+        alarm_box.place(x=0, y=0, relwidth=1.0)
+        alarm_box.lift()
+        root.deiconify()
+        root.lift()
+        root.attributes("-topmost", True)
+        if a["kind"] != "test" or not sound.playing:
+            sound.start()
+        if IS_WINDOWS:
+            try:
+                flash_taskbar(int(root.wm_frame(), 16))
+            except Exception:
+                pass
+
+    def silence_alarm() -> None:
+        if alarm_state["on"]:
+            alarm_state["on"] = False
+            sound.stop()
+            alarm_box.place_forget()
+            root.attributes("-topmost", settings.always_on_top)
+            log("Alarm silenced.")
+
+    alarm_btn.configure(command=silence_alarm)
+
+    def tick_alarm() -> None:
+        a = bot.alarm
+        if a is not None and a["seq"] != alarm_state["seq"]:
+            show_alarm(a)
+        if not alarm_state["on"]:
+            return
+        now = time.time()
+        if now - alarm_state["flash"] >= 0.4:
+            alarm_state["flash"] = now
+            alarm_state["lit"] = not alarm_state["lit"]
+            c = ALARM_B if alarm_state["lit"] else ALARM_A
+            for wdg in (alarm_box, alarm_title, alarm_detail):
+                wdg.configure(bg=c)
+        if sound.playing and now - sound.since > max(5.0, settings.alarm_max_s):
+            sound.stop()
+            log("Alarm sound stopped after %.0f s (the panel stays until you silence it)." % settings.alarm_max_s)
 
     def on_toggle(from_button: bool = False):
         apply_settings()
@@ -2485,8 +2913,12 @@ def run_gui() -> None:
         except Exception:
             down = False
         if down and not hotkey_state["down"]:
-            on_toggle(False)
+            if alarm_state["on"]:
+                silence_alarm()          # the hotkey silences a sounding alarm first
+            else:
+                on_toggle(False)
         hotkey_state["down"] = down
+        tick_alarm()
         # log lines
         lines = []
         try:
@@ -2518,6 +2950,7 @@ def run_gui() -> None:
         root.after(30, poll)
 
     def on_close():
+        sound.stop()
         bot.stop()
         bot.alive = False
         apply_settings()
