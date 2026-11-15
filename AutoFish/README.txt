@@ -124,3 +124,32 @@ IF SOMETHING ISN'T WORKING
 
 Note: automating gameplay may be against the game's or Roblox's rules -
 use it at your own risk.
+
+
+AUCTION READER (auction_reader.py)
+==================================
+Reads every listing on the auction board into an Excel file.
+
+1. In Roblox, go to the auctioneer and open the auction board (Browse tab).
+2. Double-click START_AUCTION_READER.bat (first time it installs openpyxl
+   too), then press START or F7. Don't touch the mouse while it scans -
+   it clicks the search bar, types a, b, c ... z and scrolls each result
+   list with the mouse wheel.
+3. Results: auction_listings.xlsx next to the script ("Open Excel file"):
+     Latest scan  every listing: item, rarity colour, price, seller,
+                  time left, note (e.g. an enchant), which search found it
+     Items        per item: listings, cheapest, median, highest price,
+                  cheapest seller, and what you'd keep selling at the
+                  cheapest price (95%)
+     History      every scan appended - this builds the price history
+   Each listing is saved once even if several letters find it (true
+   duplicates - same item, seller and price listed twice - are kept).
+4. "Repeat every (min)" keeps scanning with the board left open.
+   Close the Excel file before a scan finishes, or it saves a copy instead.
+
+Search terms are editable (any words, separated by spaces). Text is read
+with Windows' own OCR (English language pack - normally already installed).
+Rarity: white = Limited, blue = Legendary, red = Mythic (from the Sell
+tab); other colours are written as their colour until we know the names.
+If a name/price is read wrong, set "save_debug_images": true in
+auction_settings.json, run a scan and send me the auction_debug folder.
