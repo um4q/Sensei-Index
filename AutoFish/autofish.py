@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -35,7 +36,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.8"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -69,6 +70,11 @@ class Settings:
     dry_run: bool = False          # detect + log only, never press anything
     stop_on_miss: bool = True      # stop the macro on the first miss (and save a miss report)
     leviathan: bool = False        # only trigger the bite: miss on purpose so the round ends fast
+    skip_fish: bool = True         # skip unwanted fish: unequip + re-equip the rod, recast
+    keep_hits: str = "3"           # fish needing these numbers of hits are reeled ("3", "2,3" ...)
+    keep_only_big: bool = True     # ...and only when the panel says "Something big is pulling!"
+    skip_key: str = "3"            # the rod's hotbar key (pressed twice: unequip, equip)
+    skip_key_gap_s: float = 0.4    # pause between the two presses
     multi_window: bool = True      # fish in every Roblox window at once (switches between them)
     focus_settle_ms: float = 60.0  # wait after switching windows before pressing
     parallel_minigames: bool = False  # play every window's minigame at the same time
@@ -554,6 +560,40 @@ def read_prompt(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> PromptRead
     if truncated is not None:
         return PromptReading(None, truncated, 0.0, "prompt partly hidden (mouse cursor?)")
     return PromptReading(note="no prompt")
+
+
+def title_region(geom: "BarGeom") -> Tuple[int, int, int, int]:
+    """The reel panel's title ("Reel it in!" / "Something big is pulling!") above the bar."""
+    bw, bh = geom.x1 - geom.x0, max(4, geom.y1 - geom.y0)
+    cx = (geom.x0 + geom.x1) / 2.0
+    top = int(geom.y0 - 2.6 * bh)
+    return (int(cx - 0.45 * bw), top, max(1, int(0.9 * bw)), max(1, geom.y0 - top))
+
+
+def read_title(img: np.ndarray, bar_w: int) -> Optional[bool]:
+    """True = "Something big is pulling!", False = "Reel it in!", None = can't tell.
+    Measured on real frames: the title is ~0.2 of the bar's width for "Reel it in!"
+    and ~0.5 for "Something big is pulling!"."""
+    if img is None or img.size == 0 or bar_w <= 0:
+        return None
+    reg = img.astype(np.int16)
+    lum = reg.max(axis=2)
+    bright = (lum >= 150) & (lum - reg.min(axis=2) <= 90)    # the cream title / subtitle text
+    rows = bright.sum(axis=1)
+    border = np.flatnonzero(rows >= 0.6 * reg.shape[1])      # the panel's top edge
+    start = int(border[-1]) + 1 if border.size else 0
+    text = [i for i in range(start, len(rows)) if rows[i] >= 2]
+    if len(text) < 4:
+        return None
+    a, b = text[0], text[-1]
+    top = bright[a:a + max(2, int(0.4 * (b - a + 1)))]      # the upper part = the title line
+    cols = np.flatnonzero(top.any(axis=0))
+    w = (cols[-1] - cols[0] + 1) / float(bar_w)
+    if 0.38 <= w <= 0.75:
+        return True
+    if 0.10 <= w <= 0.32:
+        return False
+    return None
 
 
 # =============================================================================
@@ -1467,6 +1507,7 @@ class Stats:
     casts: int = 0
     bites: int = 0
     presses: int = 0
+    skipped: int = 0               # unwanted fish skipped (skip_fish)
     started_at: float = 0.0
     run_time: float = 0.0
 
@@ -1561,6 +1602,11 @@ class FishingBot:
         self._rec.clear()
         self._rec_imgs.clear()
         self._last_press_info = None
+        self.round_skip = False      # not a fish we want: unequip/re-equip (or miss on purpose), recast fast
+        self._skip_stage = 0         # 0 = not started, 1 = unequipped, 2 = re-equipped, 3 = missing on purpose
+        self._skip_t = -1e9
+        self._big = {}               # title votes: True = "Something big is pulling!"
+        self._decided = False
 
     def start(self) -> None:
         with self.lock:
@@ -1632,7 +1678,7 @@ class FishingBot:
             return min(0.25, max(0.0, self.s.measured_lead2_ms / 1000.0 + self._lead_adj))
         return max(0.0, self.s.lead_ms / 1000.0 + self._lead_adj)
 
-    def _press(self, why: str, reel: bool = False) -> None:
+    def _press(self, why: str, reel: bool = False, key: Optional[str] = None) -> None:
         """Key down now; the key is released by a later tick (never blocks)."""
         self._release_key()
         self._last_key_t = self.env.now()
@@ -1640,7 +1686,8 @@ class FishingBot:
         if self.s.dry_run:
             self.log(f"(dry run) would press for: {why}")
             return
-        key = "click" if (reel and self.s.reel_with_click) else (self.s.key or "e")
+        if key is None:
+            key = "click" if (reel and self.s.reel_with_click) else (self.s.key or "e")
         self.env.send_input(key, True)
         self._held = key
         self._release_at = self._last_key_t + max(0.0, self.s.key_hold_ms / 1000.0)
@@ -1767,6 +1814,14 @@ class FishingBot:
     # -------------------------------------------------------------- reeling
     def _on_minigame(self, now: float, rd: MinigameReading) -> float:
         s = self.s
+        if self.state != ST_REEL and now - getattr(self, "_skip_end_t", -1e9) < 2.0:
+            # the same fish is still on the line after the skip: miss it on purpose instead
+            self._reset_round()
+            self.round_seen_t = now
+            self.round_skip, self._skip_stage, self._decided = True, 3, True
+            self._skip_end_t = -1e9
+            self._set_state(ST_REEL)
+            self.log("The fish is still on the line after the skip - missing on purpose instead.")
         if self.state != ST_REEL:
             joined = self.state == ST_START
             self._reset_round()
@@ -1799,6 +1854,9 @@ class FishingBot:
         if rd.total:
             self._totals[rd.total] = self._totals.get(rd.total, 0) + 1
             self.round_total = max(self._totals, key=self._totals.get)
+        if s.skip_fish and not s.leviathan and not self._decided:
+            self._decide_keep(now)
+        fast = s.leviathan or self.round_skip
         if miss:
             self.stats.misses += rd.misses - self.round_misses
             self.round_misses = rd.misses
@@ -1832,7 +1890,7 @@ class FishingBot:
             while now - self._rec_imgs[0][0] > 1.2:   # a report needs < 1 s; keep memory small
                 self._rec_imgs.popleft()
 
-        if miss and s.leviathan:
+        if miss and fast:
             miss = False  # intended
             self._outcome_seen = True
         if miss:
@@ -1926,8 +1984,12 @@ class FishingBot:
                     and (not inside or since > 0.6)):
                 self._armed = True
         self.plan_at = None
-        if s.leviathan:
+        if self.round_skip and self._skip_stage < 3:
+            return self._skip_step(now)
+        if fast:
             return self._leviathan_press(now, rd)
+        if s.skip_fish and not s.leviathan and not self._decided:
+            return 0.0                  # not sure yet whether this fish is worth it: don't press
         if not self._armed or rd.pointer is None or rd.zone is None:
             return 0.0
 
@@ -1971,6 +2033,65 @@ class FishingBot:
                           f"KEY DOWN (planned wait {wait * 1000:.1f}ms, timing {lead * 1000:.0f}ms)"))
         return 0.0  # reel as fast as the screen can be read
 
+    def _decide_keep(self, now: float) -> None:
+        """Reel this fish, or skip it?  Decided from the number of dots and the
+        panel title, each read on a few frames (or after 0.5 s with what we have)."""
+        s = self.s
+        if self.geom is not None and sum(self._big.values()) < 5:
+            try:
+                big = read_title(self.env.grab(title_region(self.geom)), self.geom.x1 - self.geom.x0)
+            except Exception:
+                big = None
+            if big is not None:
+                self._big[big] = self._big.get(big, 0) + 1
+        votes_t = self._totals.get(self.round_total, 0) if self.round_total else 0
+        votes_b = sum(self._big.values())
+        late = self.round_seen_t is not None and now - self.round_seen_t > 0.5
+        if not ((votes_t >= 3 and votes_b >= 3) or late):
+            return
+        self._decided = True
+        if self.round_filled > 0:
+            return                      # already hit it: finish the job
+        try:
+            keep_hits = {int(x) for x in re.findall(r"\d+", s.keep_hits or "")}
+        except ValueError:
+            keep_hits = set()
+        big = self._big.get(True, 0) > self._big.get(False, 0)
+        hits_ok = (self.round_total in keep_hits) if self.round_total else False
+        if hits_ok and (big or not s.keep_only_big):
+            self.log(f"{self.round_total}-hit fish" + (" - Something big is pulling!" if big else "") + " - reeling it.")
+            return
+        self.round_skip = True
+        self._skip_stage = 0
+        self.stats.skipped += 1
+        what = (f"{self.round_total}-hit" if self.round_total else "unreadable") + (" 'something big'" if big else "")
+        self.log(f"{what} fish - skipping it (unequip/re-equip with '{s.skip_key}', recast).")
+
+    def _skip_step(self, now: float) -> float:
+        """Skip the fish: rod key (unequip), rod key again (equip); the round then
+        ends and the bot recasts at once.  If the minigame doesn't go away, it
+        falls back to missing on purpose."""
+        s = self.s
+        key = (s.skip_key or "3").strip() or "3"
+        if self._skip_stage == 2:
+            if now - self._skip_t > 2.5:
+                self._skip_stage = 3    # unequipping didn't end it: deliberate misses instead
+                self.log(f"The minigame is still up after unequipping - missing on purpose instead.")
+            return 0.0
+        wait = 0.0 if self._skip_stage == 0 else self._skip_t + max(0.1, s.skip_key_gap_s) - now
+        if wait > 0:
+            return min(wait, 0.05)
+        self.plan_at = now
+        if self.focus_gate is not None and not self.focus_gate():
+            return 0.0                  # another window has the keyboard: the controller will switch here
+        self.plan_at = None
+        self._press("unequip rod" if self._skip_stage == 0 else "re-equip rod", key=key)
+        self._skip_stage += 1
+        self._skip_t = self._last_key_t
+        self.last_press_t = self._last_key_t
+        self._fb_t = None
+        return 0.0
+
     def _leviathan_press(self, now: float, rd: MinigameReading) -> float:
         """Leviathan mode: the bite is all that matters, so end the round fast
         with deliberate misses: press whenever the fish is well away from the
@@ -2004,7 +2125,10 @@ class FishingBot:
     def _on_no_minigame(self, now: float) -> float:
         s = self.s
         if self.state == ST_REEL:
-            if now - self.round_last_visible < (0.15 if s.leviathan else self.END_GRACE):
+            if self.round_skip and self._skip_stage == 1:
+                return self._skip_step(now)   # the bar went away after unequipping: equip the rod again
+            skipped = self.round_skip
+            if now - self.round_last_visible < (0.15 if (s.leviathan or skipped) else self.END_GRACE):
                 return 0.0
             # round over
             if self.round_total and self.round_filled >= self.round_total:
@@ -2013,6 +2137,8 @@ class FishingBot:
                          f"  total caught: {self.stats.caught}")
             elif s.leviathan:
                 self.log(f"Round ended ({self.round_misses} deliberate misses) - recasting.")
+            elif skipped:
+                self.log("Skipped it - recasting.")
             elif self.round_misses >= 3:
                 self.stats.lost += 1
                 self.log(f"The fish got away ({self.round_misses} misses).")
@@ -2024,6 +2150,8 @@ class FishingBot:
             self._reset_round()
             self._last_tick = None
             self._set_state(ST_AFTER, "getting ready to cast")
+            self._quick_recast = skipped          # a skipped fish: recast straight away
+            self._skip_end_t = now if skipped else -1e9
             return 0.02
 
         if self.state == ST_START:
@@ -2033,7 +2161,8 @@ class FishingBot:
 
         if self.state == ST_AFTER:
             elapsed = now - self._state_t
-            delay = 0.0 if s.leviathan else s.recast_delay_s   # Leviathan: recast the moment we can
+            quick = s.leviathan or getattr(self, "_quick_recast", False)
+            delay = 0.0 if quick else s.recast_delay_s   # Leviathan / skipped fish: recast the moment we can
             if elapsed < delay:
                 self.detail = f"recasting in {delay - elapsed:.1f}s"
                 return 0.03
@@ -2089,6 +2218,7 @@ class FishingBot:
         return 0.02
 
     def _do_cast(self, now: float, retry: bool = False) -> None:
+        self._quick_recast = False
         self._press("cast")
         self.stats.casts += 1
         self._cast_t = now
@@ -2484,7 +2614,8 @@ class MultiBot:
         reeling = [(h, b) for h, b in self.lanes if b.running and b.state == ST_REEL]
         switch_cost = self.s.focus_settle_ms / 1000.0 + 0.015
         lev = self.s.leviathan
-        soon = (not lev) and any(b.plan_at is not None and b.plan_at - now < 0.3 for _, b in reeling)
+        soon = (not lev) and any(b.plan_at is not None and b.plan_at - now < 0.3 and not b.round_skip
+                                 for _, b in reeling)
         # Leviathan: casting is the priority - windows that need a cast go first
         order = sorted(self.lanes, key=lambda hb: 0 if hb[1].state in (ST_AFTER, ST_START) else 1) \
             if lev else self.lanes
@@ -2502,8 +2633,12 @@ class MultiBot:
         cur = next((b for h, b in reeling if h == fg), None)
         if cur is not None and cur.plan_at is not None and cur.plan_at - now < switch_cost + 0.05:
             return 0.0  # the active window presses next: stay
-        cands = [(b.plan_at, h, b) for h, b in reeling if b.plan_at is not None
+        cands = [(b.plan_at, h, b) for h, b in reeling if b.plan_at is not None and not b.round_skip
                  and (self.s.leviathan or b.plan_at - now >= switch_cost * 0.9)]
+        catch_soon = any(b.plan_at is not None and not b.round_skip and b.plan_at - now < 0.3 for _, b in reeling)
+        if not cands and not catch_soon:
+            # fish worth catching come first; a skipped fish gets its misses when no catch press is close
+            cands = [(b.plan_at, h, b) for h, b in reeling if b.plan_at is not None and b.round_skip]
         if cands:
             t, h, b = min(cands, key=lambda c: c[0])
             if h != fg and (cur is None or cur.plan_at is None or t < cur.plan_at):
@@ -2766,7 +2901,7 @@ def run_gui() -> None:
     stats_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=6)
     stat_vars = {}
     for i, (key, label) in enumerate([("caught", "Caught"), ("bites", "Bites"), ("lost", "Lost"), ("hits", "Hits"),
-                                      ("misses", "Misses"), ("casts", "Casts"), ("lead", "Timing"),
+                                      ("misses", "Misses"), ("skipped", "Skipped"), ("casts", "Casts"), ("lead", "Timing"),
                                       ("run_time", "Run time")]):
         f = ttk.Frame(stats_frame)
         f.grid(row=0, column=i, padx=6)
@@ -2819,6 +2954,18 @@ def run_gui() -> None:
     add_bool(13, "Play all windows' minigames at the same time (always on in Leviathan mode)", "parallel_minigames")
     add_bool(14, "Leviathan alarm - sound + flashing when a leviathan pulls", "leviathan_alarm")
     add_bool(15, "...and stop fishing once you're pulled in (screen goes dark / boss bar)", "alarm_stops_fishing")
+    add_bool(16, "Skip unwanted fish: unequip + re-equip the rod (key below), recast", "skip_fish")
+    add_bool(18, "...keep only fish whose panel says 'Something big is pulling!'", "keep_only_big")
+    sk = ttk.Frame(sf)
+    sk.grid(row=17, column=0, columnspan=3, sticky="w", padx=24, pady=1)
+    ttk.Label(sk, text="Keep fish needing").pack(side="left")
+    keep_var = tk.StringVar(value=settings.keep_hits)
+    tk.Entry(sk, textvariable=keep_var, width=6, bg="#0d1117", fg=FG, insertbackground=FG,
+             relief="flat", justify="center").pack(side="left", padx=4)
+    ttk.Label(sk, text="hits     rod key").pack(side="left")
+    skipkey_var = tk.StringVar(value=settings.skip_key)
+    tk.Entry(sk, textvariable=skipkey_var, width=4, bg="#0d1117", fg=FG, insertbackground=FG,
+             relief="flat", justify="center").pack(side="left", padx=4)
 
     def apply_settings(*_):
         for attr, (v, lo, hi) in num_vars.items():
@@ -2830,6 +2977,10 @@ def run_gui() -> None:
         k = key_var.get().strip()
         if k:
             settings.key = k[:12]
+        settings.keep_hits = keep_var.get().strip()[:20]
+        k = skipkey_var.get().strip()
+        if k:
+            settings.skip_key = k[:12]
         for attr, v in bool_vars.items():
             setattr(settings, attr, bool(v.get()))
         root.attributes("-topmost", settings.always_on_top)
@@ -2837,6 +2988,8 @@ def run_gui() -> None:
     for v, _, _ in num_vars.values():
         v.trace_add("write", apply_settings)
     key_var.trace_add("write", apply_settings)
+    keep_var.trace_add("write", apply_settings)
+    skipkey_var.trace_add("write", apply_settings)
     for v in bool_vars.values():
         v.trace_add("write", apply_settings)
 
@@ -2853,6 +3006,8 @@ def run_gui() -> None:
         for attr, (v, _, _) in num_vars.items():
             v.set(f"{getattr(d, attr):g}")
         key_var.set(d.key)
+        keep_var.set(d.keep_hits)
+        skipkey_var.set(d.skip_key)
         for attr, v in bool_vars.items():
             v.set(getattr(d, attr))
 
@@ -2995,7 +3150,7 @@ def run_gui() -> None:
         state_var.set(snap["state"] + ("  [DRY RUN]" if settings.dry_run and running else ""))
         detail_var.set(snap["detail"][:80])
         st = snap["stats"]
-        for k in ("caught", "bites", "lost", "hits", "misses", "casts"):
+        for k in ("caught", "bites", "lost", "hits", "misses", "skipped", "casts"):
             stat_vars[k].set(str(getattr(st, k)))
         stat_vars["lead"].set(f"{snap['lead_ms']:.0f}ms" + ("*" if snap["lead_auto"] else ""))
         secs = int(st.run_time)

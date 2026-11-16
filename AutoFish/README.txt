@@ -54,6 +54,25 @@ prompt shows (the Recast delay setting is skipped in this mode). The "Bites" cou
 shows how many bites were triggered.
 
 
+SKIPPING UNWANTED FISH (1.8)
+----------------------------
+"Skip unwanted fish" is ON by default: only 3-hit fish whose reel panel says
+"Something big is pulling!" are reeled. Every other fish (2-hit, 4-hit, and
+3-hit fish with the plain "Reel it in!" panel) is skipped the fast way: the
+rod key (3) is pressed twice - unequip, equip - and AutoFish casts again at
+once. The "Skipped" counter shows how many.
+* "Keep fish needing [3] hits": which fish to reel ("2,3" keeps both).
+* Untick "...keep only fish whose panel says 'Something big is pulling!'"
+  to reel every fish with that number of hits.
+* "rod key": the hotbar key of your fishing rod.
+* The decision takes a few frames (well under half a second) after the bite.
+* If unequipping doesn't end the minigame, AutoFish misses on purpose
+  instead (like Leviathan mode) so the round still ends quickly.
+* With several windows, a window reeling a wanted fish always gets the
+  keyboard first; skips happen in between.
+* Leviathan mode ignores all of this (it only wants bites).
+
+
 LEVIATHAN ALARM (1.7.1)
 -----------------------
 While AutoFish is running it watches every Roblox window for a leviathan
