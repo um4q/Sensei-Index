@@ -75,7 +75,10 @@ once. The "Skipped" counter shows how many.
   1.5 s, AutoFish presses the rod key to equip it, and tries again 2 s later
   if that press didn't register. After 4 tries in a row without a prompt it
   stops pressing (something else is hiding the prompt) until a prompt shows
-  again. Untick "Re-equip the rod..." to turn this off.
+  again. Untick "Re-equip the rod..." to turn this off. (1.8.2: a window only
+  gets this check after its Cast/Reel prompt has been read 3 times - in very
+  small windows the prompt may not be readable, and then "no prompt" proves
+  nothing.)
 
 
 LEVIATHAN ALARM (1.7.1)

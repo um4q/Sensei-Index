@@ -36,7 +36,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -1569,6 +1569,7 @@ class FishingBot:
         self._noprompt_since: Optional[float] = None  # since when no Cast/Reel prompt at all is on screen
         self._equip_tries = 0
         self._equip_t = -1e9
+        self._prompts_read = 0       # Cast/Reel prompts read so far (the rod check needs a few first)
         self._last_key_t = -1e9
         self._state_t = 0.0
         self._cast_t = 0.0
@@ -1747,6 +1748,8 @@ class FishingBot:
                 else:
                     self._noprompt_since = None
                     self._equip_tries = 0
+                if pr.state is not None:
+                    self._prompts_read += 1          # the prompt CAN be read in this window
         else:
             self._noprompt_since = None
         return reading
@@ -2246,6 +2249,8 @@ class FishingBot:
         s = self.s
         if not s.rod_check or not (s.skip_key or "").strip() or self._noprompt_since is None:
             return False
+        if self._prompts_read < 3:
+            return False        # prompts aren't read reliably in this window (too small?): "no prompt" proves nothing
         if now - self._noprompt_since < max(0.5, s.rod_check_s) or now - self._equip_t < 2.0:
             return False
         if self._equip_tries >= 4:
