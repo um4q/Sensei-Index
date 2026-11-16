@@ -36,7 +36,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.8.2"
+APP_VERSION = "2.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -79,7 +79,9 @@ class Settings:
     rod_check_s: float = 1.5       # how long with no prompt at all before equipping
     multi_window: bool = True      # fish in every Roblox window at once (switches between them)
     focus_settle_ms: float = 60.0  # wait after switching windows before pressing
-    parallel_minigames: bool = False  # play every window's minigame at the same time
+    parallel_minigames: bool = False  # (1.x setting; 2.0 always plays every window at the same time)
+    max_windows: float = 8.0       # fish in at most this many Roblox windows
+    auto_detect: bool = True       # pick up Roblox windows opened (or closed) while running
     # --- leviathan alarm ---------------------------------------------------
     leviathan_alarm: bool = True   # sound + flash when a leviathan pulls (while fishing)
     alarm_stops_fishing: bool = True  # stop fishing once you are pulled in (screen goes dark / boss bar)
@@ -214,6 +216,16 @@ class BarGeom:
 def locate_bar(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> Optional[BarGeom]:
     """Find the minigame bar anywhere in an image.  Returns None if not visible.
 
+    vision2 changes (everything else is v1.8.2):
+      * "dark above / below the bar": best of the 1..off rows on each side (in a
+        small window the subtitle sits ~2 px above the bar)
+      * row pieces are joined repeatedly, and short dark gaps between two long
+        pieces are joined (the gold zone's dark edge / the fish split the bar
+        in ~1000 px windows, which returned a piece of the bar)
+      * the "enough rows agree on the ends" test also counts rows that agree
+        on one end (the fish hides the other)
+      * the outward walk over a hidden end reaches 3 bar heights (was 1.2)
+
     The bar is a long horizontal navy strip that contains a gold block.  The
     rows near its top and bottom edge are only crossed by the thin pointer
     line, so those rows give a clean, unbroken navy+gold run whose ends are
@@ -245,16 +257,30 @@ def locate_bar(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> Optional[Ba
         # the fish icon / pointer line can cut a row in two: join pieces that
         # are separated by a gap that is small next to the pieces themselves
         # (never across the dark panel background next to the bar's ends)
-        joined: List[Tuple[int, int]] = []
-        for s, e in runs(both, gap=4):
-            if joined:
-                ps, pe = joined[-1]
-                gap_px = bright[i, pe + 1:s]
-                if (s - pe - 1 <= max(6, 0.12 * (e - ps + 1))
-                        and (gap_px.size == 0 or float(gap_px.mean()) >= 0.6)):
-                    joined[-1] = (ps, e)
-                    continue
-            joined.append((s, e))
+        # (vision2: repeated until nothing changes, because a piece left of the
+        # fish only becomes long enough to bridge the fish once it has been
+        # joined to the pieces on the other side; and a short gap of any colour
+        # is joined between two long pieces - the gold zone has a dark edge
+        # ~3% of the bar wide in a ~1000 px window that used to cut the bar)
+        joined: List[Tuple[int, int]] = runs(both, gap=4)
+        for _ in range(3):
+            merged: List[Tuple[int, int]] = []
+            for s, e in joined:
+                if merged:
+                    ps, pe = merged[-1]
+                    gap_px = bright[i, pe + 1:s]
+                    gap_n = s - pe - 1
+                    span = e - ps + 1
+                    if ((gap_n <= max(6, 0.12 * span)
+                            and (gap_px.size == 0 or float(gap_px.mean()) >= 0.6))
+                            or (gap_n <= max(4, 0.03 * span)
+                                and min(e - s + 1, pe - ps + 1) >= 0.1 * span)):
+                        merged[-1] = (ps, e)
+                        continue
+                merged.append((s, e))
+            if len(merged) == len(joined):
+                break
+            joined = merged
         for s, e in joined:
             n = e - s + 1
             if n < 60:
@@ -304,7 +330,7 @@ def locate_bar(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> Optional[Ba
         # the fish can sit on (and hide) an end of the bar: walk outwards (at
         # most ~one bar height) over columns that still show navy/gold above or
         # below the fish, stepping over the thin pointer line
-        reach = int(1.2 * h) + 2
+        reach = int(3.0 * h) + 2      # (vision2: was 1.2h; the fish is up to ~2.5 bar heights wide)
         off_x = max(0, x0 - reach)
         rb, gb, bb_ = channels(rgb[y0:y1 + 1, off_x:min(W, x1 + reach + 1)])
         barish = (mask_navy(rb, gb, bb_) | mask_gold(rb, gb, bb_)).mean(axis=0) >= 0.3
@@ -327,19 +353,30 @@ def locate_bar(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> Optional[Ba
         w = x1 - x0 + 1
         if h < 4 or not (6.0 <= w / h <= 30.0):
             continue
-        if len(grp) < 0.25 * h:  # too few rows agree on the ends
+        # enough rows must agree on the ends.  The fish hides one end of some
+        # rows (more rows at high resolution), so a row counts when it agrees
+        # on either end
+        tol = max(3, int(0.02 * w))
+        support = sum(1 for (yy, s_, e_) in good
+                      if y0 <= yy <= y1 and (abs(s_ - x0) <= tol or abs(e_ - x1) <= tol))
+        if max(len(grp), support) < 0.25 * h:
             continue
         # the bar sits on the minigame panel's dark background: the rows just
         # above and below it must be dark (rules out sunsets on water, etc.)
+        # (in a small window the subtitle text sits only ~2 px above the bar, so
+        # the best of the 1..off rows on each side counts)
         off = max(2, int(round(0.12 * h)))
         dark_ok = True
-        for yy in (y0 - off, y1 + off):
-            if not (0 <= yy < H):
-                dark_ok = False  # the panel always has room above and below the bar
-                break
-            seg = rgb[yy, x0:x1 + 1].astype(np.int16)
-            if float((seg.max(axis=1) <= 70).mean()) < 0.6:
-                dark_ok = False
+        for side in (-1, 1):
+            best_dark = 0.0
+            for d in range(1, off + 1):
+                yy = y0 - d if side < 0 else y1 + d
+                if 0 <= yy < H:
+                    seg = rgb[yy, x0:x1 + 1]
+                    mxs = np.maximum(np.maximum(seg[:, 0], seg[:, 1]), seg[:, 2])
+                    best_dark = max(best_dark, float((mxs <= 70).mean()))
+            if best_dark < 0.6:
+                dark_ok = False  # (the panel always has room above and below the bar)
         if not dark_ok:
             continue
         score = len(grp) * w
@@ -362,7 +399,11 @@ class MinigameReading:
 def read_minigame(strip: np.ndarray, geom: BarGeom, strip_origin: Tuple[int, int]) -> MinigameReading:
     """Read gold zone / pointer / progress from an image that contains the bar.
 
-    `strip_origin` is the absolute screen position of strip[0, 0]."""
+    `strip_origin` is the absolute screen position of strip[0, 0].
+
+    vision2: zone / pointer / miss boxes are v1.8.2; the progress dots are
+    counted as blobs (see below) - the old row-run count missed grey-green
+    empty dots and dots that blur together in small windows."""
     out = MinigameReading(width=geom.w)
     ox, oy = strip_origin
     lx0 = geom.x0 - ox
@@ -422,21 +463,43 @@ def read_minigame(strip: np.ndarray, geom: BarGeom, strip_origin: Tuple[int, int
         y_a, y_b = max(0, y_a), min(Hs, y_b + 1)
         if y_b - y_a >= 2:
             span = int(round(0.40 * geom.w))
-            left = strip[y_a:y_b, lx0:min(Ws, lx0 + span)]
+            left = strip[y_a:y_b, max(0, lx0 - int(0.6 * h)):min(Ws, lx0 + span)]   # (vision2: the first dot can start left of the bar)
             rspan = int(round(0.30 * geom.w))
             right = strip[y_a:y_b, max(0, lx1 - rspan + 1):lx1 + 1]
             r, g, b = channels(left)
             filled = (r >= 185) & (g >= 145) & (b <= 160) & (r - b >= 70)
             mx = np.maximum(np.maximum(r, g), b)
             mn = np.minimum(np.minimum(r, g), b)
-            empty = (b - r >= 12) & (mx >= 45) & (mx <= 110) & (mx - mn <= 45)
             min_dot = max(2, int(0.2 * h))
-            f_best = e_best = 0
-            for i in range(left.shape[0]):
-                f_best = max(f_best, sum(1 for s, e in runs(filled[i], gap=0) if e - s + 1 >= min_dot))
-                e_best = max(e_best, sum(1 for s, e in runs(empty[i], gap=0) if e - s + 1 >= min_dot))
-            out.filled = f_best
-            out.total = f_best + e_best
+            # vision2: the dots are found as blobs in a column projection, not
+            # row by row.  An empty dot is a grey ring - bluish on most screens,
+            # greenish grey in a teal-lit / compressed small window - so it is
+            # "lit and grey" relative to the panel, whatever its hue.  Rows of
+            # the long progress line under the dots are left out.
+            bgl = float(np.median(mx))
+            ring = (mx >= bgl + 22) & (mx <= 200) & (mx - mn <= 50)
+            dot_px = ring | filled
+            keep = dot_px.mean(axis=1) < 0.5
+            dot_px = dot_px & keep[:, None]
+            cols = dot_px.sum(axis=0) >= max(1, int(round(0.12 * h)))
+            # neighbouring dots blur together in a small window: a blob holds as
+            # many dots as fit at their pitch (measured 0.62..0.72 bar heights;
+            # one dot is ~0.6 bar heights wide)
+            pitch = 0.67 * h
+            n_f = n_e = 0
+            for s, e in runs(cols, gap=0):
+                wd = e - s + 1
+                if wd < 0.3 * h or wd > 6.5 * pitch:
+                    continue
+                k = max(1, int(round((wd + 0.08 * h) / pitch)))
+                for j in range(k):
+                    a_ = s + int(round(j * wd / k)); b_ = s + int(round((j + 1) * wd / k))
+                    if filled[:, a_:b_].sum() >= 0.2 * (b_ - a_) * max(1, int(0.3 * h)):
+                        n_f += 1
+                    else:
+                        n_e += 1
+            out.filled = n_f
+            out.total = n_f + n_e
             r, g, b = channels(right)
             red = (r >= 130) & (r - g >= 60) & (r - b >= 60)
             # each red box has a dark X across it, which splits single rows of
@@ -462,103 +525,301 @@ class PromptReading:
     note: str = ""
 
 
+CAST_RATIO = (0.42, 0.75)     # title width / box height
+
+
+REEL_RATIO = (0.80, 1.06)
+
+
+ASPECT = (2.75, 3.8)          # prompt box width / height (measured 2.97..3.32 at all sizes)
+
+
+PROMPT_MIN_W = 40           # smallest prompt box width we read (px); ~80 px at a 150 px reel bar
+
+
+P = dict(lb_b=90, lb_g=75, lb_r=55, lb_br=15,   # border (light blue-grey, blended down to #58676E)
+         key_r=70, key_rb=12, key_gb=8,           # key icon gold frame (dim / desaturated in small windows)
+         txt_c=45,                                # title text: max chroma (cream / grey)
+         navy_br=8)                               # box interior: median blue - red (real prompts: 18..22)
+
+
+def _border_mask(r, g, b):
+    """Light blue-grey box border (#7EA3B4), also when it is blended with the
+    scene in a small window (seen as dim as #58676E)."""
+    return (b >= P['lb_b']) & (g >= P['lb_g']) & (r >= P['lb_r']) & (b - r >= P['lb_br']) & (b >= g - 12) & (g >= r)
+
+
+def _key_columns(keygold: np.ndarray, bh: int) -> np.ndarray:
+    """Columns of the key icon's gold square frame (local x), or an empty array.
+
+    The key is a gold-framed square ~0.6 box heights tall: its side columns are
+    gold over >= 0.45 box heights (a pressed key is solid gold).  A gold block
+    that is wide but short (the reel bar's gold zone) is not a key."""
+    if keygold.size == 0:
+        return np.zeros(0, int)
+    cnt = keygold.sum(axis=0)
+    kd = keygold.copy()                       # (the frame's corners are rounded)
+    kd[:, 1:] |= keygold[:, :-1]
+    kd[:, :-1] |= keygold[:, 1:]
+    rows = np.arange(keygold.shape[0])[:, None]
+    first = np.where(kd, rows, 10 ** 6).min(axis=0)
+    last = np.where(kd, rows, -1).max(axis=0)
+    ext = last - first + 1
+    tall = np.flatnonzero((cnt >= 0.25 * bh) & (ext >= 0.42 * bh))
+    if tall.size == 0:
+        return tall
+    # left and right frame ~0.6 box heights apart (the other one may be dimmer),
+    # or one frame column plus the square's top/bottom frame line
+    loose = np.flatnonzero((cnt >= 0.2 * bh) & (ext >= 0.3 * bh))
+    d = np.abs(loose[None, :] - tall[:, None])
+    if ((d >= 0.4 * bh) & (d <= 0.85 * bh)).any():
+        return tall
+    for xr in (int(tall[0]), int(tall[-1])):
+        seg = keygold[:, max(0, xr - int(0.85 * bh)):xr + int(0.85 * bh) + 1]
+        for i, row in enumerate(seg):
+            for s, e in runs(row, gap=1):
+                if 0.35 * bh <= e - s + 1 <= 0.9 * bh:
+                    # a thin frame line: the rows a little inside it are not gold
+                    k = max(2, int(round(0.15 * bh)))
+                    inside = [seg[j, s:e + 1].mean() for j in (i - k, i + k) if 0 <= j < seg.shape[0]]
+                    if inside and min(inside) < 0.5:
+                        return tall
+    return tall[:0]
+
+
 def read_prompt(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> PromptReading:
     """Find the "[E] Cast / Reel in" action prompt and tell which one it is.
 
-    The prompt is a dark box with a light-blue border.  Its title is "Cast"
-    (short) or "Reel in" (long); the title's width divided by the box height
-    is ~0.57 for Cast and ~0.91 for Reel in, at any resolution."""
+    The prompt is a dark box (~3.2x as wide as tall) with a light-blue border
+    and a gold-framed key square at its left.  Its title is "Cast" (short) or
+    "Reel in" (long): the title's width divided by the box height is ~0.58 for
+    Cast and ~0.90 for Reel in, at any size (measured 0.49..0.72 and 0.86..1.00
+    on real windows from ~500 to 2560 px wide).
+
+    Returns the box (absolute coordinates) whenever a prompt box is seen, also
+    when its title can't be read (cursor / other labels over it)."""
+    k = max(1, rgb.shape[1] // 1280)       # very large images: half resolution is plenty
+    if k > 1:
+        pr = _read_prompt(rgb[::k, ::k])
+        if pr.box is not None:
+            x0, y0, x1, y1 = pr.box
+            pr.box = (x0 * k + origin[0], y0 * k + origin[1], x1 * k + k - 1 + origin[0], y1 * k + k - 1 + origin[1])
+        return pr
+    return _read_prompt(rgb, origin)
+
+
+def _read_prompt(rgb: np.ndarray, origin: Tuple[int, int] = (0, 0)) -> PromptReading:
     H, W = rgb.shape[:2]
-    if H < 20 or W < 60:
+    if H < 20 or W < 2 * PROMPT_MIN_W:
         return PromptReading(note="image too small")
-    # rows that contain a long light-blue line (box top/bottom border)
-    rs, gs, bs = channels(rgb[:, ::2])
-    lb_sub = mask_light_blue(rs, gs, bs)
-    cand = np.flatnonzero(lb_sub.sum(axis=1) >= 20)
+    # 1) cheap pass on every 3rd/4th column: rows holding a long border-coloured run
+    step = 3 if W < 1200 else 4
+    need_n = max(4, int(0.4 * PROMPT_MIN_W / step))
+    sub = rgb[:, ::step]
+    pre = np.flatnonzero((sub[..., 2] >= P['lb_b']).sum(axis=1) >= need_n)   # (uint8, cheap)
+    if pre.size == 0:
+        return PromptReading(note="no prompt")
+    rs, gs, bs = channels(sub[pre])
+    cand = pre[_border_mask(rs, gs, bs).sum(axis=1) >= need_n]
     if cand.size == 0:
         return PromptReading(note="no prompt")
     cand_rows = cand.tolist()
     r, g, b = channels(rgb[cand])
-    lb = mask_light_blue(r, g, b)
-    row_of = {y: i for i, y in enumerate(cand_rows)}
+    lb = _border_mask(r, g, b)
+    # a border pixel has the box's dark interior 2-6 px above or below it (this
+    # keeps light-blue fog / sky / water out, however bluish it is)
+    need = np.unique(np.clip((cand[:, None] + np.array([-6, -5, -4, -3, -2, 2, 3, 4, 5, 6])[None, :]).ravel(), 0, H - 1))
+    sub = rgb[need]
+    dk = np.maximum(np.maximum(sub[..., 0], sub[..., 1]), sub[..., 2]) <= 80
+    pos = np.full(H, -1, dtype=np.int64)
+    pos[need] = np.arange(need.size)
+    near = np.zeros_like(lb)
+    for dy in (2, 3, 4, 5, 6, -2, -3, -4, -5, -6):
+        ys = cand + dy
+        ok = (ys >= 0) & (ys < H)
+        near[ok] |= dk[pos[ys[ok]]]
+    lb &= near
+    max_w = int(0.5 * W)
     segs = []
-    for i, y in enumerate(cand_rows):
+    long_enough = np.flatnonzero(lb.sum(axis=1) >= PROMPT_MIN_W - 4)
+    for i in long_enough.tolist():
+        y = cand_rows[i]
         for s, e in runs(lb[i], gap=2):
-            if e - s + 1 >= 40:
+            if PROMPT_MIN_W <= e - s + 1 <= max_w:
                 segs.append((y, s, e))
-    # A long light-blue run is one border of the box.  The opposite border has
-    # an animated shine and the mouse cursor can cut it, so it only has to be
-    # partly lit.  Take the farthest such row (the outer border, not the
-    # underline beneath "Water").
     boxes = set()
-    for (ya, sa, ea) in segs:
+    if not segs:
+        return PromptReading(note="no prompt")
+    csum = np.zeros((lb.shape[0], lb.shape[1] + 1), dtype=np.int32)
+    np.cumsum(lb, axis=1, out=csum[:, 1:])
+    for (ya, sa, ea) in set(segs):
         wa = ea - sa + 1
         lo, hi = int(0.2 * wa), int(0.55 * wa)
-        below = [y for y in cand_rows if lo <= y - ya <= hi and lb[row_of[y], sa:ea + 1].mean() >= 0.35]
-        above = [y for y in cand_rows if lo <= ya - y <= hi and lb[row_of[y], sa:ea + 1].mean() >= 0.35]
-        if below:
-            boxes.add((sa, ya, ea, max(below)))
-        if above:
-            boxes.add((sa, min(above), ea, ya))
+        lit = (csum[:, ea + 1] - csum[:, sa]) >= 0.35 * wa       # rows with a partly lit border here
+        dys = cand - ya
+        below = cand[lit & (dys >= lo) & (dys <= hi)].tolist()
+        above = cand[lit & (dys <= -lo) & (dys >= -hi)].tolist()
+        # the outer border is the farthest such row (not the underline beneath
+        # "Water"), but something lit just outside the box (another panel's
+        # border) can be farther still: also keep the farthest row that gives
+        # the prompt's real proportions
+        for ys, sign in ((below, 1), (above, -1)):
+            if not ys:
+                continue
+            far = max(ys) if sign > 0 else min(ys)
+            pick = {far}
+            good = [y for y in ys if ASPECT[0] <= wa / (abs(y - ya) + 1.0) <= ASPECT[1]]
+            if good:
+                pick.add(max(good) if sign > 0 else min(good))
+            for y in pick:
+                boxes.add((sa, min(y, ya), ea, max(y, ya)))
     if not boxes:
         return PromptReading(note="no prompt")
-    # one box per location: prefer the widest, then the tallest
-    ordered = sorted(boxes, key=lambda bx: (-(bx[2] - bx[0]), -(bx[3] - bx[1])))
+
+    def proper(bx):
+        return ASPECT[0] <= (bx[2] - bx[0] + 1) / float(bx[3] - bx[1] + 1) <= ASPECT[1]
+    ordered = sorted(boxes, key=lambda bx: (not proper(bx), -(bx[2] - bx[0]), -(bx[3] - bx[1])))
     uniq = []
     for bx in ordered:
-        if all(abs((bx[0] + bx[2]) - (u[0] + u[2])) > 2 * 12 or abs(bx[1] - u[1]) > 12 for u in uniq):
+        tol = max(6, (bx[3] - bx[1]) // 3)
+        if all(abs((bx[0] + bx[2]) - (u[0] + u[2])) > 2 * tol or abs(bx[1] - u[1]) > tol for u in uniq):
             uniq.append(bx)
     cx, cy = W / 2.0, H / 2.0
     uniq.sort(key=lambda bx: (((bx[0] + bx[2]) / 2 - cx) ** 2 + ((bx[1] + bx[3]) / 2 - cy) ** 2))
     truncated = None
+    fallback = None
     for (x0, y0, x1, y1) in uniq:
         bw, bh = x1 - x0 + 1, y1 - y0 + 1
-        if bw < 2.5 * bh:
-            # the real prompt is ~3.1x as wide as it is tall; a narrower box means
-            # something (usually the mouse cursor) cut its border - don't guess
-            truncated = (x0 + origin[0], y0 + origin[1], x1 + origin[0], y1 + origin[1])
+        if bw > ASPECT[1] * bh or 2.5 * bh <= bw < ASPECT[0] * bh:
             continue
-        inner = rgb[y0 + 2:y1 - 1, x0 + 2:x1 - 1]
+        m = max(2, int(round(0.12 * bh)))          # (skip the border, 1..4 px thick)
+        inner = rgb[y0 + m:y1 - m + 1, x0 + m:x1 - m + 1]
         if inner.size == 0 or float(inner.mean()) > 90:
-            continue  # not a dark box
+            continue
+        # ... and navy (#111A26: blue above red), not brown / grey like the
+        # auction rows or the quest panel
+        ir, ig, ib = channels(inner)
+        idk = np.maximum(np.maximum(ir, ig), ib) <= 80
+        if idk.mean() < 0.4 or float(np.median((ib - ir)[idk])) < P['navy_br']:
+            continue
+        # the minigame panel (also while it fades out) holds the long, bluer reel
+        # bar; in the prompt only the short "Water" underline is that blue
+        # (measured: <= 0.55 of the box width on every real prompt, >= 0.75 for the bar)
+        if int(((ib - ir >= 32) & (ib >= 45) & (ib - ig >= 8)).sum(axis=1).max()) >= 0.65 * bw:
+            continue
         # the prompt has a gold-framed key icon on its left: one of its frame
         # columns is a tall gold line (rules out other dark boxes, e.g. the
-        # minigame panel while it fades out)
-        # (search a little left of x0 too: the cursor can cut the border's left end)
+        # minigame panel while it fades out).  Search a little left of x0 too:
+        # the cursor can cut the border's left end.
         kx0 = max(0, x0 - int(0.3 * bh))
-        kr, kg, kb = channels(rgb[y0 + 1:y1, kx0:x0 + max(3, int(0.9 * bh))])
-        keygold = ((kr >= 100) & (kg >= 85) & (kr - kb >= 30) & (kg - kb >= 15)
+        kr, kg, kb = channels(rgb[y0 + 1:y1, kx0:min(x1, x0 + max(3, int(0.9 * bh)))])
+        keygold = ((kr >= P['key_r']) & (kg >= P['key_r'] - 10) & (kr - kb >= P['key_rb']) & (kg - kb >= P['key_gb'])
                    & (np.abs(kr - kg) <= 45))
-        if keygold.size == 0:
+        tall = _key_columns(keygold, bh)
+        box = (x0 + origin[0], y0 + origin[1], x1 + origin[0], y1 + origin[1])
+        if bw < 2.5 * bh:
+            # the real prompt is ~3.2x as wide as it is tall; a narrower box means
+            # something (usually the mouse cursor) cut its border - don't guess,
+            # but only call it a prompt if it has the key icon
+            if tall.size and truncated is None:
+                truncated = box
             continue
-        tall = np.flatnonzero(keygold.sum(axis=0) >= 0.35 * bh)
         if tall.size == 0:
             continue
         ya = y0 + max(2, int(0.06 * bh))
+        # (the top border can be several px thick and is light grey: start the
+        # title band below the rows that are lit across the box)
+        while ya < y0 + 0.3 * bh:
+            band = rgb[ya, x0:x1 + 1]
+            if float((np.maximum(np.maximum(band[:, 0], band[:, 1]), band[:, 2]) >= 90).mean()) < 0.4:
+                break
+            ya += 1
+        ya += 1 if ya > y0 + max(2, int(0.06 * bh)) else 0
         yb = y0 + int(0.55 * bh)
-        # the title starts just right of the key square's right frame
-        xa = kx0 + int(tall[-1]) + max(2, int(0.08 * bh))
+        # the title starts just right of the key square: its right edge is the end
+        # of the square's top / bottom frame line (the longest gold row run)
+        kright = int(tall[-1])
+        best_run = 0
+        for row in keygold:
+            for s_, e_ in runs(row, gap=1):
+                if e_ - s_ + 1 > best_run:
+                    best_run, kend = e_ - s_ + 1, e_
+        if best_run >= 0.35 * bh:
+            kright = max(kright, kend)
+        xa = kx0 + kright + max(2, int(round(0.12 * bh)))
         xb = x1 - max(2, int(0.03 * bw))
         if yb <= ya or xb <= xa:
             continue
         rr, gg, bb = channels(rgb[ya:yb, xa:xb])
         mx = np.maximum(np.maximum(rr, gg), bb)
         mn = np.minimum(np.minimum(rr, gg), bb)
-        pure_white = int((mn >= 236).sum())  # cursor (white); title text is cream
-        # cream title text is nearly grey (chroma <= ~30); the gold key frame (~60) is not
-        text = (rr >= 140) & (gg >= 130) & (bb >= 100) & (mx - mn <= 45) & (mn < 236)
-        box = (x0 + origin[0], y0 + origin[1], x1 + origin[0], y1 + origin[1])
+        pure_white = int((mn >= 236).sum())
+        # something drawn over the title (a level-up badge has a strong gold frame)
+        strong_gold = int(((rr - bb >= 50) & (gg - bb >= 25) & (rr >= 120)).sum())
+        # cream title text.  In a small window the letters are blurred into the
+        # navy, so the brightness cut is relative to this box: half way between
+        # its background and its brightest text (never below 90)
+        bg_l, pk_l = np.percentile(mx, (50, 99))
+        thr = max(90.0, min(140.0, bg_l + 0.45 * (pk_l - bg_l)))
+        text = (mx >= thr) & (mx - mn <= P['txt_c']) & (bb - rr <= 12) & (mn < 236)
+        if strong_gold >= max(4, int(0.5 * bh)):
+            fallback = fallback or PromptReading(None, box, 0.0, "something covers the prompt's title")
+            continue
         if pure_white >= 3:
-            return PromptReading(None, box, 0.0, "mouse cursor is over the prompt")
-        cols = np.flatnonzero(text.sum(axis=0) >= 1)
+            fallback = fallback or PromptReading(None, box, 0.0, "mouse cursor is over the prompt")
+            continue
+        # other labels can sit on the title ("River Fish" in green, the green
+        # diamond marker with a white centre): drop cream pixels next to green
+        green = (gg - rr >= 25) & (gg - bb >= 25) & (gg >= 70)
+        gd = None
+        if green.any():
+            gd = green.copy()
+            for _ in range(2):
+                gd[1:] |= gd[:-1].copy(); gd[:-1] |= gd[1:].copy()
+                gd[:, 1:] |= gd[:, :-1].copy(); gd[:, :-1] |= gd[:, 1:].copy()
+            text_all = text & ~green
+            text &= ~gd
+        cnt = text.sum(axis=0)
+        cols = np.flatnonzero(cnt >= 2)       # letters; thin diagonal lines of icons give ~1 px
         if cols.size < 3:
-            return PromptReading(None, box, 0.0, "prompt has no title")
-        ratio = (cols[-1] - cols[0] + 1) / float(bh)
-        if 0.40 <= ratio <= 0.74:
+            cols = np.flatnonzero(cnt >= 1)
+        if cols.size < 3:
+            fallback = fallback or PromptReading(None, box, 0.0, "prompt has no title")
+            continue
+        # the title is one cluster of columns starting at the left (the gap
+        # between "Reel" and "in" is ~0.2 box heights); stray pixels further
+        # right belong to something else
+        brk = np.flatnonzero(np.diff(cols) > max(2, int(round(0.35 * bh))))
+        if brk.size:
+            cols = cols[:brk[0] + 1]
+        c0, c1 = int(cols[0]), int(cols[-1])
+        for _ in range(2):                    # the letters' thin outer edges
+            if c0 - 1 >= 0 and cnt[c0 - 1] >= 1:
+                c0 -= 1
+            if c1 + 1 < cnt.size and cnt[c1 + 1] >= 1:
+                c1 += 1
+        ratio = float(c1 - c0 + 1) / float(bh)
+        # measured on real windows (500..2560 px wide) and on UI shrunk to a
+        # 150 px reel bar: Cast 0.49..0.72, Reel in 0.84..1.00
+        if CAST_RATIO[0] <= ratio <= CAST_RATIO[1]:
+            # a short title is only "Cast" if the rest of "Reel in" is not
+            # hiding under something green ("River Fish", the marker): where
+            # green covers that place, cream letter pixels showing between the
+            # green ones mean "el in" is there (measured: >= 0.64 box heights of
+            # such pixels for Reel in, <= 0.29 for Cast except 5 of 164 heavily
+            # covered Cast titles, which then read as unreadable - never Reel)
+            if gd is not None and int(green.sum()) >= max(3, int(0.1 * bh)):
+                lo_c, hi_c = c1 + 1, min(gd.shape[1], c0 + int(round(REEL_RATIO[1] * bh)))
+                if (hi_c > lo_c and gd[:, lo_c:hi_c].any(axis=0).mean() >= 0.25
+                        and int(text_all[:, lo_c:hi_c].sum()) >= 0.3 * bh):
+                    fallback = fallback or PromptReading(None, box, ratio, "something covers the prompt's title")
+                    continue
             return PromptReading(PROMPT_CAST, box, ratio, "Cast")
-        if 0.78 <= ratio <= 1.20:
+        if REEL_RATIO[0] <= ratio <= REEL_RATIO[1]:
             return PromptReading(PROMPT_REEL, box, ratio, "Reel in")
-        return PromptReading(None, box, ratio, f"unreadable prompt (ratio {ratio:.2f})")
+        fallback = fallback or PromptReading(None, box, ratio, f"unreadable prompt (ratio {ratio:.2f})")
+    if fallback is not None:
+        return fallback
     if truncated is not None:
         return PromptReading(None, truncated, 0.0, "prompt partly hidden (mouse cursor?)")
     return PromptReading(note="no prompt")
@@ -575,16 +836,37 @@ def title_region(geom: "BarGeom") -> Tuple[int, int, int, int]:
 def read_title(img: np.ndarray, bar_w: int) -> Optional[bool]:
     """True = "Something big is pulling!", False = "Reel it in!", None = can't tell.
     Measured on real frames: the title is ~0.2 of the bar's width for "Reel it in!"
-    and ~0.5 for "Something big is pulling!"."""
+    and ~0.5 for "Something big is pulling!".
+
+    vision2: the brightness cuts are relative to the region (in a small window
+    the panel's top edge and the letters are blurred well below 150), so the
+    panel's edge is found again and things above it (the "!" marker, the
+    "Hooked!" text) are not taken for the title."""
     if img is None or img.size == 0 or bar_w <= 0:
         return None
     reg = img.astype(np.int16)
-    lum = reg.max(axis=2)
-    bright = (lum >= 150) & (lum - reg.min(axis=2) <= 90)    # the cream title / subtitle text
+    lum = np.maximum(np.maximum(reg[..., 0], reg[..., 1]), reg[..., 2])
+    chroma = lum - np.minimum(np.minimum(reg[..., 0], reg[..., 1]), reg[..., 2])
+    # the panel's top edge: a row that is lit almost all the way across
+    edge = np.flatnonzero(((lum >= 90) & (chroma <= 90)).mean(axis=1) >= 0.85)
+    start = int(edge[-1]) + 1 if edge.size else 0
+    if edge.size:
+        # the edge's blur reaches a row or two further down: lit pixels spread
+        # over the whole width (the title is a centred block of letters)
+        lit_any = (lum >= 90) & (chroma <= 90)
+        for i in range(start, min(start + 3, lum.shape[0])):
+            c = np.flatnonzero(lit_any[i])
+            if c.size >= 2 and c[-1] - c[0] + 1 >= 0.85 * lum.shape[1]:
+                start = i + 1
+    below = lum[start:]
+    if below.size == 0:
+        return None
+    bg, pk = np.percentile(below, (50, 99.5))
+    thr = max(90.0, min(150.0, bg + 0.45 * (pk - bg)))
+    bright = (lum >= thr) & (chroma <= 90)                   # the cream title / subtitle text
     rows = bright.sum(axis=1)
-    border = np.flatnonzero(rows >= 0.6 * reg.shape[1])      # the panel's top edge
-    start = int(border[-1]) + 1 if border.size else 0
-    text = [i for i in range(start, len(rows)) if rows[i] >= 2]
+    # (rows lit across most of the width are the edge's blur, not letters)
+    text = [i for i in range(start, len(rows)) if 2 <= rows[i] < 0.6 * reg.shape[1]]
     if len(text) < 4:
         return None
     a, b = text[0], text[-1]
@@ -1203,6 +1485,14 @@ if IS_WINDOWS:
     _user32.IsIconic.argtypes = (wintypes.HWND,)
     _user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
     _user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+    _user32.SetWindowPos.argtypes = (wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, wintypes.UINT)
+    _user32.GetWindowRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+    _user32.IsZoomed.argtypes = (wintypes.HWND,)
+    _user32.MonitorFromWindow.argtypes = (wintypes.HWND, wintypes.DWORD)
+    _user32.MonitorFromWindow.restype = ctypes.c_void_p
+    _user32.GetMonitorInfoW.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+    _user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
 
     _VK_NAMES = {f"F{i}": 0x6F + i for i in range(1, 25)}
     _VK_NAMES.update({"SPACE": 0x20, "INSERT": 0x2D, "DELETE": 0x2E, "HOME": 0x24, "END": 0x23,
@@ -1313,6 +1603,45 @@ if IS_WINDOWS:
             _user32.SendInput(2, arr, ctypes.sizeof(INPUT))
             _user32.SetForegroundWindow(hwnd)
             return _user32.GetForegroundWindow() == hwnd
+
+    def send_key_global(key: str, down: bool) -> None:
+        """Key (or "click") down/up to whatever window is active (SendInput)."""
+        inp = INPUT(type=INPUT_MOUSE if key == "click" else INPUT_KEYBOARD)
+        if key == "click":
+            inp.mi = MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN if down else MOUSEEVENTF_LEFTUP, 0, 0)
+        else:
+            vk = vk_from_name(key) or 0x45  # default 'E'
+            scan = _user32.MapVirtualKeyW(vk, 0)  # MAPVK_VK_TO_VSC
+            inp.ki = KEYBDINPUT(0, scan, KEYEVENTF_SCANCODE | (0 if down else KEYEVENTF_KEYUP), 0, 0)
+        arr = (INPUT * 1)(inp)
+        _user32.SendInput(1, arr, ctypes.sizeof(INPUT))
+
+    class _MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+    def work_area(hwnd=None) -> Tuple[int, int, int, int]:
+        """(x, y, w, h) of the usable desktop (without the taskbar) of the monitor
+        showing hwnd (or the primary monitor)."""
+        try:
+            mon = _user32.MonitorFromWindow(hwnd or 0, 1 if hwnd else 1)   # MONITOR_DEFAULTTOPRIMARY
+            mi = _MONITORINFO()
+            mi.cbSize = ctypes.sizeof(_MONITORINFO)
+            _user32.GetMonitorInfoW(mon, ctypes.byref(mi))
+            r = mi.rcWork
+            return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+        except Exception:
+            return (0, 0, _user32.GetSystemMetrics(0), _user32.GetSystemMetrics(1))
+
+    def window_rect(hwnd) -> Tuple[int, int, int, int]:
+        rc = wintypes.RECT()
+        _user32.GetWindowRect(hwnd, ctypes.byref(rc))
+        return (rc.left, rc.top, rc.right, rc.bottom)
+
+    def move_window(hwnd, x: int, y: int, w: int, h: int) -> None:
+        if _user32.IsIconic(hwnd) or _user32.IsZoomed(hwnd):
+            _user32.ShowWindow(hwnd, 9)   # SW_RESTORE (a maximised window can't be moved)
+        _user32.SetWindowPos(hwnd, 0, int(x), int(y), int(w), int(h), 0x0004 | 0x0010)  # NOZORDER|NOACTIVATE
 
     class WindowsEnv(GameEnv):
         def __init__(self, settings: Settings, hwnd=None) -> None:
@@ -1526,6 +1855,8 @@ class FishingBot:
                  log: Optional[Callable[[str], None]] = None, name: str = "") -> None:
         self.name = name                     # "Window 2" etc. when fishing in several windows
         self.ignore_focus = False            # multi-window: the controller handles focus
+        self.min_sleep = 0.0                 # (own thread) never loop faster than this
+        self.quiet_pause = False             # (multi-window) the controller logs pauses once for all
         self.focus_gate: Optional[Callable[[], bool]] = None  # parallel: may I press right now?
         self.plan_at: Optional[float] = None  # parallel: when this window wants its next reel press
         self.stopped_by_miss = False
@@ -1783,6 +2114,8 @@ class FishingBot:
                 self.log(f"Error (continuing): {exc!r}")
                 traceback.print_exc()
                 delay = 0.5
+            if self.min_sleep:
+                delay = max(delay, self.min_sleep if self.state == ST_REEL else max(self.min_sleep, 0.02))
             if delay > 0:
                 self.env.sleep(delay)
 
@@ -1795,7 +2128,8 @@ class FishingBot:
         if s.require_focus and not self.ignore_focus and not env.is_game_focused():
             if self._paused_since is None:
                 self._paused_since = now
-                self.log("Roblox is not the active window - paused (click into the game).")
+                if not self.quiet_pause:
+                    self.log("Roblox is not the active window - paused (click into the game).")
             self.detail = "waiting for the Roblox window to be active"
             return 0.1
         if self._paused_since is not None:
@@ -1806,7 +2140,8 @@ class FishingBot:
             self._paused_since = None
             self.prompt_t = -1e9
             self.prompt_hist.clear()
-            self.log("Roblox active again - resuming.")
+            if not self.quiet_pause:
+                self.log("Roblox active again - resuming.")
 
         self._refresh_region(now)
         if self.region is None:
@@ -2487,35 +2822,326 @@ class FishingBot:
 #  Several Roblox windows at once: one FishingBot per window, one controller
 #  that reads them all and switches the active window when one needs a key.
 # =============================================================================
+def grid_cells(n: int, area: Tuple[int, int, int, int], aspect: float = 16 / 9.0) -> List[Tuple[int, int, int, int]]:
+    """n cells filling `area` (x, y, w, h): the grid whose cells come closest to 16:9
+    while staying as big as possible."""
+    x0, y0, W, H = area
+    best = None
+    for cols in range(1, n + 1):
+        rows = -(-n // cols)
+        cw, ch = W / cols, H / rows
+        size = min(cw, ch * aspect)               # the biggest 16:9 picture that fits a cell
+        if best is None or size > best[0] + 1e-6:
+            best = (size, cols, rows)
+    _, cols, rows = best
+    cw, ch = W // cols, H // rows
+    return [(x0 + (i % cols) * cw, y0 + (i // cols) * ch, cw, ch) for i in range(n)]
+
+
+class KeyboardArbiter:
+    """One keyboard, many Roblox windows.  Windows only delivers key presses to
+    the ACTIVE window, so every press first needs that window in front.  This
+    class owns the keyboard: it alone switches windows and sends keys, so a
+    window waiting for its turn never stops the other windows from being
+    watched (each window's bot runs in its own thread).
+
+    Order of service:
+      1. a timed reel press (the fish must be in the gold zone): the window is
+         brought to the front just early enough, and nothing else may take the
+         keyboard if it couldn't be handed back in time;
+      2. casts, rod presses and other one-off presses, first come first served;
+      3. presses that don't need timing (skipped fish, Leviathan misses).
+    """
+    PRECISE, NORMAL, LOW = 0, 1, 2
+    LEASE_MAX = 0.6            # a key held longer than this is released by force
+
+    def __init__(self, settings: "Settings", foreground: Callable[[], Optional[int]],
+                 set_foreground: Callable[[int], bool], send_key: Callable[[str, bool], None],
+                 log: Callable[[str], None]) -> None:
+        self.s = settings
+        self.foreground = foreground
+        self.set_foreground = set_foreground
+        self.send_key = send_key
+        try:   # a send_key that wants to know which window the key was meant for (tests)
+            import inspect
+            self._targeted = "target" in inspect.signature(send_key).parameters
+        except (TypeError, ValueError):
+            self._targeted = False
+        self.log = log
+        self.cv = threading.Condition()
+        self.owner: Optional[int] = None        # window whose key is down
+        self.owner_key: Optional[str] = None
+        self.lease_t = 0.0
+        self.waiting: dict = {}                 # hwnd -> (prio, since) blocked in acquire()
+        self.plans: dict = {}                   # hwnd -> (t_press, prio) from the lanes' plans
+        self.target: Optional[int] = None       # window being brought to the front
+        self.target_t = 0.0
+        self.ready: Optional[int] = None        # window in front and settled: it may type
+        self.fg_since: dict = {}                # hwnd -> when it became the active window
+        self.enabled = True                     # False while paused (another program active)
+        self.open = True                        # False while stopped: nobody gets the keyboard
+        self.switches = 0
+        self.slow_switches = 0
+        self.refused = 0                        # presses not sent: their window wasn't the active one
+        self.on_fail: Callable[[], None] = lambda: None
+        self._tries = 0
+        self._mem: dict = {}                    # hwnd -> [t_press, prio]: a plan stays valid a moment
+        self.commit: Optional[Tuple[int, float]] = None   # (hwnd, until): staying with a timed press
+
+    # ---- costs ---------------------------------------------------------------
+    def settle_s(self) -> float:
+        return max(0.0, self.s.focus_settle_ms / 1000.0)
+
+    def switch_cost(self) -> float:
+        return self.settle_s() + 0.03            # the OS switch itself + Roblox noticing
+
+    # ---- called from the lane threads ------------------------------------------
+    def may_press(self, hwnd: int) -> bool:
+        """May this window press right now, without waiting?"""
+        with self.cv:
+            return (self.enabled and self.ready == hwnd and self.target is None
+                    and (self.owner is None or self.owner == hwnd))
+
+    def acquire(self, hwnd: int, prio: int, timeout: float = 30.0) -> bool:
+        """Block until this window is in front and the keyboard is free."""
+        end = time.perf_counter() + timeout
+        with self.cv:
+            self.waiting[hwnd] = (prio, time.perf_counter())
+            try:
+                while True:
+                    if not self.open:
+                        return False
+                    if (self.enabled and self.ready == hwnd and self.target is None
+                            and (self.owner is None or self.owner == hwnd)):
+                        return True
+                    left = end - time.perf_counter()
+                    if left <= 0:
+                        return False
+                    self.cv.wait(min(left, 0.05))
+            finally:
+                self.waiting.pop(hwnd, None)
+
+    def key(self, hwnd: int, key: str, down: bool) -> None:
+        with self.cv:
+            if down:
+                if self.foreground() != hwnd:
+                    # never type into a window other than the one meant (it closed, the user clicked away...)
+                    self.refused += 1
+                    if self.ready == hwnd:
+                        self.ready = None
+                    return
+                self.owner, self.owner_key, self.lease_t = hwnd, key, time.perf_counter()
+                self._mem.pop(hwnd, None)
+                if self.commit is not None and self.commit[0] == hwnd:
+                    self.commit = None
+                self._send(key, True, hwnd)
+            else:
+                if self.owner == hwnd and self.owner_key == key:
+                    self._send(key, False, hwnd)
+                    self.owner = self.owner_key = None
+                    self.cv.notify_all()
+
+    def _send(self, key: str, down: bool, hwnd: Optional[int]) -> None:
+        if self._targeted:
+            self.send_key(key, down, target=hwnd)
+        else:
+            self.send_key(key, down)
+
+    # ---- the arbiter's own loop (run by MultiBot's supervisor thread) -------------
+    def step(self, lanes: List[Tuple[int, "FishingBot"]]) -> None:
+        now = time.perf_counter()
+        fg = self.foreground()
+        with self.cv:
+            # plans published by the lanes (plan_at = when they want to press)
+            # (a lane clears its plan for a moment on every look at the screen: a plan
+            # stays valid until shortly after its time unless the lane re-plans or stops reeling)
+            plans = {}
+            for h, b in lanes:
+                t = b.plan_at
+                reeling = b.running and b.state == ST_REEL
+                if not reeling:
+                    self._mem.pop(h, None)
+                    continue
+                low = bool(self.s.leviathan or getattr(b, "round_skip", False))
+                if t is not None:
+                    self._mem[h] = [t, self.LOW if low else self.PRECISE]
+                m = self._mem.get(h)
+                if m is not None:
+                    if now > m[0] + 0.08:
+                        self._mem.pop(h, None)
+                    else:
+                        plans[h] = (m[0], m[1])
+            self.plans = plans
+            if self.commit is not None and (now > self.commit[1] or self.commit[0] not in plans):
+                self.commit = None
+            # a key held too long (its lane stalled): let go
+            if self.owner is not None and now - self.lease_t > self.LEASE_MAX:
+                try:
+                    self._send(self.owner_key or "e", False, self.owner)
+                except Exception:
+                    pass
+                self.owner = self.owner_key = None
+            # where are we?
+            if fg is not None and self.fg_since.get("fg") != fg:
+                self.fg_since = {"fg": fg, fg: now}
+            alive = {h for h, _ in lanes}
+            if self.target is not None and self.target not in alive:
+                self.target = None                       # that window is gone
+            if self.commit is not None and self.commit[0] not in alive:
+                self.commit = None
+            if self.target is not None:
+                if fg == self.target:
+                    if now - self.fg_since.get(fg, now) >= self.settle_s():
+                        self.ready, self.target, self._tries = fg, None, 0
+                        self.cv.notify_all()
+                elif now - self.target_t > 0.6:          # the switch didn't happen: try again
+                    self.slow_switches += 1
+                    self._tries += 1
+                    self.on_fail()                       # (maybe it closed: look at the window list again)
+                    if self._tries >= 4:                 # it won't come to the front: serve the others
+                        self.log("A Roblox window won't come to the front - skipping it for now.")
+                        self.target, self._tries = None, 0
+                        self.commit = None
+                    else:
+                        self._switch(self.target, now)
+                return
+            if self.ready != fg:
+                self.ready = None                        # the user (or something) switched windows
+            if not self.enabled or self.owner is not None:
+                return
+            want = self._choose(now, fg)
+            if want is not None and want != fg:
+                self._tries = 0
+                self._switch(want, now)
+            elif want is not None and want == fg and self.ready is None:
+                self.target, self.target_t = fg, now      # already in front: just let it settle
+            self.cv.notify_all()
+
+    def _choose(self, now: float, fg: Optional[int]) -> Optional[int]:
+        cost = self.switch_cost()
+        if self.commit is not None:
+            return self.commit[0]                         # staying until its timed press is done
+        precise = sorted((t, h) for h, (t, p) in self.plans.items() if p == self.PRECISE)
+        # a timed press coming up: be in that window in time, and don't wander off
+        if precise:
+            t, h = precise[0]
+            if t - now <= cost + 0.04:
+                self.commit = (h, t + 0.15)
+                return h
+            guard = 2 * cost + 0.10                      # time to serve someone else and come back
+            if t - now < guard:
+                return fg if fg == h else h
+        others = [(p, since, h) for h, (p, since) in self.waiting.items()]
+        others += [(p, t, h) for h, (t, p) in self.plans.items() if p == self.LOW]
+        if not others:
+            return None
+        others.sort()
+        if any(h == fg for (_, _, h) in others) and fg is not None:
+            best = min((o for o in others if o[2] == fg), key=lambda o: (o[0], o[1]))
+            if best[0] <= others[0][0]:
+                return fg                                 # the window in front is served first: no switch
+        return others[0][2]
+
+    def _switch(self, hwnd: int, now: float) -> None:
+        self.target, self.target_t, self.ready = hwnd, now, None
+        self.switches += 1
+        try:
+            self.set_foreground(hwnd)
+        except Exception as exc:
+            self.log(f"Could not switch windows: {exc!r}")
+
+    def focus_age(self, hwnd: int) -> float:
+        t = self.fg_since.get(hwnd)
+        if t is None or self.fg_since.get("fg") != hwnd:
+            return 0.0
+        return time.perf_counter() - t
+
+
+class LaneEnv(GameEnv):
+    """A window's GameEnv as seen by its bot: the screen comes straight from the
+    window, but key presses go through the KeyboardArbiter."""
+
+    def __init__(self, base: GameEnv, hwnd: int, arbiter: KeyboardArbiter, active: Callable[[], bool]) -> None:
+        self.base, self.hwnd, self.arb, self._active = base, hwnd, arbiter, active
+        self.prio = KeyboardArbiter.NORMAL
+
+    def now(self) -> float: return self.base.now()
+    def sleep(self, s: float) -> None: self.base.sleep(s)
+    def sleep_precise(self, s: float) -> None: self.base.sleep_precise(s)
+    def game_region(self): return self.base.game_region()
+    def grab(self, region): return self.base.grab(region)
+    def key_down(self, name: str) -> bool: return self.base.key_down(name)
+    def is_game_focused(self) -> bool: return self._active()
+    def focus_game(self) -> bool: return bool(getattr(self.base, "focus_game", lambda: False)())
+    def ensure_focus(self) -> None: pass
+    def focus_age(self) -> float: return self.arb.focus_age(self.hwnd)
+    def close(self) -> None: self.base.close()
+
+    def send_input(self, key: str, down: bool) -> None:
+        if down:
+            if not self.arb.may_press(self.hwnd) and not self.arb.acquire(self.hwnd, self.prio):
+                return                                   # never got the keyboard (paused / stopped)
+        self.arb.key(self.hwnd, key, down)
+
+    def press_key(self, key: str, hold_s: float) -> None:
+        self.send_input(key, True)
+        time.sleep(max(0.0, hold_s))
+        self.send_input(key, False)
+
+    def click(self, hold_s: float) -> None:
+        self.press_key("click", hold_s)
+
+
 class MultiBot:
+    """Fishes in every Roblox window at the same time (up to max_windows).
+
+    Each window gets its own FishingBot in its own thread (watching the screen
+    and deciding), and one KeyboardArbiter shares the keyboard between them.
+    New windows are picked up while it runs (auto-detect)."""
     RESCAN_S = 3.0
 
     def __init__(self, settings: Settings, make_env: Callable, list_windows: Callable,
-                 foreground: Callable, log: Callable[[str], None]) -> None:
+                 foreground: Callable, log: Callable[[str], None],
+                 set_foreground: Optional[Callable[[int], bool]] = None,
+                 send_key: Optional[Callable[[str, bool], None]] = None) -> None:
         self.s = settings
         self.make_env = make_env          # hwnd -> GameEnv for that window
         self.list_windows = list_windows  # () -> [hwnd, ...] (stable order)
         self.foreground = foreground      # () -> hwnd of the active window
         self._log_cb = log
+        self.arb = KeyboardArbiter(settings, foreground, set_foreground or (lambda h: False),
+                                   send_key or (lambda k, d: None), self.log)
+        self.arb.on_fail = lambda: setattr(self, "_scan_t", -1e9)
         self.lanes: List[Tuple[int, FishingBot]] = []
+        self.threads: dict = {}
         self.running = False
         self.alive = True
         self.lock = threading.Lock()
         self._scan_t = -1e9
-        self._paused_since: Optional[float] = None
+        self._paused = False
         self._next_num = 1
         self.own_foreground: Callable[[], bool] = lambda: False  # is the AutoFish window active?
         self.lev = LeviathanWatch()
         self.alarm: Optional[dict] = None   # the latest leviathan alarm (the GUI shows it)
         self.own_rect: Optional[Tuple[int, int, int, int]] = None  # the AutoFish window on screen (the GUI sets it)
         self._alarm_seq = 0
+        self._supervising = False
 
     def log(self, msg: str) -> None:
         self._log_cb(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
     # ---------------------------------------------------------------- windows
-    def _rescan(self) -> None:
+    def game_active(self) -> bool:
+        """A Roblox window we fish in (or AutoFish itself) is the active window."""
+        if not self.s.require_focus:
+            return True
+        fg = self.foreground()
+        return fg in {h for h, _ in list(self.lanes)} or self.own_foreground()
+
+    def _rescan(self, force: bool = False) -> None:
         self._scan_t = time.perf_counter()
+        if not force and self.lanes and not self.s.auto_detect:
+            return
         try:
             hwnds = list(self.list_windows())
         except Exception as exc:
@@ -2524,27 +3150,38 @@ class MultiBot:
         if not self.s.multi_window:
             fg = self.foreground()
             hwnds = [fg] if fg in hwnds else hwnds[:1]
-        known = {h for h, _ in self.lanes}
-        for h, b in list(self.lanes):
-            if h not in hwnds:
-                b.stop()
-                self.lanes.remove((h, b))
-                self.log(f"{b.name or 'The Roblox window'} closed - no longer fishing there.")
-        for h in hwnds:
-            if h not in known:
-                bot = FishingBot(self.s, self.make_env(h), self._log_cb, name=f"Window {self._next_num}")
-                self._next_num += 1
-                bot.ignore_focus = True
-                self.lanes.append((h, bot))
-                if self.running:
-                    bot.start()
-                self.log(f"Fishing in {bot.name}.")
-        if len(self.lanes) == 1:
-            self.lanes[0][1].name = ""
+        hwnds = hwnds[:max(1, int(self.s.max_windows))]
+        with self.lock:
+            for h, b in list(self.lanes):
+                if h not in hwnds:
+                    b.stop()
+                    b.alive = False
+                    self.lanes.remove((h, b))
+                    self.threads.pop(h, None)
+                    self.log(f"{b.name or 'The Roblox window'} closed - no longer fishing there.")
+            known = {h for h, _ in self.lanes}
+            for h in hwnds:
+                if h not in known:
+                    env = LaneEnv(self.make_env(h), h, self.arb, self.game_active)
+                    bot = FishingBot(self.s, env, self._log_cb, name=f"Window {self._next_num}")
+                    self._next_num += 1
+                    bot.ignore_focus = False                 # pauses itself when no Roblox window is active
+                    bot.quiet_pause = True
+                    bot.min_sleep = 0.003                    # its own thread: don't spin
+                    bot.focus_gate = (lambda h=h: self.arb.may_press(h))
+                    self.lanes.append((h, bot))
+                    t = threading.Thread(target=bot.run_forever, name=f"autofish-{bot.name}", daemon=True)
+                    self.threads[h] = t
+                    t.start()
+                    if self.running:
+                        bot.start()
+                    self.log(f"Fishing in {bot.name}.")
+            if len(self.lanes) == 1:
+                self.lanes[0][1].name = ""
 
     def focus_any(self) -> bool:
         if not self.lanes:
-            self._rescan()
+            self._rescan(force=True)
         if not self.lanes:
             return False
         env = self.lanes[0][1].env
@@ -2560,17 +3197,29 @@ class MultiBot:
                 return
             self.lev = LeviathanWatch()   # a new run watches for a new leviathan (no 90 s blind spot after a restart)
             self.running = True
-        self._rescan()
+            self.arb.open = True
+        try:
+            sys.setswitchinterval(0.0005)   # many threads: hand the CPU over often (precise key timing)
+        except Exception:
+            pass
+        if not self._supervising:            # (the GUI runs run_forever itself; tests may not)
+            threading.Thread(target=self.run_forever, name="autofish-supervisor", daemon=True).start()
+        self._rescan(force=True)
         if not self.lanes:
             self.log(f"No window titled '{self.s.window_title}' found yet - waiting for one.")
-        for _, b in self.lanes:
+        for _, b in list(self.lanes):
             b.start()
+        if len(self.lanes) > 1:
+            self.log(f"Fishing in {len(self.lanes)} windows at the same time.")
 
     def stop(self) -> None:
         with self.lock:
             was = self.running
             self.running = False
-        for _, b in self.lanes:
+        with self.arb.cv:
+            self.arb.open = False
+            self.arb.cv.notify_all()
+        for _, b in list(self.lanes):
             b.stop()
         if was and len(self.lanes) > 1:
             self.log("Stopped all windows.")
@@ -2582,119 +3231,60 @@ class MultiBot:
             self.start()
 
     def run_forever(self) -> None:
+        """Supervisor: finds windows, shares the keyboard, pauses when needed."""
+        if self._supervising:
+            return
+        self._supervising = True
         while self.alive:
             if not self.running:
                 for _, b in list(self.lanes):
                     if b._held is not None:
                         b._release_key()   # a press that raced a stop() from another thread
+                if self.arb.owner is not None:
+                    self.arb.key(self.arb.owner, self.arb.owner_key or "e", False)
                 time.sleep(0.05)
                 continue
             try:
-                delay = self._step()
+                now = time.perf_counter()
+                if now - self._scan_t > self.RESCAN_S:
+                    self._rescan()
+                active = self.game_active()
+                if not active and not self._paused:
+                    self._paused = True
+                    self.log("No Roblox window is active - paused (click into any Roblox window).")
+                elif active and self._paused:
+                    self._paused = False
+                    self.log("Resuming.")
+                self.arb.enabled = active
+                lanes = list(self.lanes)
+                if any(b.stopped_by_miss for _, b in lanes):
+                    self.stop()
+                    continue
+                if not self.s.dry_run:
+                    self.arb.step(lanes)
             except Exception as exc:
                 self.log(f"Error (continuing): {exc!r}")
                 traceback.print_exc()
-                delay = 0.5
-            if delay > 0:
-                time.sleep(delay)
+                time.sleep(0.2)
+            time.sleep(0.002)
 
-    def _step(self) -> float:
-        now = time.perf_counter()
-        if now - self._scan_t > self.RESCAN_S:
-            self._rescan()
-        bots = [b for _, b in self.lanes]
-        if not bots:
-            return 0.5
-        # safety: only act while one of the Roblox windows is the active window
-        if (self.s.require_focus and self.foreground() not in [h for h, _ in self.lanes]
-                and not self.own_foreground()):
-            if self._paused_since is None:
-                self._paused_since = now
-                for b in bots:
-                    b._release_key()
-                self.log("No Roblox window is active - paused (click into any Roblox window).")
-            for b in bots:
-                b.detail = "paused - click into a Roblox window"
-            return 0.1
-        if self._paused_since is not None:
-            paused = now - self._paused_since
-            for b in bots:
-                b._cast_t += paused
-                b._state_t += paused
-                b.prompt_hist.clear()
-            self._paused_since = None
-            self.log("Resuming.")
-        if any(b.stopped_by_miss for b in bots):
-            self.stop()
-            return 0.05
-        if (self.s.parallel_minigames or self.s.leviathan) and len(self.lanes) > 1:
-            return self._step_parallel(now)
-        for _, b in self.lanes:
-            b.focus_gate = None
-        # a window that is reeling gets the whole loop (fast, precise presses)
-        for h, b in self.lanes:
-            if b.running and b.state == ST_REEL:
-                for _, o in self.lanes:
-                    if o is not b:
-                        o._release_key(now)
-                if not self.s.dry_run:
-                    b.env.ensure_focus()
-                return b.tick()
-        delay = 0.03
-        for h, b in self.lanes:
-            if not b.running:
-                continue
-            d = b.tick()
-            if b.state == ST_REEL:
-                if not self.s.dry_run:
-                    b.env.ensure_focus()
-                return 0.0
-            delay = min(delay, max(0.0, d))
-        return delay
+    def arrange_windows(self, area: Optional[Tuple[int, int, int, int]] = None,
+                        move: Optional[Callable] = None) -> int:
+        """Tile the Roblox windows in a grid (left, top, width, height area)."""
+        hwnds = list(self.list_windows())[:max(1, int(self.s.max_windows))]
+        if not hwnds or area is None or move is None:
+            return 0
+        cells = grid_cells(len(hwnds), area)
+        for h, (x, y, w, h_) in zip(hwnds, cells):
+            try:
+                move(h, x, y, w, h_)
+            except Exception as exc:
+                self.log(f"Could not move a window: {exc!r}")
+        self._next_num = 1
+        return len(hwnds)
 
-    def _step_parallel(self, now: float) -> float:
-        """Every window's minigame at once.  Only the active window receives
-        key presses, so: look at all of them, work out when each one next
-        needs a press, and switch to the window whose press comes first just
-        early enough for the switch to settle."""
-        fg = self.foreground()
-        for h, b in self.lanes:
-            b.focus_gate = (lambda h=h: self.foreground() == h)
-        reeling = [(h, b) for h, b in self.lanes if b.running and b.state == ST_REEL]
-        switch_cost = self.s.focus_settle_ms / 1000.0 + 0.015
-        lev = self.s.leviathan
-        soon = (not lev) and any(b.plan_at is not None and b.plan_at - now < 0.3 and not b.round_skip
-                                 for _, b in reeling)
-        # Leviathan: casting is the priority - windows that need a cast go first
-        order = sorted(self.lanes, key=lambda hb: 0 if hb[1].state in (ST_AFTER, ST_START) else 1) \
-            if lev else self.lanes
-        for h, b in order:
-            if not b.running:
-                continue
-            if b.state != ST_REEL and soon:
-                continue  # don't steal the keyboard for a cast right before a reel press
-            b.tick()
-        reeling = [(h, b) for h, b in self.lanes if b.running and b.state == ST_REEL]
-        if not reeling or self.s.dry_run:
-            return 0.0 if reeling else (0.005 if lev else 0.02)
-        now = time.perf_counter()
-        fg = self.foreground()
-        cur = next((b for h, b in reeling if h == fg), None)
-        if cur is not None and cur.plan_at is not None and cur.plan_at - now < switch_cost + 0.05:
-            return 0.0  # the active window presses next: stay
-        cands = [(b.plan_at, h, b) for h, b in reeling if b.plan_at is not None and not b.round_skip
-                 and (self.s.leviathan or b.plan_at - now >= switch_cost * 0.9)]
-        catch_soon = any(b.plan_at is not None and not b.round_skip and b.plan_at - now < 0.3 for _, b in reeling)
-        if not cands and not catch_soon:
-            # fish worth catching come first; a skipped fish gets its misses when no catch press is close
-            cands = [(b.plan_at, h, b) for h, b in reeling if b.plan_at is not None and b.round_skip]
-        if cands:
-            t, h, b = min(cands, key=lambda c: c[0])
-            if h != fg and (cur is None or cur.plan_at is None or t < cur.plan_at):
-                b.env.ensure_focus()
-        return 0.0
 
-    # ---------------------------------------------------------------- status
+    # (status methods are part of MultiBot)
     def current_lead(self) -> float:
         for _, b in self.lanes:
             if b.lead_is_measured():
@@ -2900,7 +3490,8 @@ def run_gui() -> None:
 
     bot = MultiBot(settings, lambda h: WindowsEnv(settings, h),
                    lambda: list_game_windows(settings.window_title or "Roblox"),
-                   lambda: _user32.GetForegroundWindow(), log)
+                   lambda: _user32.GetForegroundWindow(), log,
+                   set_foreground=force_foreground, send_key=send_key_global)
     def own_fg() -> bool:
         pid = wintypes.DWORD(0)
         fgw = _user32.GetForegroundWindow()
@@ -3000,7 +3591,8 @@ def run_gui() -> None:
     add_bool(10, "Keep this window on top", "always_on_top")
     add_bool(11, "Fish in EVERY Roblox window (switches between them)", "multi_window")
     add_bool(12, "Leviathan mode - only trigger the bite, then miss on purpose", "leviathan")
-    add_bool(13, "Play all windows' minigames at the same time (always on in Leviathan mode)", "parallel_minigames")
+    add_bool(13, "Auto-detect Roblox windows opened or closed while running", "auto_detect")
+    add_num(20, "Max windows", "max_windows", 1, 16, 1, "fish in at most this many Roblox windows")
     add_bool(14, "Leviathan alarm - sound + flashing when a leviathan pulls", "leviathan_alarm")
     add_bool(15, "...and stop fishing once you're pulled in (screen goes dark / boss bar)", "alarm_stops_fishing")
     add_bool(16, "Skip unwanted fish: unequip + re-equip the rod (key below), recast", "skip_fish")
@@ -3073,8 +3665,30 @@ def run_gui() -> None:
     def test_alarm():
         bot.raise_alarm("test", "", test=True)
 
+    def arrange():
+        """Tile the Roblox windows on the screen AutoFish is on, leaving AutoFish's column free."""
+        apply_settings()
+        try:
+            me = int(root.wm_frame(), 16)
+            wx, wy, ww, wh = work_area(me)
+            l, t, r, b_ = window_rect(me)
+            mine = r - l
+            if l >= wx + ww // 2:                  # AutoFish on the right half: keep its column free
+                area = (wx, wy, max(200, l - wx), wh)
+            elif r <= wx + ww // 2:                # ... on the left half
+                area = (r, wy, max(200, wx + ww - r), wh)
+            else:
+                area = (wx, wy, ww, wh)
+            n = bot.arrange_windows(area, move_window)
+            log(f"Arranged {n} Roblox window(s) in a grid ({area[2]}x{area[3]} area)." if n
+                else "No Roblox windows to arrange.")
+            bot._scan_t = -1e9                        # re-read the windows' order and positions
+        except Exception as exc:
+            log(f"Could not arrange the windows: {exc!r}")
+
     for i, (txt, cmd) in enumerate([("Save settings", save), ("Defaults", defaults),
-                                    ("Debug snapshot", snapshot), ("Test alarm", test_alarm)]):
+                                    ("Debug snapshot", snapshot), ("Test alarm", test_alarm),
+                                    ("Arrange windows", arrange)]):
         tk.Button(btns, text=txt, command=cmd, bg="#30363d", fg=FG, activebackground="#3d444d",
                   activeforeground=FG, relief="flat", padx=8).grid(row=0, column=i, padx=3, sticky="ew")
         btns.columnconfigure(i, weight=1)

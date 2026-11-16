@@ -20,25 +20,32 @@ gold zone, and recasts after each catch - forever, until you stop it.
 5. F6 (or the STOP button) stops it at any time.
 
 
-SEVERAL ROBLOX WINDOWS (e.g. 4 accounts)
-----------------------------------------
-"Fish in EVERY Roblox window" is ON by default. AutoFish finds every
-window titled "Roblox" (it re-checks every few seconds), casts in each one,
-watches all of them at once and switches to whichever window needs a key
-press (a cast, or the reel minigame). The log names them Window 1, 2, ...
-* Tile the windows so NONE of them overlap each other (and keep the
-  AutoFish window off them) - it reads each window from the screen.
-* By default one minigame is played at a time; if two bite together the
-  second waits its turn.
-* Tick "Play all windows' minigames at the same time" to play them in
-  parallel instead: AutoFish watches every reel bar at once, works out
-  when each window next needs a press, and switches to that window just
-  before its press (Windows only sends keys to the window in front, so
-  the windows take turns only at the moment of each press). If presses
-  seem to go to the wrong window, raise focus_settle_ms in
-  autofish_settings.json (60 -> 100).
+SEVERAL ROBLOX WINDOWS - UP TO 8 AND MORE (2.0)
+-----------------------------------------------
+"Fish in EVERY Roblox window" is ON by default. AutoFish finds every window
+titled "Roblox" and fishes in all of them AT THE SAME TIME. The log names
+them Window 1, 2, ...
+* Max windows (default 8): fish in at most this many Roblox windows.
+* Auto-detect: windows you open or close while it runs are picked up (or
+  dropped) within a few seconds. Untick it to keep the windows found at
+  START.
+* "Arrange windows": tiles all Roblox windows in a grid on the screen
+  AutoFish is on, leaving AutoFish's own column free (put AutoFish at the
+  left or right edge first). Windows must not overlap each other, and the
+  AutoFish window must not cover them - AutoFish reads them from the screen.
+* How it works: every window is watched by its own worker, all the time.
+  Windows only sends key presses to the window in front, so one keyboard
+  manager decides who types next: a timed reel press first (it brings that
+  window to the front just early enough and stays until the press is
+  done), then casts and rod presses, then presses that don't need timing
+  (skips, Leviathan misses). A press is never sent unless its window really
+  is the one in front.
+* If presses seem to get lost after a window switch, raise focus_settle_ms
+  in autofish_settings.json (60 -> 100).
 * Click into any Roblox window to start/resume; if you click into another
   program, everything pauses.
+* Small windows work: tested down to a ~150 px wide reel bar (8 windows on
+  a 1920x1080 screen gives ~480x520 windows).
 
 
 LEVIATHAN MODE
