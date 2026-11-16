@@ -54,8 +54,8 @@ prompt shows (the Recast delay setting is skipped in this mode). The "Bites" cou
 shows how many bites were triggered.
 
 
-SKIPPING UNWANTED FISH (1.8)
-----------------------------
+SKIPPING UNWANTED FISH (1.8.1)
+------------------------------
 "Skip unwanted fish" is ON by default: only 3-hit fish whose reel panel says
 "Something big is pulling!" are reeled. Every other fish (2-hit, 4-hit, and
 3-hit fish with the plain "Reel it in!" panel) is skipped the fast way: the
@@ -71,6 +71,11 @@ once. The "Skipped" counter shows how many.
 * With several windows, a window reeling a wanted fish always gets the
   keyboard first; skips happen in between.
 * Leviathan mode ignores all of this (it only wants bites).
+* Rod not back in hand (1.8.1): if no Cast prompt and no minigame show for
+  1.5 s, AutoFish presses the rod key to equip it, and tries again 2 s later
+  if that press didn't register. After 4 tries in a row without a prompt it
+  stops pressing (something else is hiding the prompt) until a prompt shows
+  again. Untick "Re-equip the rod..." to turn this off.
 
 
 LEVIATHAN ALARM (1.7.1)

@@ -36,7 +36,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 APP_NAME = "AutoFish"
-APP_VERSION = "1.8"
+APP_VERSION = "1.8.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(HERE, "autofish_settings.json")
 DEBUG_DIR = os.path.join(HERE, "debug_snapshots")
@@ -75,6 +75,8 @@ class Settings:
     keep_only_big: bool = True     # ...and only when the panel says "Something big is pulling!"
     skip_key: str = "3"            # the rod's hotbar key (pressed twice: unequip, equip)
     skip_key_gap_s: float = 0.4    # pause between the two presses
+    rod_check: bool = True         # no Cast prompt and no minigame for a while -> press the rod key (equip)
+    rod_check_s: float = 1.5       # how long with no prompt at all before equipping
     multi_window: bool = True      # fish in every Roblox window at once (switches between them)
     focus_settle_ms: float = 60.0  # wait after switching windows before pressing
     parallel_minigames: bool = False  # play every window's minigame at the same time
@@ -1564,6 +1566,9 @@ class FishingBot:
         self.prompt = PromptReading()
         self.prompt_t = -1e9
         self.prompt_hist: deque = deque(maxlen=4)  # (time, state) of recent readings
+        self._noprompt_since: Optional[float] = None  # since when no Cast/Reel prompt at all is on screen
+        self._equip_tries = 0
+        self._equip_t = -1e9
         self._last_key_t = -1e9
         self._state_t = 0.0
         self._cast_t = 0.0
@@ -1736,6 +1741,14 @@ class FishingBot:
                 self.prompt = pr
                 self.prompt_t = now
                 self.prompt_hist.append((now, pr.state))
+                if pr.state is None and pr.box is None:      # no prompt box at all (not just hidden)
+                    if self._noprompt_since is None:
+                        self._noprompt_since = now
+                else:
+                    self._noprompt_since = None
+                    self._equip_tries = 0
+        else:
+            self._noprompt_since = None
         return reading
 
     def _strip_scan(self) -> Optional[MinigameReading]:
@@ -2173,6 +2186,9 @@ class FishingBot:
                 self._verified = True
                 self._set_state(ST_WAIT)
                 return 0.02
+            if prompt != PROMPT_CAST and self._rod_missing(now):
+                self._state_t = now - delay       # look for the Cast prompt again from now
+                return 0.05
             if prompt == PROMPT_CAST or elapsed >= delay + (0.8 if s.leviathan else self.PROMPT_WAIT):
                 if prompt != PROMPT_CAST:
                     why = self.prompt.note or "no prompt"
@@ -2185,6 +2201,11 @@ class FishingBot:
         if self.state == ST_WAIT:
             waited = now - self._cast_t
             self.detail = f"waiting for a bite... {waited:.0f}s"
+            if waited >= 1.0 and self._noprompt_since is not None and self._noprompt_since >= self._cast_t \
+                    and self._rod_missing(now):
+                self._set_state(ST_AFTER, "rod equipped - casting")   # (the cast went nowhere)
+                self._state_t = now - s.recast_delay_s
+                return 0.05
             if not self._verified and waited >= self.VERIFY_AFTER:
                 prompt = self._fresh_prompt(self._cast_t + 0.6)
                 if prompt == PROMPT_REEL:
@@ -2216,6 +2237,29 @@ class FishingBot:
         # unknown state -> behave like a fresh start
         self._set_state(ST_AFTER)
         return 0.02
+
+    def _rod_missing(self, now: float) -> bool:
+        """No Cast/Reel prompt and no minigame for a while: the rod is probably not in
+        hand (e.g. a skip's re-equip didn't register).  Press the rod key to equip it.
+        Returns True if it pressed.  Gives up after 4 tries in a row (the key toggles,
+        and something else may be hiding the prompt) until a prompt is seen again."""
+        s = self.s
+        if not s.rod_check or not (s.skip_key or "").strip() or self._noprompt_since is None:
+            return False
+        if now - self._noprompt_since < max(0.5, s.rod_check_s) or now - self._equip_t < 2.0:
+            return False
+        if self._equip_tries >= 4:
+            if self._equip_tries == 4:
+                self._equip_tries += 1
+                self.log("Still no Cast prompt after pressing the rod key 4 times - leaving it to you "
+                         "(check the rod key setting).")
+            return False
+        self._equip_tries += 1
+        self._equip_t = now
+        self._noprompt_since = now
+        self.log(f"No Cast prompt and no minigame - equipping the rod ('{s.skip_key.strip()}').")
+        self._press("equip rod", key=s.skip_key.strip())
+        return True
 
     def _do_cast(self, now: float, retry: bool = False) -> None:
         self._quick_recast = False
@@ -2956,6 +3000,7 @@ def run_gui() -> None:
     add_bool(15, "...and stop fishing once you're pulled in (screen goes dark / boss bar)", "alarm_stops_fishing")
     add_bool(16, "Skip unwanted fish: unequip + re-equip the rod (key below), recast", "skip_fish")
     add_bool(18, "...keep only fish whose panel says 'Something big is pulling!'", "keep_only_big")
+    add_bool(19, "Re-equip the rod (rod key) when no Cast prompt and no minigame show", "rod_check")
     sk = ttk.Frame(sf)
     sk.grid(row=17, column=0, columnspan=3, sticky="w", padx=24, pady=1)
     ttk.Label(sk, text="Keep fish needing").pack(side="left")
